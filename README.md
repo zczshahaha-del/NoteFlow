@@ -1,10 +1,10 @@
-# NoteFlow
+# 知流 · NoteFlow
 
-NoteFlow 是一款个人知识库应用，采用 React 前端、FastAPI 后端、PostgreSQL + pgvector 持久化存储和 Redis 基础设施，并集成了 DeepSeek AI 能力。
+知流（NoteFlow）是一款个人知识库应用，采用 React 前端、FastAPI 后端、PostgreSQL + pgvector 持久化存储和 Redis 基础设施，并集成了 DeepSeek AI 能力。
 
 ## 产品方向
 
-NoteFlow 正在统一为登录后的单一工作台：
+知流正在统一为登录后的单一工作台：
 
 - 左侧：知识树、文件夹、笔记、搜索，以及后续的回收站入口
 - 中间：正式笔记的阅读与编辑，以及后续的 AI 草稿和修改预览模式
