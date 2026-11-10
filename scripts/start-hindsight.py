@@ -29,20 +29,33 @@ def main():
         "HINDSIGHT_API_ENABLE_OBSERVATIONS": "false",
         "HINDSIGHT_API_ENABLE_BANK_CONFIG_API": "true",
         "HINDSIGHT_API_LLM_MAX_CONCURRENT": "2",
+        "HINDSIGHT_API_WORKER_ID": "noteflow-hindsight",
         "HINDSIGHT_CP_DATAPLANE_API_URL": "http://127.0.0.1:8890",
     }
     with tempfile.TemporaryDirectory(prefix="noteflow-hindsight-") as folder:
         path = Path(folder) / "service.env"
         path.write_text("\n".join(f"{k}={v}" for k, v in values.items()) + "\n")
         os.chmod(path, 0o600)
-        subprocess.run([
-            "docker", "run", "-d", "--name", "noteflow-hindsight", "--restart", "unless-stopped",
+        created = subprocess.run([
+            "docker", "create", "--name", "noteflow-hindsight", "--restart", "unless-stopped",
             "--memory", "1536m", "--env-file", str(path),
             "-p", "127.0.0.1:8888:8888", "-p", "127.0.0.1:9999:9999",
             "-v", "noteflow_hindsight_data:/home/hindsight/.pg0",
-            "-v", str(Path(__file__).resolve().with_name("hindsight-readonly-proxy.py")) + ":/opt/noteflow-readonly.py:ro",
             IMAGE, "/bin/sh", "-c", "/app/api/.venv/bin/python /opt/noteflow-readonly.py & exec /app/start-all.sh",
+        ], check=True, stdout=subprocess.PIPE, text=True)
+    container_id = created.stdout.strip()
+    try:
+        # Copy the operator proxy into the container so startup and restarts do
+        # not depend on Docker Desktop sharing a file from the host's Desktop.
+        subprocess.run([
+            "docker", "cp", str(Path(__file__).resolve().with_name("hindsight-readonly-proxy.py")),
+            container_id + ":/opt/noteflow-readonly.py",
         ], check=True)
+        subprocess.run(["docker", "start", container_id], check=True)
+    except subprocess.CalledProcessError:
+        # Keep the data volume and never force-remove a container that started.
+        subprocess.run(["docker", "rm", container_id], check=False, capture_output=True)
+        raise
 
 
 if __name__ == "__main__":

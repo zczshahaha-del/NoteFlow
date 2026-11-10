@@ -70,7 +70,7 @@ DEEPSEEK_MODEL=deepseek-flash
 EMBEDDING_PROVIDER=dashscope
 EMBEDDING_API_KEY=your_dashscope_api_key_here
 EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-EMBEDDING_MODEL=text-embedding-v4
+EMBEDDING_MODEL=qwen3.7-text-embedding
 EMBEDDING_DIMENSIONS=1024
 EMBEDDING_BATCH_SIZE=10
 
@@ -122,7 +122,21 @@ Docker 部署使用 `pgvector/pgvector:pg16`，将 `DB_HOST` 改为 `postgres`�
 
 如果 `EMBEDDING_API_KEY` 为空，笔记索引仍会将 Markdown 解析为章节和分块，并将向量状态标记为 `skipped`；检索会退回关键词和结构检索。
 
-配置密钥后，索引会调用 DashScope `text-embedding-v4`，将向量保存到 pgvector `vector(1024)`，混合检索会结合关键词结果与数据库向量相似度。
+配置密钥后，索引会调用 DashScope `qwen3.7-text-embedding`，将向量保存到 pgvector `vector(1024)`，混合检索会结合关键词结果与数据库向量相似度。
+
+重排使用 `qwen3.7-text-rerank`，设置 `RERANKER_BASE_URL=https://dashscope.aliyuncs.com/compatible-api/v1`，适配器会补上 `/reranks`；旧 `qwen3-rerank` 和显式填写的完整接口地址仍受支持。`RERANKER_API_KEY` 留空时自动复用 `EMBEDDING_API_KEY`。两项默认模型均使用百炼北京地域，其他地域应核对模型可用性并调整地址。接口依据：[嵌入](https://help.aliyun.com/zh/model-studio/embedding-interfaces-compatible-with-openai)、[重排](https://help.aliyun.com/zh/model-studio/text-rerank-api)。
+
+已有 `.env` 不会被代码更新覆盖，需显式修改模型名并重启；没有显式设置模型名的实例会采用新默认值。不同嵌入模型生成的向量不能混用，即使维度相同也需要重新索引已有笔记；本次本地升级前两套向量表均无非空向量。Hindsight 的启动脚本复用相同嵌入模型与 1024 维设置，已有记忆服务更换模型时也需先处理其向量索引，不能只重启容器。
+
+### 本地 Hindsight 记忆服务
+
+本地 `server/.env` 设置 `MEMORY_ENGINE=hindsight`、`HINDSIGHT_URL=http://127.0.0.1:8888`。首次启动运行 `node scripts/run-python.mjs scripts/start-hindsight.py`，脚本复用本地 DeepSeek 和嵌入凭证，使用固定镜像与 `noteflow_hindsight_data` 数据卷；临时凭据文件用后删除。仅本机访问时，`HINDSIGHT_API_KEY` 可留空。
+
+脚本通过创建容器、复制只读代理、再启动的方式运行，不依赖 Docker Desktop 绑定仓库里的主机文件；worker 标识固定为 `noteflow-hindsight`。API 8888 与后台 9999 仅绑定回环地址；后台代理仍拒绝写入，记忆修改从 NoteFlow 内完成。已有容器日常启动使用 `docker start noteflow-hindsight`；更换其模型或凭证时应保留数据卷并受控重建，单纯重启不会加载新的环境变量。
+
+2026-11-10 本机已验证新版模型调用、实际笔记向量索引 / 正式 RAG 重排，以及实际 HTTP 的记忆写入 / 后台处理 / 召回 / 来源图谱。详细范围和限制见 [脱敏验证记录](../docs/verification/model-upgrade-memory-2026-11-10.json)，不代表真实知识库质量、生产或邮件投递验收。
+
+### 附件
 
 附件使用与供应商无关的 `ObjectStorage` 接口。默认实现写入 `ATTACHMENT_STORAGE_ROOT`；以后可以替换为 S3、R2 或 OSS，而不需要修改附件路由和编辑器流程。
 
