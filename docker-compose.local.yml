@@ -1,0 +1,8 @@
+# Local infrastructure only; start with docker-compose.yml and select postgres/redis.
+services:
+  postgres:
+    ports: !override
+      - "127.0.0.1:5433:5432"
+  redis:
+    ports: !override
+      - "127.0.0.1:6380:6379"
