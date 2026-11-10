@@ -1595,7 +1595,7 @@ UI-06 / UI-17 仍部分解决，UI-20 仍未解决；本稿审美评审明确未
 | ID | 问题与现象 | 根因 | 处理与当前状态 | 状态 |
 | --- | --- | --- | --- | --- |
 | DEV-01 | 预览曾整体断连；2026-10-25 登录截图出现 Bad Gateway，前端仍可访问。 | 本次确认 5173 正常、代理目标 8081 无监听，日志持续 ECONNREFUSED；数据库 / Redis 健康。现有启动器在 Vite 已启动后不处理后端退出，前端因此可能独存。后端退出原因和时点没有完整日志证据，不归因于 UI 配色。 | 通过现有后端入口单独恢复 API 8081，保留原前端、旧容器、配置和数据。check:dev-ports 通过，5173 代理 health=200 / healthy，PostgreSQL / Redis ready；没有发送验证码或提交登录。历史整体断连证据保留；长期进程稳定性与退出根因仍未定位，详见 10-25 补充。 | 🟡 |
-| DEV-02 | `npm run dev` 无法完整启动本地前后端。 | 仓库要求 Python 3.12+，但项目 `.venv` 不存在，启动脚本落到未安装 `uvicorn` 的解释器；同时本地 PostgreSQL 和 Redis 依赖 Docker Desktop。 | 2026-09-13 创建 `.venv`、安装后端依赖并恢复完整环境。2026-10-01 再次使用现有 Python 3.12.13 / uvicorn 与健康的 PostgreSQL / Redis 启动 `npm run dev`；`check:dev-ports` 通过，5173 首页返回 200，代理 `/api/health` 返回 healthy，数据库与 Redis ready，浏览器实际呈现登录页。AI 项仅确认密钥配置，不代表实测模型生成；本轮未登录或修改笔记，开发进程保持运行。 | ✅ |
+| DEV-02 | `npm run dev` 无法完整启动本地前后端。 | 本地运行依赖不会随 Git 恢复。2026-11-10 当前目录缺少 `.venv` 和 `server/.env`，默认 Python 3.9.6 不满足启动器要求；显式选择已安装的 Python 3.13 后仍缺少 `uvicorn`。前端使用 `--configLoader native` 加载 TypeScript 配置，当前 Node 20.20.2 无法直接加载该文件；Docker 可用，但没有名称匹配 noteflow 的容器。 | 2026-09-13 / 10-01 曾完成旧环境启动验证，历史证据保留，不代表当前目录可直接运行。2026-11-10 启动复核失败，需补齐 Python 虚拟环境与依赖、本地配置、PostgreSQL / Redis，并选择能原生加载 TypeScript 的 Node 运行时后重新验收；详见下方复核记录。 | 🟡 |
 | DEV-03 | 后端认证专项测试一度因缺少 `httpx` 无法启动。 | 测试依赖没有被当前 Python 环境完整安装。 | 后续使用项目后端测试环境跑通相关认证用例，但新机器仍需按依赖清单创建环境。 | 🟡 |
 | DEV-04 | Python 字节码缓存曾被运行环境限制，造成检查命令失败。 | 测试命令默认尝试写缓存，而执行环境不允许相应路径。 | 改用项目运行环境/禁写字节码方式继续验证，不属于业务代码错误。 | ⚪ |
 | DEV-05 | 前端契约测试仍要求旧登录页默认展示“忘记密码/注册”，与验证码默认模式冲突。 | UI 已变更，测试基线未同步。 | 更新过期断言后重新跑通组件和编辑器界面测试。 | ✅ |
@@ -1775,6 +1775,14 @@ DEV-14 后续取图证据：圆润无箭头局部稿使用普通 `clip`，按外
 - **处理**：仅在本次安装命令追加 `--registry=https://registry.npmjs.org`；保留全局配置、依赖版本及锁文件。
 - **当前状态**：🟡 本次依赖安装已恢复，默认源未更改；后续在相同环境安装公共依赖时仍需显式选择可用源。
 - **验证证据**：带上述 registry 的 `npm ci` 退出 0，安装 154 个包；临时浏览器工具同样安装成功。未启动后端或访问真实账号、邮件、模型及笔记数据。关联提交主题 `chore: 统一知流中文名称`。
+
+### 2026-11-10 DEV-02 当前工作区启动复核
+
+- **现象**：在 `/Users/zhangcheng/Desktop/Projects/NoteFlow` 执行 `npm run dev` 退出 1，提示需要 Python 3.12+；单独启动前端同样失败，当前不能直接运行完整应用。
+- **根因**：当前默认 Node 为 20.20.2、Python 为 3.9.6；`.venv`、`server/.env` 均不存在。已安装的 `/opt/homebrew/bin/python3.13` 未被启动器默认候选命中，显式指定后确认没有安装 `uvicorn`。`vite.config.ts` 配合 `--configLoader native` 在当前 Node 下触发 `ERR_UNKNOWN_FILE_EXTENSION`。Docker 服务可访问，但 `docker ps -a --filter name=noteflow` 没有结果，未发现项目命名的数据库或 Redis 容器。
+- **处理方式**：本轮仅检查并记录，不安装依赖、不生成密钥、不创建容器或改动现有数据。后续需建立项目 Python 环境、配置 `server/.env`、准备 PostgreSQL / Redis，并调整 Node 运行时或配置加载方式，再运行统一启动命令及健康检查。
+- **当前状态**：🟡 部分解决。旧环境的成功记录保留，当前目录启动阻塞尚未修复；数据库内容、登录、真实邮件与 AI 调用未验证。
+- **验证证据**：`npm run dev` 退出 1；`NOTEFLOW_PYTHON=/opt/homebrew/bin/python3.13 npm run server:dev` 退出 1，报 `ModuleNotFoundError: No module named 'uvicorn'`；`npm run dev:vite -- --host 127.0.0.1 --strictPort` 退出 1，报 `.ts` 扩展名无法识别；Docker 版本查询成功。关联提交主题 `docs: 记录当前工作区启动阻塞`。本轮沿用 DEV-02，不新增同义问题，总数仍为 146。
 
 ## 8. 阿里云部署与运维问题
 
