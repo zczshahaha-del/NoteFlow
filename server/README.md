@@ -70,7 +70,7 @@ DEEPSEEK_MODEL=deepseek-flash
 EMBEDDING_PROVIDER=dashscope
 EMBEDDING_API_KEY=your_dashscope_api_key_here
 EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-EMBEDDING_MODEL=text-embedding-v4
+EMBEDDING_MODEL=qwen3.7-text-embedding
 EMBEDDING_DIMENSIONS=1024
 EMBEDDING_BATCH_SIZE=10
 
@@ -122,7 +122,11 @@ Docker 部署使用 `pgvector/pgvector:pg16`，将 `DB_HOST` 改为 `postgres`�
 
 如果 `EMBEDDING_API_KEY` 为空，笔记索引仍会将 Markdown 解析为章节和分块，并将向量状态标记为 `skipped`；检索会退回关键词和结构检索。
 
-配置密钥后，索引会调用 DashScope `text-embedding-v4`，将向量保存到 pgvector `vector(1024)`，混合检索会结合关键词结果与数据库向量相似度。
+配置密钥后，索引会调用 DashScope `qwen3.7-text-embedding`，将向量保存到 pgvector `vector(1024)`，混合检索会结合关键词结果与数据库向量相似度。
+
+重排使用 `qwen3.7-text-rerank`，设置 `RERANKER_BASE_URL=https://dashscope.aliyuncs.com/compatible-api/v1`，适配器会补上 `/reranks`；旧 `qwen3-rerank` 和显式填写的完整接口地址仍受支持。`RERANKER_API_KEY` 留空时自动复用 `EMBEDDING_API_KEY`。两项默认模型均使用百炼北京地域，其他地域应核对模型可用性并调整地址。接口依据：[嵌入](https://help.aliyun.com/zh/model-studio/embedding-interfaces-compatible-with-openai)、[重排](https://help.aliyun.com/zh/model-studio/text-rerank-api)。
+
+已有 `.env` 不会被代码更新覆盖，需显式修改模型名并重启；没有显式设置模型名的实例会采用新默认值。不同嵌入模型生成的向量不能混用，即使维度相同也需要重新索引已有笔记；本次本地升级前两套向量表均无非空向量。Hindsight 的启动脚本复用相同嵌入模型与 1024 维设置，已有记忆服务更换模型时也需先处理其向量索引，不能只重启容器。
 
 附件使用与供应商无关的 `ObjectStorage` 接口。默认实现写入 `ATTACHMENT_STORAGE_ROOT`；以后可以替换为 S3、R2 或 OSS，而不需要修改附件路由和编辑器流程。
 
