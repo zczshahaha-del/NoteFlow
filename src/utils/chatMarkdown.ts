@@ -5,6 +5,7 @@ import { readingCalloutKind } from "./readingCallout.ts";
 const marked = new Marked({
   breaks: true,
   gfm: true,
+  renderer: { checkbox: ({ checked }) => checked ? "☑ " : "☐ " },
 });
 
 const LANGUAGE_LABELS: Record<string, string> = {

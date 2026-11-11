@@ -28,5 +28,6 @@ try {
  assert.ok(host.querySelector('img[src="/api/attachments/test/content"]'));assert.ok(host.querySelector('.chat-code-block button[data-chat-copy]'));
  assert.ok(host.querySelector('table'));assert.ok(host.querySelector('blockquote'));
  assert.ok(host.textContent.includes('const x = "<script>";'));
+ const checklist=renderChatMarkdown('- [x] 完成\n- [ ] 待办');assert.match(checklist,/☑/);assert.match(checklist,/☐/);
  console.log('content safety: 10 malicious inputs and normal Markdown/code/image/table rendering passed');
 } finally {await vite.close();dom.window.close();}
