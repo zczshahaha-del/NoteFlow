@@ -1,0 +1,21 @@
+{
+  "date": "2026-11-11",
+  "status": "not-accepted",
+  "cause": "Test harness used a static Bearer token without the browser cookie-refresh protocol; access expired after configured 30 minutes",
+  "applicationBaseline": "f2ac2b5",
+  "harnessCommit": "b1284ff3c23c3ca84c5fe05180f02347add3bbe9",
+  "elapsedSeconds": 1958.7,
+  "cyclesBeforeInterruption": 5252,
+  "failures": {
+    "read_note:HTTP_401": 69,
+    "list_notes:HTTP_401": 68,
+    "versions:HTTP_401": 69,
+    "literal_search:HTTP_401": 69,
+    "read_attachment:HTTP_401": 69,
+    "list_attachments:HTTP_401": 69,
+    "cross_user_denied:HTTP_401": 69
+  },
+  "syntheticAccountsCleaned": true,
+  "isProductFailureEstablished": false,
+  "handling": "Preserve evidence; switch harness to normal cookie refresh, verify expired access and revoked sessions, rerun a continuous hour; do not accumulate valid intervals"
+}

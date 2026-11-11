@@ -1,0 +1,31 @@
+{
+  "startedAt": "2026-11-11T03:42:14.702Z",
+  "scope": "Actual SMTP delivery to user-selected mailbox and interactive login in an isolated local browser",
+  "recipient": "user-selected QQ mailbox",
+  "status": "passed",
+  "codeLogged": false,
+  "delivery": {
+    "httpStatus": 200,
+    "sentAt": "2026-11-11T03:42:19.645Z",
+    "developmentFallback": false,
+    "smtpAccepted": true
+  },
+  "login": {
+    "httpStatus": 200,
+    "authenticatedMe": true,
+    "expectedAccount": true,
+    "verified": true,
+    "httpOnlySessionCookie": true,
+    "survivesReload": true
+  },
+  "logout": {
+    "httpStatus": 200,
+    "meAfterLogout": 401
+  },
+  "completedAt": "2026-11-11T03:44:48.065Z",
+  "userConfirmedInboxReceipt": true,
+  "serverCodeConsumed": true,
+  "newSessionCreated": true,
+  "productionAcceptance": false,
+  "secretsRecorded": false
+}
