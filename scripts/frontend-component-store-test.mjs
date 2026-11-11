@@ -1018,7 +1018,8 @@ try {
   let signOutCalls = 0, changedSession = null, restoredId = null;
   const accountStore = useAppStore.getState();
   const apiCalls = [];
-  let failSessions = false, failMemorySetting = false;
+  let failSessions = false, failMemorySetting = false, importResolve;
+  const importRequests=[];
   const sessionFixture = (id, current) => ({ id, current, userAgent: "Chrome/130 Mac OS X", ipAddress: null, createdAt: "2026-01-01T00:00:00Z", lastSeenAt: "2026-01-01T00:00:00Z", expiresAt: "2027-01-01T00:00:00Z" });
   const memoryFixture = { provider: "reference", sourceRef: "source-ui-test", id: "memory-ui-test", memoryType: "preference", content: "偏好简洁排版", layer: "semantic", importance: 3, status: "pending" };
   const siblingMemory = { ...memoryFixture, id: "memory-same-source", content: "偏好先看图示", status: "active" };
@@ -1029,7 +1030,12 @@ try {
     const payload = options.body ? JSON.parse(options.body) : null;
     apiCalls.push({ path, method, payload, search: new URL(String(input), "http://127.0.0.1").search });
     let data = {}, status = 200;
-    if (path === "/api/settings") {
+    if(path === "/api/knowledge-backup") data={format:'noteflow-knowledge-backup',version:2,exportedAt:new Date().toISOString(),categories:[],notes:[],versions:[],attachments:[]};
+    else if(path === "/api/knowledge-backup/import") {
+      importRequests.push({payload,requestId:options.headers['X-Import-Id']});
+      return new Promise(resolve=>{importResolve=resolve;});
+    }
+    else if (path === "/api/settings") {
       if (method === "PUT" && failMemorySetting) { status = 500; data = { detail: "保存设置失败" }; }
       else data = { settings: { memoryEnabled: payload?.memoryEnabled ?? true, preferences: {} } };
     } else if (path === "/api/auth/sessions") {
@@ -1045,8 +1051,8 @@ try {
     return new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
   };
   globalThis.fetch = window.fetch = accountFetch;
-  const importCalls = [], selectCalls = [];
-  useAppStore.setState({ deletedNotes: [{ id: "trash-test", title: "待恢复笔记", deletedAt: null }], restoreDeletedNote(id) { restoredId = id; }, addNode(parent, node) { importCalls.push({ parent, node }); }, setSelectedFileId(id) { selectCalls.push(id); } });
+  const selectCalls = [];
+  useAppStore.setState({ noteSaveStates: {}, deletedNotes: [{ id: "trash-test", title: "待恢复笔记", deletedAt: null }], restoreDeletedNote(id) { restoredId = id; }, reloadWorkspace(id) { selectCalls.push(id); } });
   const accountContainer = document.createElement("div");
   traceFrontend("account");
   document.body.appendChild(accountContainer);
@@ -1170,25 +1176,39 @@ try {
   assert.doesNotMatch(activeSettings().textContent, /偏好先看图示/);
   assert.match(activeSettings().textContent, /正在学习数据库/);
   await clickAccount(settingAction("数据管理"));
-  assert.ok(settingAction("导出笔记备份")); assert.ok(settingAction("导出完整数据"));
+  assert.ok(settingAction("导出 Markdown 文件")); assert.ok(settingAction("导出知识库备份"));
   const downloads = [];
   const originalCreateUrl = URL.createObjectURL, originalRevokeUrl = URL.revokeObjectURL;
   const originalLinkClick = dom.window.HTMLAnchorElement.prototype.click;
   URL.createObjectURL = blob => { downloads.push({ type: blob.type, size: blob.size }); return "blob:test-export"; };
   URL.revokeObjectURL = () => {};
   dom.window.HTMLAnchorElement.prototype.click = function () { downloads[downloads.length - 1].name = this.download; };
-  await clickAccount(settingAction("导出笔记备份"));
-  await clickAccount(settingAction("导出完整数据"));
+  await act(async()=>useAppStore.setState({noteSaveStates:{[note.id]:{status:'offline'}}}));
+  await clickAccount(settingAction("导出知识库备份"));
+  assert.equal(downloads.length,0,'Offline unsynced edits must not produce an incomplete server backup');
+  assert.match(activeSettings().textContent,/正文未同步/);
+  await act(async()=>useAppStore.setState({noteSaveStates:{}}));
+  await clickAccount(settingAction("导出 Markdown 文件"));
+  await clickAccount(settingAction("导出知识库备份"));
   assert.match(downloads[0].name, /\.zip$/); assert.ok(downloads[0].size > 0);
   assert.match(downloads[1].name, /\.json$/); assert.ok(downloads[1].size > 0);
   URL.createObjectURL = originalCreateUrl; URL.revokeObjectURL = originalRevokeUrl;
   dom.window.HTMLAnchorElement.prototype.click = originalLinkClick;
   const importInput = activeSettings().querySelector('input[type="file"]');
-  assert.ok(importInput.multiple && importInput.accept.includes(".zip"));
+  assert.ok(!importInput.multiple && importInput.accept.includes(".zip"));
   Object.defineProperty(importInput, "files", { configurable: true, value: [{ name: "导入验证.md", text: async () => "# 导入验证\n\n测试正文" }] });
   await act(async () => importInput.dispatchEvent(new dom.window.Event("change", { bubbles: true })));
-  assert.equal(importCalls.length, 1);
-  assert.equal(selectCalls[0], importCalls[0].node.id);
+  assert.equal(importRequests.length, 1);
+  assert.equal(selectCalls.length, 0);
+  assert.doesNotMatch(activeSettings().textContent, /已导入 1 篇笔记/,'Do not report success before commit');
+  await act(async()=>importResolve(new Response(JSON.stringify({detail:'合成导入失败'}),{status:503})));
+  assert.match(activeSettings().textContent,/合成导入失败/);
+  assert.equal(selectCalls.length,0);
+  await clickAccount(settingAction('重试导入'));
+  assert.equal(importRequests[0].requestId,importRequests[1].requestId,'Retry retains idempotency key');
+  assert.deepEqual(importRequests[0].payload,importRequests[1].payload);
+  await act(async()=>importResolve(new Response(JSON.stringify({ok:true,notesCreated:1,categoriesCreated:0,attachmentsCreated:0,selectedNoteId:'committed-note'}),{headers:{'Content-Type':'application/json'}})));
+  assert.equal(selectCalls[0], 'committed-note');
   assert.match(activeSettings().textContent, /已导入 1 篇笔记/);
   await clickAccount(settingAction("回收站"));
   assert.match(activeSettings().textContent, /待恢复笔记/);

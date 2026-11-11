@@ -84,14 +84,14 @@ http://your-server-ip/
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
-python -m pip install -r server/requirements.txt
+python -m pip install --require-hashes -r server/requirements.lock
 ```
 
 也可使用 uv 自动准备 Python：
 
 ```bash
 uv venv --python 3.12 .venv
-uv pip install --python .venv/bin/python -r server/requirements.txt
+uv pip install --python .venv/bin/python --require-hashes -r server/requirements.lock
 ```
 
 首次运行需要从 `server/.env.example` 创建 `server/.env`，已有文件不要覆盖。设置随机的 `JWT_SECRET` 和 `DB_PASSWORD`；在根目录的 `.env` 中设置相同的 `POSTGRES_PASSWORD`。本地使用 `ENVIRONMENT=development`、`AUTH_COOKIE_SECURE=false`。没有供应商密钥时，将 `DEEPSEEK_API_KEY`、`EMBEDDING_API_KEY`、`RERANKER_API_KEY` 留空，避免把模板占位文字当成真实密钥。
@@ -145,3 +145,9 @@ python3 -m alembic -c alembic.ini upgrade head
 ```env
 VITE_API_BASE_URL=http://127.0.0.1:8080
 ```
+
+## 依赖安全检查
+
+`npm run test:dependencies` 使用官方 npm 公告和固定版本 pip-audit 检查锁文件及当前项目虚拟环境；需要 uv 和网络，查询失败不算通过。升级 Python 依赖时修改 `server/requirements.txt`，再执行 `uv pip compile server/requirements.txt --universal --python-version 3.12 --generate-hashes --output-file server/requirements.lock` 并按锁文件重装和回归。Docker 也按带哈希的传递依赖锁安装。单元检查使用 `server/requirements-test.txt`。
+
+知识库备份和恢复范围见 [备份说明](docs/knowledge-backup.md)。

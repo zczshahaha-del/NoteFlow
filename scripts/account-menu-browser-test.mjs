@@ -84,6 +84,14 @@ try{
   assert.equal(await page.locator('.nf-segment button').count(),2,'keep the existing light/dark choices, not mockup-only features');
   assert.equal(await page.locator('.nf-segment button[aria-pressed="true"]').evaluate(n=>getComputedStyle(n).backgroundColor),'rgb(231, 238, 242)');
   await page.screenshot({path:join(output,'appearance-'+width+'.png')});
+  await page.getByRole('button',{name:'数据管理',exact:true}).click();await settled(page);
+  assert.equal(await page.getByRole('button',{name:'导出知识库备份',exact:true}).count(),1);
+  assert.equal(await page.getByRole('button',{name:'导出 Markdown 文件',exact:true}).count(),1);
+  assert.equal(await page.getByText('导出完整数据',{exact:true}).count(),0);
+  assert.equal(await page.locator('input[type=file]').evaluate(n=>n.multiple),false);
+  assert.match(await page.getByRole('dialog',{name:'设置',exact:true}).textContent(),/不含聊天与长期记忆/);
+  assert(await page.getByRole('dialog',{name:'设置',exact:true}).evaluate(n=>n.scrollWidth<=n.clientWidth));
+  await page.screenshot({path:join(output,'data-'+width+'.png')});
   await page.getByRole('dialog',{name:'设置',exact:true}).press('Escape');await settled(page);
   await open(page);await panel.getByRole('button',{name:/^回收站/}).click();await page.getByRole('dialog',{name:'设置',exact:true}).waitFor();await settled(page);
   assert.equal(await page.getByRole('heading',{name:'回收站',exact:true}).count(),1);
@@ -109,6 +117,8 @@ try{
   assert.equal(await page.locator('.nf-nav[aria-current="page"]').evaluate(n=>getComputedStyle(n).backgroundColor),'rgb(38, 62, 77)');
   assert.equal(await page.locator('.nf-segment button[aria-pressed="true"]').evaluate(n=>getComputedStyle(n).color),'rgb(155, 200, 225)');
   if(width===1280)await page.screenshot({path:join(output,'appearance-dark.png')});
+  await page.getByRole('button',{name:'数据管理',exact:true}).click();await settled(page);
+  if(width===1280)await page.screenshot({path:join(output,'data-dark.png')});
   await page.getByRole('dialog',{name:'设置',exact:true}).press('Escape');await settled(page);
   await page.emulateMedia({reducedMotion:'reduce'});await open(page);
   assert.equal(await panel.evaluate(n=>getComputedStyle(n).animationName),'none');
@@ -119,7 +129,7 @@ try{
   await page.emulateMedia({forcedColors:'active'});
   assert.equal(await panel.evaluate(n=>getComputedStyle(n).outlineStyle),'solid');
   assert.deepEqual(requests,[]);assert.deepEqual(errors,[]);
-  reports.push({width,compactWidth:224,rightOfAvatar:true,bottomAligned:true,avatar:28,launcherUnchanged:true,framelessCompactLauncher:true,circularFeedback:true,keyboardFocus:true,expandedRowUnchanged:true,rows:geometry.rows,settingsAndTrash:true,longName:true,dark:true,reducedMotion:true,shortViewport:true,requests,errors});await context.close();
+  reports.push({width,compactWidth:224,rightOfAvatar:true,bottomAligned:true,avatar:28,launcherUnchanged:true,framelessCompactLauncher:true,circularFeedback:true,keyboardFocus:true,expandedRowUnchanged:true,rows:geometry.rows,settingsAndTrash:true,backupScope:true,longName:true,dark:true,reducedMotion:true,shortViewport:true,requests,errors});await context.close();
  }
  console.log(JSON.stringify({actualAccountMenu:true,syntheticOnly:true,output,reports},null,2));
 }finally{await browser.close();}

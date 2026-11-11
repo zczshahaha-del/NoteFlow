@@ -27,6 +27,7 @@ class GateCommand:
 
 
 FRONTEND_COMMANDS = [
+    GateCommand("frontend", "content-safety", ["npm", "run", "test:content-safety"]),
     GateCommand("frontend", "tiptap-codec", ["npm", "run", "test:tiptap-codec"]),
     GateCommand("frontend", "tiptap-selection", ["npm", "run", "test:tiptap-selection"]),
     GateCommand("frontend", "editor-ui-contract", ["npm", "run", "test:editor-ui"]),

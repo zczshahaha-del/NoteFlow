@@ -1,0 +1,349 @@
+{
+  "date": "2026-11-11",
+  "baseCommit": "3dc5931c07e2e450aef6a76d3208a2bf8ed23e65",
+  "implementationCommit": "0b1ef34e597d7ed20b91a04dc557dc9ed3cb94d1",
+  "scope": "Four local system repair categories requested by user; no production deployment",
+  "issues": [
+    11,
+    13
+  ],
+  "qualityGate": {
+    "summary": {
+      "total": 23,
+      "passed": 23,
+      "failed": 0,
+      "durationSeconds": 29.823
+    },
+    "results": [
+      {
+        "category": "frontend",
+        "name": "content-safety",
+        "status": "passed"
+      },
+      {
+        "category": "frontend",
+        "name": "tiptap-codec",
+        "status": "passed"
+      },
+      {
+        "category": "frontend",
+        "name": "tiptap-selection",
+        "status": "passed"
+      },
+      {
+        "category": "frontend",
+        "name": "editor-ui-contract",
+        "status": "passed"
+      },
+      {
+        "category": "frontend",
+        "name": "wiki-links",
+        "status": "passed"
+      },
+      {
+        "category": "frontend",
+        "name": "knowledge-import",
+        "status": "passed"
+      },
+      {
+        "category": "frontend",
+        "name": "markdown-diff",
+        "status": "passed"
+      },
+      {
+        "category": "frontend",
+        "name": "offline-conflict",
+        "status": "passed"
+      },
+      {
+        "category": "frontend",
+        "name": "component-store",
+        "status": "passed"
+      },
+      {
+        "category": "frontend",
+        "name": "pwa",
+        "status": "passed"
+      },
+      {
+        "category": "frontend",
+        "name": "input-composition",
+        "status": "passed"
+      },
+      {
+        "category": "backend-unit",
+        "name": "unittest-discovery",
+        "status": "passed"
+      },
+      {
+        "category": "backend-contract",
+        "name": "context-planner",
+        "status": "passed"
+      },
+      {
+        "category": "backend-contract",
+        "name": "runtime-events",
+        "status": "passed"
+      },
+      {
+        "category": "backend-contract",
+        "name": "diagnostics",
+        "status": "passed"
+      },
+      {
+        "category": "backend-memory",
+        "name": "memory-stage1",
+        "status": "passed"
+      },
+      {
+        "category": "backend-memory",
+        "name": "memory-stage2",
+        "status": "passed"
+      },
+      {
+        "category": "backend-memory",
+        "name": "memory-stage3",
+        "status": "passed"
+      },
+      {
+        "category": "backend-memory",
+        "name": "memory-stage4",
+        "status": "passed"
+      },
+      {
+        "category": "database",
+        "name": "postgres-pgvector-integration",
+        "status": "passed"
+      },
+      {
+        "category": "rag",
+        "name": "rag-fixed-eval",
+        "status": "passed"
+      },
+      {
+        "category": "memory",
+        "name": "memory-safety-eval",
+        "status": "passed"
+      },
+      {
+        "category": "build",
+        "name": "production-build",
+        "status": "passed"
+      }
+    ],
+    "backendUnitTests": {
+      "run": 301,
+      "skipped": 15,
+      "failures": 0
+    },
+    "postgresIntegrationTests": {
+      "run": 8,
+      "passed": 8
+    }
+  },
+  "browser": {
+    "total": 12,
+    "passed": 12,
+    "usesSyntheticServices": true,
+    "commands": [
+      {
+        "name": "auth-ui",
+        "status": "passed"
+      },
+      {
+        "name": "note-entry",
+        "status": "passed"
+      },
+      {
+        "name": "workspace-layout",
+        "status": "passed"
+      },
+      {
+        "name": "edit-preview",
+        "status": "passed"
+      },
+      {
+        "name": "draft-ui",
+        "status": "passed"
+      },
+      {
+        "name": "search-ui",
+        "status": "passed"
+      },
+      {
+        "name": "account-menu",
+        "status": "passed"
+      },
+      {
+        "name": "library-navigation",
+        "status": "passed"
+      },
+      {
+        "name": "chat-ui",
+        "status": "passed"
+      },
+      {
+        "name": "memory-console",
+        "status": "passed"
+      },
+      {
+        "name": "workspace-flow",
+        "status": "passed"
+      },
+      {
+        "name": "functional-diagnostic",
+        "status": "passed"
+      }
+    ],
+    "backupDataPanel": {
+      "widths": [
+        1280,
+        736,
+        320
+      ],
+      "darkMode": true,
+      "screenshotsVisuallyReviewed": true,
+      "horizontalOverflow": false
+    }
+  },
+  "postgresAttachmentAndBackup": {
+    "run": 15,
+    "passed": 15,
+    "disposableDatabaseRemoved": true,
+    "coverage": [
+      "upload first and final SQL failures",
+      "delete SQL rollback preserves object",
+      "storage cleanup retry and partial objects",
+      "claim/failure/backoff/stale lease recovery",
+      "row lock prevents cleanup during upload",
+      "session ownership and logout",
+      "backup hierarchy/metadata/version/attachment roundtrip",
+      "import SQL rollback and file cleanup",
+      "idempotent replay and invalid archive rejection"
+    ]
+  },
+  "noteConcurrency": {
+    "run": 6,
+    "passed": 6,
+    "disposableDatabaseRemoved": true
+  },
+  "contentSafety": {
+    "maliciousInputClasses": 10,
+    "normalMarkdownAndChecklistsPreserved": true,
+    "scriptProtocolVariantRetained": false
+  },
+  "zipImport": {
+    "tamperedDeclaredSizeRejected": true,
+    "streamingExpandedEntryLimitBytes": 8388608,
+    "aggregateLimitBytes": 26214400,
+    "compressedExpansionAndAggregateLimitsTested": true
+  },
+  "runtimeApi": {
+    "checks": {
+      "sessionAuthentication": true,
+      "folderAndNoteCreate": true,
+      "crossAccountNoteIsolation": true,
+      "editRenameMoveFavoriteAndConflict": true,
+      "versionHistoryAndRestore": true,
+      "editPreviewApplyAndIdempotentRetry": true,
+      "draftCreateConfirmAssembleSave": true,
+      "portableBackupRestoreAndIdempotentReplay": true,
+      "attachmentNormalUploadReadDeleteAndAccountIsolation": true,
+      "trashAndRestore": true,
+      "chatSessionLifecycle": true,
+      "realAgentChatStream": true
+    },
+    "risks": {
+      "signedAttachmentReadableWithoutSession": false,
+      "mixedCaseHtmlAccepted": false
+    },
+    "syntheticAccountsCleaned": true,
+    "emailDeliveryNotExercised": true
+  },
+  "hindsightHttp": {
+    "ok": true,
+    "realHttp": true,
+    "sessionAuth": true,
+    "backgroundWorker": true,
+    "sharedContext": true,
+    "normalizedSourceAndGraph": true,
+    "realOutage": false
+  },
+  "liveMemoryPlanner": {
+    "cases": 2,
+    "passed": 2,
+    "usesRealModel": true,
+    "scope": "Natural-language deletion and disabling intents; full 12-case safety report also passes"
+  },
+  "dependencies": {
+    "npmAdvisoryMatches": 0,
+    "pythonAffectedPackages": [],
+    "pythonSkippedPackages": [],
+    "pythonEnvironmentPackagesCompatible": 123,
+    "npmDependencyTreeProblems": [],
+    "activeEnvironmentMatchesUniversalHashLock": true,
+    "versions": {
+      "tiptap": "3.33.1",
+      "fastapi": "0.162.4",
+      "starlette": "1.10.0",
+      "pyjwt": "2.15.1",
+      "langgraph-checkpoint-postgres": "3.2.0",
+      "dompurify": "3.4.17"
+    },
+    "auditCommand": "npm run test:dependencies",
+    "auditBackendTool": "pip-audit==2.10.1"
+  },
+  "backupContract": {
+    "format": "noteflow-knowledge-backup",
+    "version": 2,
+    "includes": [
+      "notes including trash",
+      "folder hierarchy",
+      "content",
+      "tags",
+      "pin/favorite",
+      "timestamps",
+      "note versions",
+      "attachment bytes"
+    ],
+    "excluded": [
+      "chat history",
+      "long-term memory",
+      "active AI drafts",
+      "account credentials and sessions"
+    ],
+    "conflictingIds": "append with remapping; existing notes never overwritten",
+    "retry": "same import request ID returns committed receipt",
+    "completion": "reported only after SQL commit",
+    "limits": "25 MB archive, 500 notes, 500 folders, 500 attachments, 5000 versions",
+    "reservedClientPropertyIdsRemapped": true
+  },
+  "remainingBoundaries": [
+    "No actual email delivery or account recovery acceptance",
+    "No production deployment, long-running load, process-crash or disk-loss recovery drill",
+    "No physical phone/IME/screen-reader or all-browser acceptance",
+    "No audit of third-party Hindsight image internals",
+    "Knowledge backup is not an entire-account migration package",
+    "Cleanup exhausted retries require operator action; closing page loses retry identity",
+    "Other historical issues remain in their prior state"
+  ],
+  "attachmentDocumentCompatibility": {
+    "ordinaryDocumentsDownloadAsBinary": true,
+    "onlyVerifiedRasterImagesInline": true
+  },
+  "cleanup": {
+    "syntheticAccountsCleaned": true,
+    "failedCleanupFixtureRemoved": true,
+    "checkpointCleanupRestrictedToRunTimeAndPrefixes": true,
+    "transientCleanupDeadlock": "A synthetic account cleanup collided with an index worker; the harness now retries only SQLSTATE 40P01/40001 with a bound, exact fixtures were removed and final sequential API run passed"
+  },
+  "localServices": {
+    "frontend": 200,
+    "api": 200,
+    "apiHealthy": true,
+    "postgresReady": true,
+    "redisReady": true,
+    "hindsightApi": 200,
+    "hindsightConsole": 200
+  }
+}

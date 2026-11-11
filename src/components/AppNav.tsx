@@ -26,7 +26,10 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import { generateId } from "../store";
+import { syncKnowledgeBeforeBackup } from "../store";
+import { exportKnowledgeBackup, importKnowledgeBackup } from "../services/knowledgeBackup";
+import { backupAsTree, parseKnowledgeBackup } from "../utils/knowledgeBackup";
+import type { KnowledgeBackup } from "../utils/knowledgeBackup";
 import { useWorkspaceSlice } from "../store/selectors";
 import {
   deleteMemory,
@@ -39,12 +42,10 @@ import {
 } from "../services/memories";
 import {
   createKnowledgeZipBlob,
-  createKnowledgeJsonBlob,
   downloadBlob,
   makeKnowledgeBackupName,
   makeKnowledgeJsonName,
 } from "../utils/exportKnowledgeZip";
-import { parseKnowledgeImport } from "../utils/importKnowledge";
 import {
   confirmEmailChange,
   listUserSessions,
@@ -175,6 +176,15 @@ export default function AccountMenu({
   const [editingMemoryId, setEditingMemoryId] = useState<string | null>(null);
   const [editingContent, setEditingContent] = useState("");
   const [importStatus, setImportStatus] = useState("");
+  const [dataBusy, setDataBusy] = useState(false);
+  const dataOwner = useRef(userEmail);
+  const pendingImport = useRef<{backup: KnowledgeBackup; requestId:string} | null>(null);
+  dataOwner.current = userEmail;
+  useEffect(() => {
+    pendingImport.current = null;
+    setDataBusy(false);
+    setImportStatus("");
+  }, [userEmail]);
   const accountRef = useRef<HTMLDivElement>(null);
   const accountButtonRef = useRef<HTMLButtonElement>(null);
   const accountPanelRef = useRef<HTMLDivElement>(null);
@@ -187,7 +197,7 @@ export default function AccountMenu({
   const avatarText = Array.from(accountPrimary)[0].toLocaleUpperCase();
   const avatar = accountPrimary !== "我的账号" && /\p{L}/u.test(avatarText) ? avatarText : <UserRound size={17} strokeWidth={1.6} aria-hidden="true" />;
   const settingsScrollRef = useRef<HTMLDivElement>(null);
-  const { treeData, fileContents, addNode, setSelectedFileId, deletedNotes, restoreDeletedNote } = useWorkspaceSlice();
+  const { reloadWorkspace, deletedNotes, restoreDeletedNote } = useWorkspaceSlice();
   const isDark = themeMode === "dark";
 
   useEffect(() => {
@@ -246,40 +256,55 @@ export default function AccountMenu({
     };
   }, []);
 
-  const handleExportKnowledgeBase = () => {
-    const blob = createKnowledgeZipBlob(treeData, fileContents);
-    downloadBlob(blob, makeKnowledgeBackupName());
+  const handleExport = async (format: "zip" | "json") => {
+    const owner=userEmail;
+    setDataBusy(true);setImportStatus("正在生成备份…");
+    try {
+      await syncKnowledgeBeforeBackup();
+      if(dataOwner.current!==owner)return;
+      const backup=await exportKnowledgeBackup();
+      if(dataOwner.current!==owner)return;
+      if(format==="zip") {
+        const {treeData,fileContents}=backupAsTree(backup);
+        downloadBlob(createKnowledgeZipBlob(treeData,fileContents),makeKnowledgeBackupName());
+      } else downloadBlob(new Blob([JSON.stringify(backup)],{type:"application/json"}),makeKnowledgeJsonName());
+      setImportStatus("备份已生成");
+    } catch(error) {if(dataOwner.current===owner)setImportStatus(error instanceof Error?error.message:"备份失败");}
+    finally {if(dataOwner.current===owner)setDataBusy(false);}
   };
 
-  const handleExportKnowledgeJson = () => {
-    downloadBlob(createKnowledgeJsonBlob(treeData, fileContents), makeKnowledgeJsonName());
+  const runImport = async () => {
+    if(!pendingImport.current)return;
+    const pending=pendingImport.current;
+    const owner=userEmail;
+    const result=await importKnowledgeBackup(pending.backup,pending.requestId);
+    if(dataOwner.current!==owner||pendingImport.current!==pending)return;
+    pendingImport.current=null;
+    reloadWorkspace(result.selectedNoteId);
+    setImportStatus(`已导入 ${result.notesCreated} 篇笔记`);
   };
 
   const handleImportKnowledge = async (files: FileList | null) => {
-    if (!files?.length) return;
-    setImportStatus("正在解析导入文件…");
+    if(!files?.length||dataBusy)return;
+    const owner=userEmail;
+    setDataBusy(true);setImportStatus("正在解析导入文件…");
     try {
-      const records = (await Promise.all(Array.from(files).map(parseKnowledgeImport))).flat();
-      let lastId: string | null = null;
-      records.forEach((record) => {
-        const id = generateId();
-        lastId = id;
-        addNode(null, {
-          id,
-          name: `${record.title}.md`,
-          type: "file",
-          content: record.content,
-          tags: record.tags,
-          summary: `从 ${record.sourcePath} 导入`,
-        });
-      });
-      if (lastId) setSelectedFileId(lastId);
-      setImportStatus(`已导入 ${records.length} 篇笔记`);
-    } catch (error) {
-      setImportStatus(error instanceof Error ? error.message : "导入失败");
-    } finally {
-      if (importInputRef.current) importInputRef.current.value = "";
-    }
+      // One archive per transaction keeps retry identity and failures unambiguous.
+      const backup=await parseKnowledgeBackup(files[0]);
+      if(dataOwner.current!==owner)return;
+      pendingImport.current={backup,requestId:crypto.randomUUID()};
+      setImportStatus("正在保存导入数据…");
+      await runImport();
+    } catch(error) {if(dataOwner.current===owner)setImportStatus(error instanceof Error?error.message:"导入失败");}
+    finally {if(dataOwner.current===owner){setDataBusy(false);if(importInputRef.current)importInputRef.current.value="";}}
+  };
+
+  const retryImport = async () => {
+    const owner=userEmail;
+    setDataBusy(true);setImportStatus("正在重试导入…");
+    try {await runImport();}
+    catch(error){if(dataOwner.current===owner)setImportStatus(error instanceof Error?error.message:"导入失败");}
+    finally {if(dataOwner.current===owner)setDataBusy(false);}
   };
 
   const reloadMemories = async () => {
@@ -527,11 +552,13 @@ export default function AccountMenu({
               </div>}
 
               {settingsTab === "data" && <>
-                <button type="button" className="nf-row" onClick={handleExportKnowledgeBase}><span className="nf-row-main"><FileArchive size={17} strokeWidth={1.6} />导出笔记备份</span><ArrowUpRight size={16} strokeWidth={1.6} /></button>
-                <button type="button" className="nf-row" onClick={handleExportKnowledgeJson}><span className="nf-row-main"><FileJson size={17} strokeWidth={1.6} />导出完整数据</span><ArrowUpRight size={16} strokeWidth={1.6} /></button>
-                <button type="button" className="nf-row" onClick={() => importInputRef.current?.click()}><span className="nf-row-main"><Upload size={17} strokeWidth={1.6} />导入笔记文件</span><ArrowUpRight size={16} strokeWidth={1.6} /></button>
-                <input ref={importInputRef} type="file" accept=".md,.markdown,.zip,.json,text/markdown,application/zip,application/json" multiple hidden onChange={(event) => void handleImportKnowledge(event.target.files)} />
+                <button type="button" className="nf-row" disabled={dataBusy} onClick={() => void handleExport("zip")}><span className="nf-row-main"><FileArchive size={17} strokeWidth={1.6} />导出 Markdown 文件</span><ArrowUpRight size={16} strokeWidth={1.6} /></button>
+                <button type="button" className="nf-row" disabled={dataBusy} onClick={() => void handleExport("json")}><span className="nf-row-main"><FileJson size={17} strokeWidth={1.6} />导出知识库备份</span><ArrowUpRight size={16} strokeWidth={1.6} /></button>
+                <button type="button" className="nf-row" disabled={dataBusy || !!pendingImport.current} onClick={() => importInputRef.current?.click()}><span className="nf-row-main"><Upload size={17} strokeWidth={1.6} />导入笔记文件</span><ArrowUpRight size={16} strokeWidth={1.6} /></button>
+                <input ref={importInputRef} type="file" accept=".md,.markdown,.zip,.json,text/markdown,application/zip,application/json" hidden onChange={(event) => void handleImportKnowledge(event.target.files)} />
+                <p className="nf-notice">JSON 保留笔记、目录、属性、历史版本和附件，不含聊天与长期记忆；Markdown 仅导出正文。</p>
                 {importStatus && <p className="nf-notice" role="status">{importStatus}</p>}
+                {pendingImport.current && !dataBusy && <div className="flex gap-2"><button type="button" className="nf-button" onClick={() => void retryImport()}>重试导入</button><button type="button" className="nf-button" onClick={() => {pendingImport.current=null;setImportStatus("已停止重试，请刷新确认服务端结果");}}>停止重试</button></div>}
                 <button type="button" className="nf-row" onClick={() => setSettingsTab("trash")}><span className="nf-row-main"><Trash size={17} strokeWidth={1.6} />回收站</span><ChevronRight size={16} strokeWidth={1.6} /></button>
               </>}
 

@@ -77,7 +77,7 @@ try {
    await page.locator('.directory-node-open').filter({hasText:'B'}).click();
    await ready(page,'B');await page.mouse.move(1000,850);await page.waitForTimeout(180);
    assert.equal(await page.locator('.directory-node-row[data-selected="true"]').count(),1);
-   assert.equal(await page.locator('.directory-node-row[data-selected="true"]').evaluate(n=>getComputedStyle(n).backgroundColor),'rgb(234, 240, 245)');
+   assert.equal(await page.locator('.directory-node-row[data-selected="true"]').evaluate(n=>getComputedStyle(n).backgroundColor),'rgb(231, 238, 242)');
    assert.equal(await folder.evaluate(n=>getComputedStyle(n).backgroundColor),'rgba(0, 0, 0, 0)');
    // Real Tab retains the existing keyboard-only underline, without coloring the folder.
    await page.locator('.directory-node-open').filter({hasText:'合成目录'}).focus();await page.keyboard.press('Tab');

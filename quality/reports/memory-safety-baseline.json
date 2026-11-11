@@ -1,6 +1,7 @@
 {
-  "generatedAt": "2026-07-23T04:54:32.637749+00:00",
-  "datasetVersion": "2026-07-17-v1",
+  "generatedAt": "2026-11-11T02:38:28.958066+00:00",
+  "datasetVersion": "2026-11-11-typed-planner-v2",
+  "managementCoverage": "synthetic planner-output contract; natural-language intent accuracy not evaluated",
   "summary": {
     "total": 12,
     "passed": 12,

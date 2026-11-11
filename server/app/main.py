@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import cfg
 from app.database import init_db, init_redis
 from app.routers import auth, knowledge, notes, drafts, edits, memories, ai, agent, health, settings, attachments, chat_sessions, memory_console
+from app.routers import knowledge_backup
 from app.memory.engine import MemoryUnavailable
 from app.schemas.common import API_ERROR_RESPONSES
 from app.services.observability import install_observability
@@ -52,14 +53,15 @@ app.add_middleware(
     allow_origins=cfg.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "PUT", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-File-Name", "X-Note-Id", "X-Content-Type", "X-Request-Id", "X-Trace-Id"],
-    expose_headers=["X-Request-Id", "X-Trace-Id"],
+    allow_headers=["Authorization", "Content-Type", "X-File-Name", "X-Note-Id", "X-Content-Type", "X-Request-Id", "X-Trace-Id", "X-Import-Id"],
+    expose_headers=["X-Request-Id", "X-Trace-Id", "X-Import-Id"],
 )
 
 # Routes
 app.include_router(health.router, prefix="/api")
 app.include_router(auth.router, prefix="/api")
 app.include_router(knowledge.router, prefix="/api")
+app.include_router(knowledge_backup.router, prefix="/api")
 app.include_router(notes.router, prefix="/api")
 app.include_router(attachments.router, prefix="/api")
 app.include_router(drafts.router, prefix="/api")

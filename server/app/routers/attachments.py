@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-import hmac
 import mimetypes
 import re
 from datetime import datetime
@@ -36,21 +34,45 @@ def _attachment_out(item: NoteAttachment) -> dict:
         "contentType": item.content_type,
         "size": item.size,
         "sha256": item.sha256,
-        "downloadUrl": _signed_url(item.id),
+        "downloadUrl": f"/api/attachments/{item.id}/content",
         "createdAt": _dt(item.created_at),
     }
 
 
-def _attachment_signature(attachment_id: str) -> str:
-    return hmac.new(
-        cfg.JWT_SECRET.encode("utf-8"),
-        f"attachment:{attachment_id}".encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
+def validated_content_type(file_name: str, claimed: str | None, content: bytes) -> str:
+    content_type = (claimed or mimetypes.guess_type(file_name)[0] or "application/octet-stream").split(";", 1)[0].strip().lower()
+    allowed = {"application/octet-stream", "application/pdf", "application/zip", "text/plain", "text/markdown", "text/csv", "image/png", "image/jpeg", "image/gif", "image/webp"}
+    active_extensions = {".html", ".htm", ".xhtml", ".svg", ".xml", ".js", ".mjs"}
+    if content_type in {"text/html", "application/xhtml+xml", "image/svg+xml", "text/javascript", "application/javascript", "text/xml", "application/xml"} or Path(file_name).suffix.lower() in active_extensions:
+        raise HTTPException(status_code=415, detail="unsupported or active attachment type")
+    if re.search(rb"<(?:!doctype\s+html|html|svg|script)\b", content[:4096].lstrip().lower()):
+        raise HTTPException(status_code=415, detail="active HTML/SVG attachments are not allowed")
+    image_checks = {
+        "image/png": content.startswith(b"\x89PNG\r\n\x1a\n"),
+        "image/jpeg": content.startswith(b"\xff\xd8\xff"),
+        "image/gif": content.startswith((b"GIF87a", b"GIF89a")),
+        "image/webp": content.startswith(b"RIFF") and content[8:12] == b"WEBP",
+    }
+    if content_type in image_checks and not image_checks[content_type]:
+        raise HTTPException(status_code=415, detail="image content does not match its type")
+    # Unknown document formats remain downloadable without trusting their MIME.
+    return content_type if content_type in allowed else "application/octet-stream"
 
 
-def _signed_url(attachment_id: str) -> str:
-    return f"/api/attachments/{attachment_id}/content?sig={_attachment_signature(attachment_id)}"
+def attachment_response(item: NoteAttachment, content: bytes) -> Response:
+    # Historical uploads may contain active formats; only verified raster images
+    # are inline. Everything else is downloaded with a sandbox and no MIME sniff.
+    try:
+        kind = validated_content_type(item.file_name, item.content_type, content)
+    except HTTPException:
+        kind = "application/octet-stream"
+    disposition = "inline" if kind.startswith("image/") else "attachment"
+    return Response(content=content, media_type=kind, headers={
+        "Content-Disposition": f'{disposition}; filename="{item.file_name.encode("ascii", "ignore").decode() or "attachment"}"',
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; sandbox",
+    })
 
 
 @router.post("/attachments")
@@ -67,9 +89,7 @@ async def upload_attachment(
         raise HTTPException(status_code=413, detail="attachment exceeds size limit")
 
     file_name = _safe_filename(x_file_name)
-    content_type = (x_content_type or mimetypes.guess_type(file_name)[0] or "application/octet-stream")[:120]
-    if content_type.startswith(("text/html", "image/svg")):
-        raise HTTPException(status_code=415, detail="active HTML/SVG attachments are not allowed")
+    content_type = validated_content_type(file_name, x_content_type, content)
 
     try:
         item = await AttachmentService().create(
@@ -98,32 +118,14 @@ async def download_attachment(attachment_id: str, user: CurrentUser = Depends(ge
         raise HTTPException(status_code=404, detail=str(error)) from error
     except FileNotFoundError as error:
         raise HTTPException(status_code=410, detail="attachment content is missing") from error
-    return Response(
-        content=content,
-        media_type=item.content_type,
-        headers={"Content-Disposition": f'inline; filename="{item.file_name.encode("ascii", "ignore").decode() or "attachment"}"'},
-    )
+    return attachment_response(item, content)
 
 
 @router.get("/attachments/{attachment_id}/content")
-async def read_signed_attachment(attachment_id: str, sig: str):
-    if not hmac.compare_digest(sig, _attachment_signature(attachment_id)):
-        raise HTTPException(status_code=403, detail="invalid attachment signature")
-    try:
-        item, content = await AttachmentService().read_signed(attachment_id)
-    except LookupError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
-    except FileNotFoundError as error:
-        raise HTTPException(status_code=410, detail="attachment content is missing") from error
-    return Response(
-        content=content,
-        media_type=item.content_type,
-        headers={
-            "Cache-Control": "private, max-age=3600",
-            "Content-Disposition": f'inline; filename="{item.file_name.encode("ascii", "ignore").decode() or "attachment"}"',
-            "X-Content-Type-Options": "nosniff",
-        },
-    )
+async def read_attachment_content(attachment_id: str, user: CurrentUser = Depends(get_current_user)):
+    # Old saved URLs may still carry sig=. The session is always authoritative;
+    # possession of a historical URL grants no access and logout revokes access.
+    return await download_attachment(attachment_id, user)
 
 
 @router.delete("/attachments/{attachment_id}")
