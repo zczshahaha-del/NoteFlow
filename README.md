@@ -1,10 +1,10 @@
-# NoteFlow
+# 知流 · NoteFlow
 
-NoteFlow 是一款个人知识库应用，采用 React 前端、FastAPI 后端、PostgreSQL + pgvector 持久化存储和 Redis 基础设施，并集成了 DeepSeek AI 能力。
+知流（NoteFlow）是一款个人知识库应用，采用 React 前端、FastAPI 后端、PostgreSQL + pgvector 持久化存储和 Redis 基础设施，并集成了 DeepSeek AI 能力。
 
 ## 产品方向
 
-NoteFlow 正在统一为登录后的单一工作台：
+知流正在统一为登录后的单一工作台：
 
 - 左侧：知识树、文件夹、笔记、搜索，以及后续的回收站入口
 - 中间：正式笔记的阅读与编辑，以及后续的 AI 草稿和修改预览模式
@@ -77,7 +77,7 @@ http://your-server-ip/
 
 ## 本地开发
 
-本地后端使用 Python 3.12，与生产 Docker 镜像保持一致。
+需要 Node 22、Python 3.12 和运行中的 Docker。使用 nvm 时先执行 `nvm install`、`nvm use`，仓库的 `.nvmrc` 会选择 Node 22。现有启动脚本通过原生加载器读取 `vite.config.ts`，Node 20 无法直接运行该启动方式。
 
 首次运行先创建虚拟环境并安装后端依赖：
 
@@ -87,12 +87,34 @@ source .venv/bin/activate
 python -m pip install -r server/requirements.txt
 ```
 
+也可使用 uv 自动准备 Python：
+
+```bash
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python -r server/requirements.txt
+```
+
+首次运行需要从 `server/.env.example` 创建 `server/.env`，已有文件不要覆盖。设置随机的 `JWT_SECRET` 和 `DB_PASSWORD`；在根目录的 `.env` 中设置相同的 `POSTGRES_PASSWORD`。本地使用 `ENVIRONMENT=development`、`AUTH_COOKIE_SECURE=false`。没有供应商密钥时，将 `DEEPSEEK_API_KEY`、`EMBEDDING_API_KEY`、`RERANKER_API_KEY` 留空，避免把模板占位文字当成真实密钥。
+
+暂不接入外部 Hindsight 服务时，可在 `server/.env` 中设置 `MEMORY_ENGINE=local`、`MEMORY_INDEX_PROVIDER=none`，使用项目内置的 PostgreSQL 记忆存储。附件目录可设为绝对路径，或设为相对后端工作目录的 `data/attachments`。
+
+先启动本地基础服务，下面的覆盖文件只把数据库和 Redis 端口绑定到本机；需要 Docker Compose 支持 `!override` 语法：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d postgres redis
+docker compose -f docker-compose.yml -f docker-compose.local.yml ps postgres redis
+```
+
+两项服务健康后，再启动开发服务。数据库使用持久化卷；首次启动是空实例，原有笔记需要另行从备份恢复。未配置邮件渠道时，开发环境会自动填入验证码；AI Key 为空时，基础笔记功能可运行，AI 功能不可用。
+
 推荐方式：使用一个脚本先启动 Python API。脚本会从 `server/.env` 中的 `PORT` 开始尝试绑定 TCP 端口，默认依次尝试 `8080`、`8081`、`8082`……直到找到可用端口。确认 API 可访问后，脚本再启动 Vite。最终选中的端口会写入 `server/.dev-api-port`，确保 `/api` 代理始终指向正确的后端端口：
 
 ```bash
 npm install
 npm run dev
 ```
+
+若默认 npm 源返回缺包错误，可使用 `npm install --registry=https://registry.npmjs.org`。启动后访问 <http://127.0.0.1:5173/>；运行 `npm run check:dev-ports` 检查端口，访问 `/api/health` 检查基础服务。未配置 AI Key 时健康状态为 `degraded`，同时 `postgresReady`、`redisReady` 应为 `true`。
 
 分别使用两个终端启动：
 
