@@ -45,6 +45,28 @@ class LocalSoakRunnerTest(unittest.IsolatedAsyncioTestCase):
         self.runner.write_report();self.assertNotIn('synthetic-private-transport-detail',self.runner.path.read_text())
         self.assertEqual(self.runner.failures['probe:ReadTimeout'],1)
 
+    async def test_expired_cookie_refreshes_and_retries_without_counting_failure(self):
+        calls=[]
+        def handle(request):
+            calls.append(request.url.path)
+            if request.url.path=='/api/auth/refresh':
+                return httpx.Response(200,headers={'set-cookie':'noteflow_session=synthetic-fresh; Path=/; HttpOnly'},json={'user':{}})
+            return httpx.Response(200 if 'synthetic-fresh' in request.headers.get('cookie','') else 401,json={'ok':True})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle),base_url='http://127.0.0.1',cookies={'noteflow_session':'synthetic-expired'}) as client:
+            response=await self.runner.request(client,'protected','GET','/protected')
+        self.assertEqual(response.status_code,200);self.assertFalse(self.runner.failures)
+        self.assertEqual(self.runner.auth_challenges,1);self.assertEqual(self.runner.auth_refreshes,1)
+        self.assertEqual(calls,['/protected','/api/auth/refresh','/protected'])
+        self.runner.write_report();self.assertNotIn('synthetic-fresh',self.runner.path.read_text())
+
+    async def test_rejected_refresh_cannot_loop_or_report_success(self):
+        calls=[]
+        def handle(request):calls.append(request.url.path);return httpx.Response(401)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle),base_url='http://127.0.0.1') as client:
+            with self.assertRaises(soak_module.RequestFailed):await self.runner.request(client,'protected','GET','/protected')
+        self.assertEqual(calls,['/protected','/api/auth/refresh'])
+        self.assertEqual(self.runner.failures['session_refresh:HTTP_401'],1)
+
     async def test_worker_index_failure_cannot_silently_pass(self):
         self.runner.fixtures=[{'id':'a','content':'expected','marker':'a','attachment':'att-a','bytes':b'a'},
                               {'id':'b','content':'expected','marker':'b','attachment':'att-b','bytes':b'b'}]
@@ -69,3 +91,45 @@ class LocalSoakRunnerTest(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(asyncio.CancelledError):await self.runner.run()
         self.runner.cleanup.assert_awaited_once()
         self.assertEqual(json.loads(self.runner.path.read_text())['status'],'incomplete')
+
+
+class RealCookieRefreshTest(unittest.IsolatedAsyncioTestCase):
+    async def test_real_auth_routes_refresh_expired_access_and_reject_revoked_session(self):
+        from datetime import datetime,timezone,timedelta
+        from fastapi import FastAPI,Depends
+        from sqlalchemy.ext.asyncio import create_async_engine,async_sessionmaker
+        from app import deps
+        from app.routers import auth
+        from app.models.db import User,UserSession
+        from app.config import cfg
+        import jwt
+        database=create_async_engine('sqlite+aiosqlite:///:memory:')
+        self.addAsyncCleanup(database.dispose)
+        async with database.begin() as c:
+            await c.run_sync(User.__table__.create);await c.run_sync(UserSession.__table__.create)
+        sessions=async_sessionmaker(database,expire_on_commit=False)
+        now=datetime.now(timezone.utc)
+        async with sessions() as db:
+            db.add(User(id='refresh-user',email='refresh@example.invalid',display_name='Synthetic',email_verified_at=now.replace(tzinfo=None)))
+            await db.flush();db.add(UserSession(id='refresh-session',user_id='refresh-user',expires_at=(now+timedelta(hours=2)).replace(tzinfo=None)));await db.commit()
+        app=FastAPI();app.include_router(auth.router,prefix='/api')
+        @app.get('/protected')
+        async def protected(user=Depends(deps.get_current_user)):return {'owner':user.id}
+        with tempfile.TemporaryDirectory() as folder:
+            args=SimpleNamespace(report=str(Path(folder)/'report.json'),duration_seconds=1,concurrency=2,pause_seconds=1,
+                sample_interval_seconds=1,write_interval_seconds=300,skip_external=True,base_url='http://127.0.0.1')
+            runner=soak_module.Soak(args)
+            expired=jwt.encode({'sub':'refresh-user','email':'refresh@example.invalid','displayName':'Synthetic','sid':'refresh-session',
+                'iat':now-timedelta(minutes=31),'exp':now-timedelta(seconds=1)},cfg.JWT_SECRET,algorithm='HS256')
+            with patch.object(auth,'AsyncSessionLocal',sessions),patch.object(deps,'AsyncSessionLocal',sessions),patch.object(cfg,'AUTH_COOKIE_SECURE',False):
+                async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://127.0.0.1') as client:
+                    client.cookies.set(cfg.AUTH_COOKIE_NAME,expired,domain='127.0.0.1',path='/')
+                    response=await runner.request(client,'protected','GET','/protected')
+                    self.assertEqual(response.json()['owner'],'refresh-user');self.assertEqual(runner.auth_refreshes,1)
+                    fresh=client.cookies.get(cfg.AUTH_COOKIE_NAME)
+                    self.assertGreater(jwt.decode(fresh,cfg.JWT_SECRET,algorithms=['HS256'])['exp'],now.timestamp())
+                    async with sessions() as db:
+                        row=await db.get(UserSession,'refresh-session');row.revoked_at=now.replace(tzinfo=None);await db.commit()
+                    client.cookies.set(cfg.AUTH_COOKIE_NAME,expired,domain='127.0.0.1',path='/')
+                    with self.assertRaises(soak_module.RequestFailed):await runner.request(client,'protected','GET','/protected')
+                    self.assertEqual(runner.failures['session_refresh:HTTP_401'],1)

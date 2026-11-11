@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'server'))
 
 import httpx
+import jwt
 from sqlalchemy import delete, func, select, text
 from app.config import cfg
 from app.database import AsyncSessionLocal, engine
@@ -55,6 +56,7 @@ class Soak:
         self.clients=[];self.fixtures=[]
         self.latencies=defaultdict(list);self.statuses=Counter();self.failures=Counter()
         self.resources=[];self.completed_cycles=0;self.writes=0;self.index_waits=[]
+        self.auth_challenges=0;self.auth_refreshes=0;self.refresh_locks=defaultdict(asyncio.Lock)
         self.start=time.monotonic();self.workload_start=None
         self.path=Path(args.report) if args.report else Path(tempfile.mkdtemp(prefix='noteflow-soak-'))/'report.json'
         self.path.parent.mkdir(parents=True,exist_ok=True)
@@ -62,6 +64,7 @@ class Soak:
                      'scope':'local endurance for the configured duration; not production or maximum-capacity acceptance',
                      'plannedSeconds':args.duration_seconds,'concurrency':args.concurrency,'pauseSeconds':args.pause_seconds,
                      'testScriptSha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                     'initialSyntheticAccessExpired':True,'accessTtlMinutes':cfg.AUTH_ACCESS_TTL_MINUTES,
                      'emailSent':False,'usesSyntheticSessions':True,'realEmailLoginCoveredSeparately':True,
                      'syntheticAccountsCleaned':False,'limitations':['No physical-device, production or disaster-recovery acceptance',
                        'External AI probes are bounded, not concurrent model-provider load']}
@@ -69,19 +72,42 @@ class Soak:
 
     def write_report(self):
         self.report.update({'elapsedSeconds':round(time.monotonic()-(self.workload_start or self.start),1),
-            'completedCycles':self.completed_cycles,'writes':self.writes,'httpStatuses':dict(self.statuses),
+            'completedCycles':self.completed_cycles,'writes':self.writes,'authExpiryChallenges':self.auth_challenges,'successfulAuthRefreshes':self.auth_refreshes,'httpStatuses':dict(self.statuses),
             'failures':dict(self.failures),'latency':{k:stats(v) for k,v in self.latencies.items()},
             'indexReadyWaitMs':stats(self.index_waits),'resources':self.resources})
         temporary=self.path.with_suffix('.tmp')
         temporary.write_text(json.dumps(self.report,ensure_ascii=False,indent=2)+'\n');temporary.chmod(0o600);temporary.replace(self.path)
+
+    async def refresh_session(self,client):
+        # Match the browser: refresh a still-valid server session using its
+        # HttpOnly cookie, never extend access lifetime or bypass verification.
+        async with self.refresh_locks[id(client)]:
+            started=time.monotonic()
+            try:
+                response=await client.post('/api/auth/refresh')
+                self.statuses[str(response.status_code)]+=1
+                if response.status_code!=200:raise RuntimeError(f'HTTP_{response.status_code}')
+                self.auth_refreshes+=1
+            except Exception as exc:
+                kind=str(exc) if str(exc).startswith('HTTP_') else type(exc).__name__
+                self.failures['session_refresh:'+kind]+=1
+                raise RequestFailed('session_refresh') from None
+            finally:self.latencies['session_refresh'].append((time.monotonic()-started)*1000)
 
     async def request(self,client,label,method,path,*,expected=200,**kwargs):
         started=time.monotonic()
         try:
             response=await client.request(method,path,**kwargs)
             self.statuses[str(response.status_code)]+=1
+            if response.status_code==401 and expected!=401:
+                self.auth_challenges+=1
+                await self.refresh_session(client)
+                response=await client.request(method,path,**kwargs)
+                self.statuses[str(response.status_code)]+=1
             if response.status_code!=expected:raise RuntimeError(f'HTTP_{response.status_code}')
             return response
+        except RequestFailed:
+            raise
         except Exception as exc:
             kind=str(exc) if str(exc).startswith('HTTP_') else type(exc).__name__
             self.failures[label+':'+kind]+=1
@@ -108,8 +134,14 @@ class Soak:
             db.add_all([UserSession(id=sid,user_id=owner,expires_at=now+timedelta(seconds=self.args.duration_seconds+3600)) for owner,sid in zip(self.owners,sessions)])
             await db.commit()
         for i,(owner,sid) in enumerate(zip(self.owners,sessions)):
-            client=httpx.AsyncClient(base_url=self.args.base_url,timeout=30,headers={
-                'Authorization':'Bearer '+create_token(owner,owner+'@example.invalid','Synthetic Soak',sid)})
+            client=httpx.AsyncClient(base_url=self.args.base_url,timeout=30)
+            # Force an expired but validly signed fixture access token during
+            # preflight so cookie refresh is exercised before a long wait.
+            token=create_token(owner,owner+'@example.invalid','Synthetic Soak',sid)
+            payload=jwt.decode(token,cfg.JWT_SECRET,algorithms=['HS256'])
+            payload['exp']=int(datetime.now(timezone.utc).timestamp())-1
+            client.cookies.set(cfg.AUTH_COOKIE_NAME,jwt.encode(payload,cfg.JWT_SECRET,algorithm='HS256'),
+                               domain=urlparse(self.args.base_url).hostname,path='/')
             self.clients.append(client)
             marker=self.prefix+f'_note_{i}'
             body='# 合成持续运行笔记\n\n'+marker+'\n\n'+('这是隔离测试正文。\n'*80)
