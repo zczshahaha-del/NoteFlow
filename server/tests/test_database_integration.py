@@ -94,28 +94,34 @@ async def _exercise_postgres_write_graph_resume() -> dict:
     suffix = uuid.uuid4().hex
     draft_thread = f"db-draft-graph-{suffix}"
     edit_thread = f"db-edit-graph-{suffix}"
-    draft_initialized = await initialize_draft_graph(
-        user_id="graph-test-user", thread_id=draft_thread,
-        draft_id=f"draft-{suffix}", topic="测试草稿", outline="## 大纲",
-    )
-    draft_resumed = await resume_draft_generation(thread_id=draft_thread)
-    draft_saved = await authorize_draft_save(
-        thread_id=draft_thread, assembled_content="## 大纲\n正文",
-    )
-    edit_initialized = await initialize_edit_graph(
-        user_id="graph-test-user", thread_id=edit_thread,
-        note_id=f"note-{suffix}", instruction="修改正文",
-        preview_id=f"preview-{suffix}", target_type="note",
-        section_id="", selected_text="", source_content_hash="abc",
-    )
-    edit_revised = await resume_edit_graph(
-        thread_id=edit_thread, action="revise", payload={"instruction": "再短一点"},
-    )
-    edit_applied = await resume_edit_graph(thread_id=edit_thread, action="apply")
-    return {
-        "draft": draft_initialized and draft_resumed and draft_saved,
-        "edit": edit_initialized and edit_revised and edit_applied,
-    }
+    try:
+        draft_initialized = await initialize_draft_graph(
+            user_id="graph-test-user", thread_id=draft_thread,
+            draft_id=f"draft-{suffix}", topic="测试草稿", outline="## 大纲",
+        )
+        draft_resumed = await resume_draft_generation(thread_id=draft_thread)
+        draft_saved = await authorize_draft_save(
+            thread_id=draft_thread, assembled_content="## 大纲\n正文",
+        )
+        edit_initialized = await initialize_edit_graph(
+            user_id="graph-test-user", thread_id=edit_thread,
+            note_id=f"note-{suffix}", instruction="修改正文",
+            preview_id=f"preview-{suffix}", target_type="note",
+            section_id="", selected_text="", source_content_hash="abc",
+        )
+        edit_revised = await resume_edit_graph(
+            thread_id=edit_thread, action="revise", payload={"instruction": "再短一点"},
+        )
+        edit_applied = await resume_edit_graph(thread_id=edit_thread, action="apply")
+        return {
+            "draft": draft_initialized and draft_resumed and draft_saved,
+            "edit": edit_initialized and edit_revised and edit_applied,
+        }
+    finally:
+        from app.agent.langgraph_readonly import postgres_checkpointer
+        async with postgres_checkpointer() as saver:
+            await saver.adelete_thread(draft_thread)
+            await saver.adelete_thread(edit_thread)
 
 
 async def _exercise_reused_child_with_new_parent() -> tuple[str, str]:
@@ -270,21 +276,22 @@ async def _exercise_repository_user_isolation() -> dict[str, bool]:
 
         cross_user_update_rejected = False
         try:
-            await MemoryService().update(
-                other.id,
-                memory.id,
-                SimpleNamespace(
-                    memoryType=None,
-                    content="cross-user overwrite",
-                    importance=None,
-                    confidence=None,
-                    source=None,
-                    scope=None,
-                    tags=None,
-                    status=None,
-                    reason="cross-user test",
-                ),
-            )
+            with patch("app.memory.control.uses_engine", AsyncMock(return_value=False)):
+                await MemoryService().update(
+                    other.id,
+                    memory.id,
+                    SimpleNamespace(
+                        memoryType=None,
+                        content="cross-user overwrite",
+                        importance=None,
+                        confidence=None,
+                        source=None,
+                        scope=None,
+                        tags=None,
+                        status=None,
+                        reason="cross-user test",
+                    ),
+                )
         except LookupError:
             cross_user_update_rejected = True
         result["other_memory_update"] = cross_user_update_rejected
@@ -466,7 +473,12 @@ class DatabaseIntegrationTest(unittest.TestCase):
         self.assertGreaterEqual(self.snapshot["vectorIndexCount"], 1)
 
     def test_database_is_at_current_alembic_revision(self) -> None:
-        self.assertEqual(self.snapshot["migration"], "20260717_0009")
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+        from pathlib import Path
+        configuration = Config()
+        configuration.set_main_option("script_location", str(Path(__file__).resolve().parents[1] / "alembic"))
+        self.assertEqual(self.snapshot["migration"], ScriptDirectory.from_config(configuration).get_current_head())
 
     @unittest.skipUnless(LANGGRAPH_DURABLE_INTERRUPT, "requires pinned langgraph >= 1.0")
     def test_postgres_write_graphs_interrupt_and_resume(self) -> None:

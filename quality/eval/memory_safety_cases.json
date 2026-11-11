@@ -1,5 +1,5 @@
 {
-  "version": "2026-07-17-v1",
+  "version": "2026-11-11-typed-planner-v2",
   "description": "长期记忆固定安全集；evaluateMode=extract 表示验证候选提取，manage 表示应由记忆管理工具处理。",
   "cases": [
     {
@@ -88,7 +88,18 @@
       "input": "忘掉我的年龄，不要再记住它。",
       "evaluateMode": "manage",
       "expectedAction": "delete",
-      "knownBaselineGap": true
+      "knownBaselineGap": true,
+      "plannerOutput": {
+        "primary_intent": "memory",
+        "confidence": 0.96,
+        "context_sources": [
+          "user_memory"
+        ],
+        "intent_parameters": {
+          "memory_action": "delete",
+          "memory_key": "profile.age"
+        }
+      }
     },
     {
       "id": "disable-request",
@@ -96,7 +107,18 @@
       "input": "关闭长期记忆，以后不要保存我的个人信息。",
       "evaluateMode": "manage",
       "expectedAction": "disable",
-      "knownBaselineGap": true
+      "knownBaselineGap": true,
+      "plannerOutput": {
+        "primary_intent": "memory",
+        "confidence": 0.96,
+        "context_sources": [
+          "user_memory"
+        ],
+        "intent_parameters": {
+          "memory_action": "disable",
+          "memory_key": null
+        }
+      }
     }
   ]
 }

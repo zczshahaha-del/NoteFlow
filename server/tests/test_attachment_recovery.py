@@ -1,5 +1,7 @@
 """Storage/SQL failure boundaries, using real services and disposable SQLite/files."""
 from datetime import datetime, timedelta
+import os
+import asyncio
 from pathlib import Path
 import tempfile
 import unittest
@@ -8,11 +10,12 @@ from unittest.mock import patch
 import httpx
 from fastapi import FastAPI
 from sqlalchemy import select, func
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app import deps
 from app.config import cfg
-from app.models.db import Base, User, UserSession, NoteCategory, Note, NoteAttachment, IntegrationOutbox
+from app.models.db import Base, User, UserSession, NoteCategory, Note, NoteVersion, NoteAttachment, IntegrationOutbox
 from app.routers import attachments
 from app.services.attachment_service import AttachmentService, cleanup_attachment_object, cleanup_intent
 from app.services.outbox import dispatch_outbox
@@ -22,10 +25,14 @@ from app.utils import create_token
 
 class AttachmentRecoveryTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.engine = create_async_engine('sqlite+aiosqlite:///:memory:')
+        database_url=os.environ.get('NOTEFLOW_ATTACHMENT_TEST_DB_URL','sqlite+aiosqlite:///:memory:')
+        url=make_url(database_url)
+        if url.get_backend_name()!='sqlite' and (url.database!='noteflow_attachment_recovery_test' or url.host not in {'127.0.0.1','localhost'}):
+            raise RuntimeError('attachment integration tests require the disposable local database')
+        self.engine = create_async_engine(database_url)
         async with self.engine.begin() as c:
             await c.run_sync(lambda sync: Base.metadata.create_all(sync, tables=[
-                model.__table__ for model in (User, UserSession, NoteCategory, Note, NoteAttachment, IntegrationOutbox)]))
+                model.__table__ for model in (User, UserSession, NoteCategory, Note, NoteVersion, NoteAttachment, IntegrationOutbox)]))
         self.sessions = async_sessionmaker(self.engine, expire_on_commit=False)
         self.folder = tempfile.TemporaryDirectory()
         self.patches = [patch('app.services.attachment_service.AsyncSessionLocal', self.sessions),
@@ -46,6 +53,10 @@ class AttachmentRecoveryTest(unittest.IsolatedAsyncioTestCase):
         await self.client.aclose()
         for p in reversed(self.patches): p.stop()
         self.folder.cleanup()
+        if self.engine.dialect.name=='postgresql':
+            async with self.engine.begin() as c:
+                await c.run_sync(lambda sync:Base.metadata.drop_all(sync,tables=[model.__table__ for model in
+                    (NoteVersion,NoteAttachment,IntegrationOutbox,Note,NoteCategory,UserSession,User)]))
         await self.engine.dispose()
 
     async def upload(self):
@@ -109,6 +120,40 @@ class AttachmentRecoveryTest(unittest.IsolatedAsyncioTestCase):
             s.add(cleanup_intent('owner', 'interrupted', 'owner/interrupted')); await s.commit()
         await self.drain()
         self.assertFalse(pending.exists())
+
+    async def test_worker_claim_failure_retry_and_stale_lease(self):
+        async with self.sessions() as s:
+            job=cleanup_intent('owner','interrupted','owner/interrupted');s.add(job);await s.commit()
+            claimed=await OutboxRepository(s).claim_one(worker_id='synthetic-worker',stale_seconds=60)
+            self.assertEqual(claimed.status,'attachment_processing');self.assertEqual(claimed.id,job.id)
+            await OutboxRepository(s).fail(claimed,code='OSError',message='synthetic');await s.commit()
+            self.assertEqual(claimed.status,'attachment_pending')
+            claimed.available_at=datetime.utcnow()-timedelta(seconds=1);await s.commit()
+            again=await OutboxRepository(s).claim_one(worker_id='synthetic-worker',stale_seconds=60)
+            self.assertEqual(again.attempts,2)
+            again.heartbeat_at=datetime.utcnow()-timedelta(minutes=2);await s.commit()
+            recovered=await OutboxRepository(s).claim_one(worker_id='restarted-worker',stale_seconds=60)
+            self.assertEqual(recovered.locked_by,'restarted-worker');self.assertEqual(recovered.attempts,3)
+            await dispatch_outbox(s,recovered);await OutboxRepository(s).succeed(recovered);await s.commit()
+
+    @unittest.skipUnless(os.environ.get('NOTEFLOW_ATTACHMENT_TEST_DB_URL'), 'requires disposable PostgreSQL')
+    async def test_cleanup_worker_cannot_claim_upload_while_object_is_written(self):
+        entered,release=asyncio.Event(),asyncio.Event()
+        original_put=self.service.storage.put
+        async def slow_put(key,content):
+            entered.set();await release.wait();return await original_put(key,content)
+        def immediate(*args,**kwargs):
+            job=cleanup_intent(*args,**kwargs);job.available_at=datetime.utcnow()-timedelta(seconds=1);return job
+        with patch.object(self.service.storage,'put',slow_put), patch('app.services.attachment_service.cleanup_intent',immediate):
+            task=asyncio.create_task(self.upload())
+            try:
+                await asyncio.wait_for(entered.wait(),5)
+                async with self.sessions() as s:
+                    self.assertIsNone(await OutboxRepository(s).claim_one(worker_id='concurrent-cleanup',stale_seconds=60))
+            finally:
+                release.set()
+                item=await asyncio.wait_for(task,5)
+        self.assertEqual((await self.service.read('owner',item.id))[1],b'synthetic')
 
     def headers(self, owner='owner'):
         return {'Authorization': 'Bearer '+create_token(owner, owner+'@example.invalid', 'test', session_id=owner+'-session')}

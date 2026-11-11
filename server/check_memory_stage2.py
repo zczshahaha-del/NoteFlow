@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-from app.routers.agent import (
-    _classify_intent,
-    AgentChatPayload,
-)
+import unittest
 from app.services.agent_checkpoints import (
     patch_working_memory_status as _patch_working_memory_status,
     working_memory_payload as _working_memory_payload,
@@ -16,8 +13,12 @@ def _assert(condition: bool, message: str):
 
 
 def main():
-    resume_payload = AgentChatPayload(question="继续上次那个草稿任务")
-    _assert(_classify_intent(resume_payload) == "resume_work", "resume query should route to resume_work")
+    suite = unittest.defaultTestLoader.loadTestsFromNames([
+        "tests.test_checkpoint_memory_boundary",
+        "tests.test_turn_planner.TurnPlannerTest.test_langgraph_interrupt_resumes_original_note_intent",
+        "tests.test_turn_planner.TurnPlannerTest.test_clarification_resume_uses_the_planner_result",
+    ])
+    _assert(unittest.TextTestRunner().run(suite).wasSuccessful(), "working state and resume isolation")
 
     draft_payload = {
         "seed": "帮我生成 SSE 知识笔记",

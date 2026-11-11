@@ -44,10 +44,15 @@ def _evaluate_extract(case: dict) -> dict:
     }
 
 
-def _evaluate_manage(case: dict) -> dict:
-    from app.services.context_planner import fallback_context_plan
-
-    plan = fallback_context_plan(case["input"])
+def _evaluate_manage(case: dict, live_planner: bool = False) -> dict:
+    import asyncio
+    from app.services.turn_planner import plan_from_llm_payload, validate_turn_plan, plan_turn_smart, PrimaryIntent
+    from app.routers.agent import _context_plan_from_turn_plan
+    if live_planner:
+        turn = asyncio.run(plan_turn_smart(question=case["input"], mode="chat"))
+    else:
+        turn = validate_turn_plan(plan_from_llm_payload(case["plannerOutput"], mode="chat"))
+    plan = _context_plan_from_turn_plan(turn)
     actual_action = plan.memory_action if plan.primary_intent == "memory_manage" else "none"
     expected_action = case["expectedAction"]
     return {
@@ -87,7 +92,7 @@ def _write_markdown(report: dict) -> None:
             "",
             "## 当前已登记缺口",
             "",
-            "- 无。敏感信息拦截、自然语言删除和关闭记忆均已纳入强制门禁。",
+            "- 离线门禁覆盖敏感信息拦截与删除 / 关闭的固定规划输出契约；自然语言意图准确率需运行 --live-planner。",
             "",
         ]
     )
@@ -97,6 +102,7 @@ def _write_markdown(report: dict) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--enforce", action="store_true", help="已登记缺口也视为失败")
+    parser.add_argument("--live-planner", action="store_true", help="实际调用模型验证自然语言管理请求，默认仅验证固定规划输出契约")
     args = parser.parse_args()
 
     sys.path.insert(0, str(SERVER_ROOT))
@@ -105,7 +111,7 @@ def main() -> int:
     allowed = set(thresholds["memory"]["allowedKnownGapIds"])
     results: list[dict] = []
     for case in dataset["cases"]:
-        evaluation = _evaluate_extract(case) if case["evaluateMode"] == "extract" else _evaluate_manage(case)
+        evaluation = _evaluate_extract(case) if case["evaluateMode"] == "extract" else _evaluate_manage(case, args.live_planner)
         results.append(
             {
                 "id": case["id"],
@@ -124,6 +130,7 @@ def main() -> int:
     report = {
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "datasetVersion": dataset["version"],
+        "managementCoverage": "live model planning" if args.live_planner else "synthetic planner-output contract; natural-language intent accuracy not evaluated",
         "summary": {
             "total": len(results),
             "passed": len(results) - len(failures),
