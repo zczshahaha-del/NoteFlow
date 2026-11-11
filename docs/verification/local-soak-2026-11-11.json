@@ -1,0 +1,269 @@
+{
+  "date": "2026-11-11",
+  "applicationBaseline": "f2ac2b532b5dff18d7ee8134cbae6070fd6bae1e",
+  "harnessCommit": "1d849321f881eb76acd79344adea14bf43ad73a0",
+  "testScriptSha256": "8d8a45b93dd279f028ad233f540ef6f481c0b51e92de639fa718af327942baf2",
+  "status": "passed",
+  "environment": "current local development services on macOS; not production",
+  "startedAt": "2026-11-11T04:27:56.617937+00:00",
+  "loadFinishedAt": "2026-11-11T05:28:00.923581+00:00",
+  "completedAt": "2026-11-11T05:28:01.347308+00:00",
+  "plannedContinuousSeconds": 3600,
+  "completedContinuousWorkloadSeconds": 3600,
+  "workloadAndFinalChecksElapsedSeconds": 3604.3,
+  "wallClockIncludingFinalChecksSeconds": 3604.31,
+  "timingNote": "Continuous workers run to the 3600-second deadline; end timestamps also include bounded final model probes and resource checks",
+  "concurrency": 3,
+  "pauseSecondsPerUser": 1,
+  "completedOperations": 10485,
+  "httpRequestsIncludingSetupAndBoundedExternalProbes": 10819,
+  "httpStatuses": {
+    "401": 9,
+    "200": 9313,
+    "404": 1497
+  },
+  "successfulAuthRefreshes": 9,
+  "authExpiryChallenges": 9,
+  "expected401": "expired access cookies refreshed successfully before one retry; not unhandled runtime errors",
+  "expected404": "cross-account denial probes; not runtime failures",
+  "unexpectedFailures": {},
+  "periodicWrites": 36,
+  "latencyMs": {
+    "session_refresh": {
+      "samples": 9,
+      "p50Ms": 11.1,
+      "p95Ms": 16.7,
+      "maxMs": 16.7
+    },
+    "create_note": {
+      "samples": 3,
+      "p50Ms": 32.29,
+      "p95Ms": 40.84,
+      "maxMs": 40.84
+    },
+    "upload_attachment": {
+      "samples": 3,
+      "p50Ms": 19.73,
+      "p95Ms": 21.09,
+      "maxMs": 21.09
+    },
+    "index_poll": {
+      "samples": 150,
+      "p50Ms": 15.89,
+      "p95Ms": 34.12,
+      "maxMs": 45.91
+    },
+    "start_hybrid": {
+      "samples": 1,
+      "p50Ms": 312.92,
+      "p95Ms": 312.92,
+      "maxMs": 312.92
+    },
+    "start_agent": {
+      "samples": 1,
+      "p50Ms": 110.33,
+      "p95Ms": 110.33,
+      "maxMs": 110.33
+    },
+    "read_note": {
+      "samples": 1500,
+      "p50Ms": 16.82,
+      "p95Ms": 21.63,
+      "maxMs": 76.58
+    },
+    "list_notes": {
+      "samples": 1499,
+      "p50Ms": 16.87,
+      "p95Ms": 21.52,
+      "maxMs": 63.33
+    },
+    "health": {
+      "samples": 60,
+      "p50Ms": 8.92,
+      "p95Ms": 12.83,
+      "maxMs": 18.59
+    },
+    "hindsight_health": {
+      "samples": 60,
+      "p50Ms": 6.62,
+      "p95Ms": 12.74,
+      "maxMs": 15.67
+    },
+    "versions": {
+      "samples": 1498,
+      "p50Ms": 18.27,
+      "p95Ms": 24.14,
+      "maxMs": 126.9
+    },
+    "literal_search": {
+      "samples": 1497,
+      "p50Ms": 20.01,
+      "p95Ms": 25.01,
+      "maxMs": 76.78
+    },
+    "read_attachment": {
+      "samples": 1497,
+      "p50Ms": 16.59,
+      "p95Ms": 21.58,
+      "maxMs": 73.35
+    },
+    "list_attachments": {
+      "samples": 1497,
+      "p50Ms": 16.98,
+      "p95Ms": 22.12,
+      "maxMs": 77.55
+    },
+    "cross_user_denied": {
+      "samples": 1497,
+      "p50Ms": 16.71,
+      "p95Ms": 21.58,
+      "maxMs": 87.28
+    },
+    "update_note": {
+      "samples": 36,
+      "p50Ms": 24.93,
+      "p95Ms": 33.02,
+      "maxMs": 36.66
+    },
+    "end_hybrid": {
+      "samples": 1,
+      "p50Ms": 282.0,
+      "p95Ms": 282.0,
+      "maxMs": 282.0
+    },
+    "end_agent": {
+      "samples": 1,
+      "p50Ms": 1950.92,
+      "p95Ms": 1950.92,
+      "maxMs": 1950.92
+    }
+  },
+  "latencyBudgetsMs": {
+    "health": 250,
+    "read_note": 500,
+    "list_notes": 500,
+    "literal_search": 1500
+  },
+  "indexReadyWaitMs": {
+    "samples": 42,
+    "p50Ms": 2056.9,
+    "p95Ms": 4117.58,
+    "maxMs": 4128.74
+  },
+  "boundedExternalProbes": {
+    "hybridSearch": 2,
+    "agentRequests": 2,
+    "allCompleted": true,
+    "notConcurrentProviderLoad": true
+  },
+  "resourceSampling": {
+    "samples": 60,
+    "largestGapSeconds": 62.2,
+    "apiProcessIdsObserved": 1,
+    "apiRssMiB": {
+      "start": 104.27,
+      "end": 103.78,
+      "min": 62.78,
+      "max": 142.22
+    },
+    "databaseConnections": {
+      "start": 6,
+      "end": 7,
+      "min": 6,
+      "max": 7
+    },
+    "containerMemoryMiB": {
+      "noteflow-postgres": {
+        "start": 118.0,
+        "end": 119.5,
+        "min": 92.88,
+        "max": 119.7
+      },
+      "noteflow-redis": {
+        "start": 10.91,
+        "end": 10.53,
+        "min": 10.22,
+        "max": 11.49
+      },
+      "noteflow-hindsight": {
+        "start": 463.9,
+        "end": 464.2,
+        "min": 461.3,
+        "max": 471.0
+      }
+    },
+    "containerStartTimesAndRestartCountsUnchanged": true,
+    "containerRestarts": 0,
+    "containerOomObserved": false,
+    "lastSyntheticIndexJobs": {
+      "success": 78
+    },
+    "lastSyntheticOutboxJobs": {
+      "memory_processing": 1,
+      "succeeded": 1
+    },
+    "lastOutboxSampleNote": "One final Agent memory job was memory_processing when sampled. Synthetic cleanup then removed its fixture rows and bank; this does not establish that this last memory job completed or that the queue drained naturally."
+  },
+  "cleanup": {
+    "syntheticAccountsRemoved": true,
+    "attachmentsAndMemoryBanksRemoved": true,
+    "syntheticCheckpointThreadsRemoved": 4,
+    "independentVerification": {
+      "verified": true,
+      "sqlRowsRemaining": {
+        "users": 0,
+        "user_sessions": 0,
+        "notes": 0,
+        "note_attachments": 0,
+        "note_index_jobs": 0,
+        "integration_outbox": 0,
+        "memory_sources": 0,
+        "checkpoint_threads": 0
+      },
+      "memoryBanksRemaining": 0,
+      "attachmentDirectoriesRemaining": 0,
+      "supplementarySyntheticBankDeletes": 0
+    }
+  },
+  "realEmailLogin": "Verified separately using actual SMTP, user-confirmed inbox receipt, login, reload and logout",
+  "limitations": [
+    "One hour at roughly three operations per second is not an all-day, maximum-capacity or production test",
+    "Current computer was not a dedicated benchmarking machine; resource readings are sampled RSS/cgroup figures, not a proof of zero memory leaks",
+    "No physical-device or disaster-recovery acceptance",
+    "Synthetic seeded sessions in soak are separate from real interactive email login",
+    "The final Agent memory outbox was observed processing before fixture cleanup; natural completion of this specific last job was not verified"
+  ],
+  "finalHealth": {
+    "frontend": {
+      "httpStatus": 200
+    },
+    "api": {
+      "httpStatus": 200,
+      "ok": true,
+      "status": "healthy",
+      "postgresReady": true,
+      "redisReady": true,
+      "deepseekReady": true
+    },
+    "memoryApi": {
+      "httpStatus": 200
+    },
+    "memoryConsole": {
+      "httpStatus": 200
+    }
+  },
+  "authenticationVerification": {
+    "forcedExpiredPreflightRefreshes": 3,
+    "naturalExpiryRefreshes": 6,
+    "allRetriesSucceeded": true,
+    "realFrontendEvidence": "browser-session-refresh-2026-11-11.json",
+    "realEmailEvidence": "real-mail-login-2026-11-11.json"
+  },
+  "backendUnitTests": {
+    "discovered": 311,
+    "passed": 296,
+    "skipped": 15,
+    "failed": 0,
+    "focusedHarnessAndRealAuthRouteTestsIncluded": 10
+  }
+}
