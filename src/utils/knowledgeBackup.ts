@@ -20,7 +20,7 @@ export function backupAsTree(backup: KnowledgeBackup): {treeData: FileNode[]; fi
     const node=folders.get(row.id);if(!node)continue;
     (folders.get(row.parentId??'')?.children??root).push(node);
   }
-  const fileContents: Record<string,string>={};
+  const fileContents: Record<string,string>=Object.create(null);
   for(const r of backup.notes.filter(r=>!r.deletedAt)) {
     fileContents[r.id]=r.content;
     (folders.get(r.categoryId??'')?.children??root).push({id:r.id,name:r.title+'.md',type:'file',content:r.content,

@@ -66,6 +66,9 @@ class KnowledgeBackupTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await service.import_knowledge('other',backup,'same-request'),result)
         async with self.sessions() as s:
             self.assertEqual(await s.scalar(select(func.count()).select_from(Note).where(Note.user_id=='other')),1)
+        reserved=backup.model_copy(deep=True);reserved.notes[0].id='__proto__';reserved.versions[0].noteId='__proto__';reserved.attachments[0].noteId='__proto__'
+        safe=await service.import_knowledge('other',reserved,'reserved-key')
+        self.assertNotEqual(safe['selectedNoteId'],'__proto__')
         backup.notes[0].content='different'
         with self.assertRaises(ValueError):await service.import_knowledge('other',backup,'same-request')
 

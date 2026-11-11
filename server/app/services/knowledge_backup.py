@@ -19,6 +19,9 @@ from app.services.object_storage import build_object_storage
 from app.utils import random_id
 
 MAX_BACKUP_BYTES = 25 * 1024 * 1024
+# IDs become keys in browser dictionaries. Remap inherited JS property names.
+RESERVED_CLIENT_IDS = frozenset({'__proto__', 'constructor', 'prototype', 'toString', 'toLocaleString', 'valueOf',
+    'hasOwnProperty', 'isPrototypeOf', 'propertyIsEnumerable', '__defineGetter__', '__defineSetter__', '__lookupGetter__', '__lookupSetter__'})
 
 
 class Record(BaseModel):
@@ -195,7 +198,7 @@ async def import_knowledge(user_id: str, backup: KnowledgeBackup, request_id: st
         async def ids(model, records):
             result = {}
             for row in records:
-                result[row.id] = random_id() if await session.get(model, row.id) else row.id
+                result[row.id] = random_id() if row.id in RESERVED_CLIENT_IDS or await session.get(model, row.id) else row.id
             return result
         category_ids = await ids(NoteCategory, backup.categories)
         note_ids = await ids(Note, backup.notes)

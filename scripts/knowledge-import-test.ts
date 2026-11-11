@@ -64,3 +64,7 @@ await assert.rejects(()=>parseZipMarkdown(oversized),/8 MB/);
 const aggregate=compressedArchive(Array.from({length:4},(_,i)=>({path:`file-${i}.md`,content:new Uint8Array(7*1024*1024).fill(65)})));
 await assert.rejects(()=>parseZipMarkdown(aggregate),/解压总量超过 25 MB/);
 console.log('streaming ZIP expansion and aggregate limits passed');
+
+const reserved=structuredClone(parsed);reserved.notes[0].id='__proto__';
+const reservedTree=backupAsTree(reserved);
+assert.equal(reservedTree.fileContents['__proto__'],'完整正文','Reserved property names cannot corrupt exported contents');
