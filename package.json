@@ -77,7 +77,8 @@
     "test:quality": "node scripts/run-python.mjs scripts/quality_gate.py --profile full",
     "test:quality:live": "node scripts/run-python.mjs scripts/quality_gate.py --profile full --include-live-ai",
     "build": "tsc -b && vite build",
-    "preview": "vite preview --configLoader native"
+    "preview": "vite preview --configLoader native",
+    "test:content-safety": "node scripts/content-safety-test.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.100.8",
@@ -94,6 +95,7 @@
     "@tiptap/pm": "^3.27.4",
     "@tiptap/react": "^3.27.4",
     "@tiptap/starter-kit": "^3.27.4",
+    "dompurify": "^3.4.17",
     "highlight.js": "11.11.2",
     "lowlight": "3.3.0",
     "lucide-react": "^1.11.0",

@@ -1,3 +1,4 @@
+import createDOMPurify from "dompurify";
 import { Marked } from "marked";
 import { readingCalloutKind } from "./readingCallout.ts";
 
@@ -128,19 +129,6 @@ function highlightCode(rawCode: string, language: string): string {
   return html;
 }
 
-function sanitizeHtml(root: DocumentFragment): void {
-  root.querySelectorAll("script, style, iframe, object, embed").forEach((node) => node.remove());
-  root.querySelectorAll("*").forEach((node) => {
-    for (const attr of Array.from(node.attributes)) {
-      const name = attr.name.toLowerCase();
-      const value = attr.value.trim().toLowerCase();
-      if (name.startsWith("on") || value.startsWith("javascript:")) {
-        node.removeAttribute(attr.name);
-      }
-    }
-  });
-}
-
 function enhanceCodeBlocks(root: DocumentFragment): void {
   root.querySelectorAll("pre").forEach((pre) => {
     const code = pre.querySelector("code");
@@ -227,8 +215,25 @@ function enhanceCitations(root: DocumentFragment, validCitationCount = 0): void 
 
 export function renderChatMarkdown(markdown: string, validCitationCount = 0, options: { scrollTables?: boolean } = {}): string {
   const template = document.createElement("template");
-  template.innerHTML = marked.parse(markdown || "") as string;
-  sanitizeHtml(template.content);
+  // Sanitize the untrusted string before DOM enhancement. Restrict markup to
+  // HTML and remove attacker-controlled UI hooks, style, and clobbering names.
+  const purifier = createDOMPurify(window);
+  template.innerHTML = purifier.sanitize(marked.parse(markdown || "") as string, {
+    USE_PROFILES: { html: true },
+    FORBID_TAGS: ["style", "form", "input", "button", "textarea", "select", "template"],
+    FORBID_ATTR: ["style", "id", "name", "srcset"],
+    ALLOW_DATA_ATTR: false,
+    ALLOW_ARIA_ATTR: false,
+  });
+  template.content.querySelectorAll("a[href], img[src]").forEach(node => {
+    const attr = node.tagName === "A" ? "href" : "src";
+    try {
+      const url = new URL(node.getAttribute(attr)!, window.location.href);
+      const protocols = attr === "src" ? ["http:", "https:"] : ["http:", "https:", "mailto:", "tel:"];
+      if (!protocols.includes(url.protocol)) node.removeAttribute(attr);
+    } catch { node.removeAttribute(attr); }
+    if (node.tagName === "A") node.setAttribute("rel", "noopener noreferrer");
+  });
   enhanceCodeBlocks(template.content);
   template.content.querySelectorAll("blockquote").forEach(quote => {
     const kind = readingCalloutKind(quote.firstElementChild?.tagName === "P" ? quote.firstElementChild.textContent || "" : "");
