@@ -43,7 +43,7 @@ def validated_content_type(file_name: str, claimed: str | None, content: bytes) 
     content_type = (claimed or mimetypes.guess_type(file_name)[0] or "application/octet-stream").split(";", 1)[0].strip().lower()
     allowed = {"application/octet-stream", "application/pdf", "application/zip", "text/plain", "text/markdown", "text/csv", "image/png", "image/jpeg", "image/gif", "image/webp"}
     active_extensions = {".html", ".htm", ".xhtml", ".svg", ".xml", ".js", ".mjs"}
-    if content_type not in allowed or Path(file_name).suffix.lower() in active_extensions:
+    if content_type in {"text/html", "application/xhtml+xml", "image/svg+xml", "text/javascript", "application/javascript", "text/xml", "application/xml"} or Path(file_name).suffix.lower() in active_extensions:
         raise HTTPException(status_code=415, detail="unsupported or active attachment type")
     if re.search(rb"<(?:!doctype\s+html|html|svg|script)\b", content[:4096].lstrip().lower()):
         raise HTTPException(status_code=415, detail="active HTML/SVG attachments are not allowed")
@@ -53,9 +53,10 @@ def validated_content_type(file_name: str, claimed: str | None, content: bytes) 
         "image/gif": content.startswith((b"GIF87a", b"GIF89a")),
         "image/webp": content.startswith(b"RIFF") and content[8:12] == b"WEBP",
     }
-    if content_type.startswith("image/") and not image_checks.get(content_type):
+    if content_type in image_checks and not image_checks[content_type]:
         raise HTTPException(status_code=415, detail="image content does not match its type")
-    return content_type
+    # Unknown document formats remain downloadable without trusting their MIME.
+    return content_type if content_type in allowed else "application/octet-stream"
 
 
 def attachment_response(item: NoteAttachment, content: bytes) -> Response:

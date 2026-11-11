@@ -183,3 +183,9 @@ class AttachmentRecoveryTest(unittest.IsolatedAsyncioTestCase):
                                           'X-Content-Type':'Text/Plain; charset=utf-8', 'X-File-Name':'x.txt'}, content=b'notes')
         self.assertEqual(result.status_code, 200, result.text)
         self.assertNotIn('sig=', result.json()['attachment']['downloadUrl'])
+        document=await self.client.post('/api/attachments', headers={**self.headers(),'Content-Type':'application/octet-stream',
+            'X-Content-Type':'application/vnd.openxmlformats-officedocument.wordprocessingml.document','X-File-Name':'note.docx'},content=b'PK-synthetic-document')
+        self.assertEqual(document.status_code,200,document.text)
+        download=await self.client.get(document.json()['attachment']['downloadUrl'],headers=self.headers())
+        self.assertEqual(download.headers['content-type'],'application/octet-stream')
+        self.assertTrue(download.headers['content-disposition'].startswith('attachment'))
