@@ -54,6 +54,9 @@ class OutboxRepository:
                 or_(
                     (IntegrationOutbox.status == "pending") & (IntegrationOutbox.available_at <= now),
                     (IntegrationOutbox.status == "memory_pending") & (IntegrationOutbox.available_at <= now),
+                    (IntegrationOutbox.status == "attachment_pending") & (IntegrationOutbox.available_at <= now),
+                    (IntegrationOutbox.status == "attachment_processing") & (IntegrationOutbox.heartbeat_at < stale_at),
+                    (IntegrationOutbox.status == "attachment_processing") & (IntegrationOutbox.heartbeat_at.is_(None)) & (IntegrationOutbox.locked_at < stale_at),
                     (IntegrationOutbox.status == "processing") & (IntegrationOutbox.heartbeat_at < stale_at),
                     (IntegrationOutbox.status == "processing") & (IntegrationOutbox.heartbeat_at.is_(None)) & (IntegrationOutbox.locked_at < stale_at),
                     (IntegrationOutbox.status == "memory_processing") & (IntegrationOutbox.heartbeat_at < stale_at),
@@ -66,7 +69,7 @@ class OutboxRepository:
         )
         if item is None:
             return None
-        item.status = "memory_processing" if item.topic in MANAGED_MEMORY_TOPICS else "processing"
+        item.status = "attachment_processing" if item.topic == "attachment.object.cleanup" else ("memory_processing" if item.topic in MANAGED_MEMORY_TOPICS else "processing")
         item.locked_by = worker_id
         item.locked_at = now
         item.heartbeat_at = now
@@ -93,5 +96,5 @@ class OutboxRepository:
             item.status = "dead"
             item.processed_at = datetime.utcnow()
         else:
-            item.status = "memory_pending" if item.topic in MANAGED_MEMORY_TOPICS else "pending"
+            item.status = "attachment_pending" if item.topic == "attachment.object.cleanup" else ("memory_pending" if item.topic in MANAGED_MEMORY_TOPICS else "pending")
             item.available_at = datetime.utcnow() + timedelta(seconds=min(300, 2 ** min(item.attempts, 8)))

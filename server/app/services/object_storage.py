@@ -34,7 +34,12 @@ class LocalObjectStorage:
     async def put(self, key: str, content: bytes) -> StoredObject:
         path = self._path(key)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(content)
+        pending = path.with_name(path.name + ".pending")
+        try:
+            pending.write_bytes(content)
+            pending.replace(path)
+        finally:
+            pending.unlink(missing_ok=True)
         return StoredObject(key=key, size=len(content), sha256=hashlib.sha256(content).hexdigest())
 
     async def get(self, key: str) -> bytes:
@@ -42,8 +47,8 @@ class LocalObjectStorage:
 
     async def delete(self, key: str) -> None:
         path = self._path(key)
-        if path.exists():
-            path.unlink()
+        path.unlink(missing_ok=True)
+        path.with_name(path.name + ".pending").unlink(missing_ok=True)
 
 
 def build_object_storage(root: str) -> ObjectStorage:

@@ -31,6 +31,10 @@ async def enqueue_memory_sync(
 
 
 async def dispatch_outbox(session: AsyncSession, item: IntegrationOutbox) -> None:
+    if item.topic == "attachment.object.cleanup":
+        from app.services.attachment_service import cleanup_attachment_object
+        await cleanup_attachment_object(session, item)
+        return
     if item.topic == "memory.retain.requested":
         from app.memory.gateway import MemoryGateway
         from app.models.db import MemorySource
