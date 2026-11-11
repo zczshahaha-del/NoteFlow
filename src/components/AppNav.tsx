@@ -178,9 +178,13 @@ export default function AccountMenu({
   const [importStatus, setImportStatus] = useState("");
   const [dataBusy, setDataBusy] = useState(false);
   const dataOwner = useRef(userEmail);
-  dataOwner.current=userEmail;
-  useEffect(() => {pendingImport.current=null;setDataBusy(false);setImportStatus("");},[userEmail]);
   const pendingImport = useRef<{backup: KnowledgeBackup; requestId:string} | null>(null);
+  dataOwner.current = userEmail;
+  useEffect(() => {
+    pendingImport.current = null;
+    setDataBusy(false);
+    setImportStatus("");
+  }, [userEmail]);
   const accountRef = useRef<HTMLDivElement>(null);
   const accountButtonRef = useRef<HTMLButtonElement>(null);
   const accountPanelRef = useRef<HTMLDivElement>(null);
@@ -265,8 +269,8 @@ export default function AccountMenu({
         downloadBlob(createKnowledgeZipBlob(treeData,fileContents),makeKnowledgeBackupName());
       } else downloadBlob(new Blob([JSON.stringify(backup)],{type:"application/json"}),makeKnowledgeJsonName());
       setImportStatus("备份已生成");
-    } catch(error) {setImportStatus(error instanceof Error?error.message:"备份失败");}
-    finally {setDataBusy(false);}
+    } catch(error) {if(dataOwner.current===owner)setImportStatus(error instanceof Error?error.message:"备份失败");}
+    finally {if(dataOwner.current===owner)setDataBusy(false);}
   };
 
   const runImport = async () => {
@@ -291,15 +295,16 @@ export default function AccountMenu({
       pendingImport.current={backup,requestId:crypto.randomUUID()};
       setImportStatus("正在保存导入数据…");
       await runImport();
-    } catch(error) {setImportStatus(error instanceof Error?error.message:"导入失败");}
-    finally {setDataBusy(false);if(importInputRef.current)importInputRef.current.value="";}
+    } catch(error) {if(dataOwner.current===owner)setImportStatus(error instanceof Error?error.message:"导入失败");}
+    finally {if(dataOwner.current===owner){setDataBusy(false);if(importInputRef.current)importInputRef.current.value="";}}
   };
 
   const retryImport = async () => {
+    const owner=userEmail;
     setDataBusy(true);setImportStatus("正在重试导入…");
     try {await runImport();}
-    catch(error){setImportStatus(error instanceof Error?error.message:"导入失败");}
-    finally {setDataBusy(false);}
+    catch(error){if(dataOwner.current===owner)setImportStatus(error instanceof Error?error.message:"导入失败");}
+    finally {if(dataOwner.current===owner)setDataBusy(false);}
   };
 
   const reloadMemories = async () => {

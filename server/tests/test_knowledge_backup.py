@@ -24,7 +24,6 @@ class KnowledgeBackupTest(unittest.IsolatedAsyncioTestCase):
     drain = fixture.AttachmentRecoveryTest.drain
 
     async def seed(self):
-        async with self.engine.begin() as c: await c.run_sync(NoteVersion.__table__.create)
         self.backup_patch=patch.object(service,'AsyncSessionLocal',self.sessions);self.backup_patch.start();self.patches.append(self.backup_patch)
         date=datetime(2020,1,2,3,4,5)
         async with self.sessions() as s:
@@ -93,6 +92,8 @@ class KnowledgeBackupTest(unittest.IsolatedAsyncioTestCase):
         value=backup.model_dump(mode='json');value['categories'][0]['parentId']=value['categories'][0]['id']
         with self.assertRaises(ValueError):service.KnowledgeBackup.model_validate(value)
         value=backup.model_dump(mode='json');value['notes'][0]['categoryId']='missing'
+        with self.assertRaises(ValueError):service.KnowledgeBackup.model_validate(value)
+        value=backup.model_dump(mode='json');value['versions'][0]['noteId']=''
         with self.assertRaises(ValueError):service.KnowledgeBackup.model_validate(value)
         async with self.sessions() as s:
             self.assertEqual(await s.scalar(select(func.count()).select_from(Note).where(Note.user_id=='other')),0)

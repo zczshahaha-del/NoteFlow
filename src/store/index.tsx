@@ -751,7 +751,7 @@ export async function syncKnowledgeBeforeBackup() {
   for(const id of ids)await syncNoteContentBeforeAiEdit(id);
   const state=useAppStore.getState();
   if(state.hydratedUserId!==owner)throw new Error('账号已变化，请重新导出。');
-  if(Object.values(state.noteSaveStates).some(value=>['unsaved','saving','offline','error'].includes(value.status)))
+  if(Object.entries(state.noteSaveStates).some(([id,value])=>findFileById(state.treeData,id) && ['unsaved','saving','offline','error'].includes(value.status)))
     throw new Error('仍有正文未同步，请同步完成后再导出。');
 }
 

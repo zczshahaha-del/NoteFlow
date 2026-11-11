@@ -88,16 +88,19 @@ class KnowledgeBackup(BaseModel):
                 raise ValueError('duplicate backup record ID')
         for row in self.categories:
             seen = {row.id}; parent = row.parentId
-            while parent:
+            while parent is not None:
                 if parent not in categories or parent in seen or len(seen) > 64:
                     raise ValueError('invalid folder hierarchy')
                 seen.add(parent); parent = categories[parent].parentId
         for row in self.notes:
-            if row.categoryId and row.categoryId not in categories:
+            if row.categoryId is not None and row.categoryId not in categories:
                 raise ValueError('unknown note folder')
-        for row in [*self.versions, *self.attachments]:
-            if row.noteId and row.noteId not in notes:
-                raise ValueError('unknown attachment/version note')
+        for row in self.versions:
+            if row.noteId not in notes:
+                raise ValueError('unknown version note')
+        for row in self.attachments:
+            if row.noteId is not None and row.noteId not in notes:
+                raise ValueError('unknown attachment note')
         return self
 
 

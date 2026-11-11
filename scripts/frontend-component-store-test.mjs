@@ -1183,6 +1183,11 @@ try {
   URL.createObjectURL = blob => { downloads.push({ type: blob.type, size: blob.size }); return "blob:test-export"; };
   URL.revokeObjectURL = () => {};
   dom.window.HTMLAnchorElement.prototype.click = function () { downloads[downloads.length - 1].name = this.download; };
+  await act(async()=>useAppStore.setState({noteSaveStates:{[note.id]:{status:'offline'}}}));
+  await clickAccount(settingAction("导出知识库备份"));
+  assert.equal(downloads.length,0,'Offline unsynced edits must not produce an incomplete server backup');
+  assert.match(activeSettings().textContent,/正文未同步/);
+  await act(async()=>useAppStore.setState({noteSaveStates:{}}));
   await clickAccount(settingAction("导出 Markdown 文件"));
   await clickAccount(settingAction("导出知识库备份"));
   assert.match(downloads[0].name, /\.zip$/); assert.ok(downloads[0].size > 0);
