@@ -1,3 +1,4 @@
+import { crc32 } from "./exportKnowledgeZip.ts";
 import type { FileNode } from "../types";
 
 export interface KnowledgeImportRecord {
@@ -25,8 +26,19 @@ async function inflateRaw(bytes: Uint8Array): Promise<Uint8Array> {
   if (typeof DecompressionStream === "undefined") {
     throw new Error("当前浏览器不支持解压这种 ZIP，请先解压后导入笔记文件");
   }
-  const stream = new Blob([Uint8Array.from(bytes).buffer]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
+  const reader = new Blob([Uint8Array.from(bytes).buffer]).stream().pipeThrough(new DecompressionStream("deflate-raw")).getReader();
+  const chunks: Uint8Array[]=[];let size=0;
+  try {
+    while(true) {
+      const {value,done}=await reader.read();if(done)break;
+      size+=value.length;
+      if(size>MAX_ENTRY_BYTES)throw new Error("ZIP 解压内容超过 8 MB 单文件限制");
+      chunks.push(value);
+    }
+  } finally {await reader.cancel().catch(()=>{});reader.releaseLock();}
+  const result=new Uint8Array(size);let offset=0;
+  for(const chunk of chunks){result.set(chunk,offset);offset+=chunk.length;}
+  return result;
 }
 
 export async function parseZipMarkdown(buffer: ArrayBuffer): Promise<KnowledgeImportRecord[]> {
@@ -43,11 +55,14 @@ export async function parseZipMarkdown(buffer: ArrayBuffer): Promise<KnowledgeIm
   if (count > MAX_IMPORT_FILES) throw new Error(`ZIP 文件数超过 ${MAX_IMPORT_FILES} 个`);
   let offset = view.getUint32(eocd + 16, true);
   const records: KnowledgeImportRecord[] = [];
+  let totalBytes = 0;
 
   for (let index = 0; index < count; index += 1) {
     if (offset + 46 > bytes.length || view.getUint32(offset, true) !== 0x02014b50) {
       throw new Error("ZIP 中央目录损坏");
     }
+    if(view.getUint16(offset+8,true)&1)throw new Error("不支持加密 ZIP");
+    const checksum=view.getUint32(offset+16,true);
     const method = view.getUint16(offset + 10, true);
     const compressedSize = view.getUint32(offset + 20, true);
     const uncompressedSize = view.getUint32(offset + 24, true);
@@ -55,6 +70,7 @@ export async function parseZipMarkdown(buffer: ArrayBuffer): Promise<KnowledgeIm
     const extraLength = view.getUint16(offset + 30, true);
     const commentLength = view.getUint16(offset + 32, true);
     const localOffset = view.getUint32(offset + 42, true);
+    if(offset+46+nameLength+extraLength+commentLength>eocd)throw new Error("ZIP 目录越界");
     const sourcePath = safePath(decoder.decode(bytes.slice(offset + 46, offset + 46 + nameLength)));
     offset += 46 + nameLength + extraLength + commentLength;
 
@@ -66,9 +82,15 @@ export async function parseZipMarkdown(buffer: ArrayBuffer): Promise<KnowledgeIm
     const localNameLength = view.getUint16(localOffset + 26, true);
     const localExtraLength = view.getUint16(localOffset + 28, true);
     const dataStart = localOffset + 30 + localNameLength + localExtraLength;
+    if(dataStart+compressedSize>bytes.length||dataStart+compressedSize>view.getUint32(eocd+16,true))throw new Error("ZIP 数据越界");
+    if(view.getUint16(localOffset+8,true)!==method)throw new Error("ZIP 压缩方法不一致");
+    if(method===0&&compressedSize>MAX_ENTRY_BYTES)throw new Error("ZIP 内容超过 8 MB 单文件限制");
     const compressed = bytes.slice(dataStart, dataStart + compressedSize);
     const contentBytes = method === 0 ? compressed : method === 8 ? await inflateRaw(compressed) : null;
     if (!contentBytes) throw new Error(`${sourcePath} 使用了不支持的 ZIP 压缩算法 ${method}`);
+    if(contentBytes.length!==uncompressedSize||crc32(contentBytes)!==checksum)throw new Error(`${sourcePath} 的大小或校验和不正确`);
+    totalBytes+=contentBytes.length;
+    if(totalBytes>MAX_ARCHIVE_BYTES)throw new Error("ZIP 解压总量超过 25 MB 限制");
     records.push({
       title: cleanTitle(sourcePath),
       content: decoder.decode(contentBytes),
@@ -108,6 +130,7 @@ export async function parseKnowledgeImport(file: File): Promise<KnowledgeImportR
     throw new Error("JSON 不是可识别的 NoteFlow 备份");
   }
   if (/\.(?:md|markdown)$/i.test(file.name)) {
+    if(file.size>MAX_ENTRY_BYTES)throw new Error("笔记超过 8 MB 单文件限制");
     return [{ title: cleanTitle(file.name), content: await file.text(), sourcePath: file.name, tags: ["导入"] }];
   }
   throw new Error(`不支持导入 ${file.name}`);

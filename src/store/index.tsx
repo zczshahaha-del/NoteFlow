@@ -744,6 +744,17 @@ async function syncNoteContentBeforeAiEdit(noteId: string) {
     (latest.noteSaveStates[noteId]?.status ?? latest.noteSaveState.status) !== 'saved') throw new Error('正文尚未同步完成，请重试后再应用 AI 修改。');
 }
 
+export async function syncKnowledgeBeforeBackup() {
+  const owner=useAppStore.getState().hydratedUserId;
+  if(workspaceOperations.size)throw new Error('目录或笔记尚未同步，请同步完成后再导出。');
+  const ids=new Set([...localNoteEdits.keys(),...noteSaveTimers.keys(),...noteSavesInFlight.keys()]);
+  for(const id of ids)await syncNoteContentBeforeAiEdit(id);
+  const state=useAppStore.getState();
+  if(state.hydratedUserId!==owner)throw new Error('账号已变化，请重新导出。');
+  if(Object.values(state.noteSaveStates).some(value=>['unsaved','saving','offline','error'].includes(value.status)))
+    throw new Error('仍有正文未同步，请同步完成后再导出。');
+}
+
 let editPreviewDraftGeneration = 0;
 const retainedEditPreviewDrafts = new Map<string | null, Record<string, EditPreviewDraft>>();
 
