@@ -1,0 +1,141 @@
+{
+  "date": "2026-11-12",
+  "baseline": "48119903f5b26de8ea5f61e6537966a029356e76",
+  "scope": "Isolated ASGI/Redis/provider/filesystem probes and source inventory; no live database, mail or model calls",
+  "probes": {
+    "errorEnvelope": {
+      "rateStatus": 429,
+      "retryAfterPreserved": false,
+      "conflictStatus": 409,
+      "conflictCodePreserved": true,
+      "conflictDetailsPreserved": false,
+      "requestIdPreserved": true
+    },
+    "operationsAuthorization": {
+      "anonymousDiagnosticsStatus": 200,
+      "anonymousMetricsStatus": 401,
+      "ordinaryAuthenticatedMetricsStatus": 200,
+      "diagnosticConfigStubbed": true
+    },
+    "metricCardinality": {
+      "uniqueUnmatchedPaths": 12,
+      "newRouteKeys": 12
+    },
+    "cacheReadFailure": {
+      "callerErrorType": "ConnectionError",
+      "providerCalls": 0,
+      "providerStubbed": true
+    },
+    "cacheWriteFailure": {
+      "callerErrorType": "ConnectionError",
+      "providerCalls": 1,
+      "providerStubbed": true
+    },
+    "configuredAttachmentBackup": {
+      "configuredFileExists": true,
+      "archivedFiles": 0,
+      "configuredFileIncluded": false,
+      "databaseDumpStubbed": true
+    },
+    "contextScopePlanning": {
+      "comparedScopes": 4,
+      "messagesIdentical": true,
+      "modelCalls": 0
+    },
+    "libraryListShape": {
+      "hasSqlLimit": false,
+      "hasSqlOffset": false,
+      "selectsWholeNoteEntity": true,
+      "noDatabaseQueryExecuted": true
+    }
+  },
+  "inventory": {
+    "currentOpenApiPaths": 94,
+    "documentedOpenApiPaths": 77,
+    "pathsMissingFromSnapshot": [
+      "/api/auth/email-change/confirm",
+      "/api/auth/email-change/request",
+      "/api/auth/email-code/confirm",
+      "/api/auth/email-code/request",
+      "/api/knowledge-backup",
+      "/api/knowledge-backup/import",
+      "/api/memory-console",
+      "/api/memory-console/graph",
+      "/api/memory-console/impact/{memory_id}",
+      "/api/memory-console/import",
+      "/api/memory-console/legacy",
+      "/api/memory-console/preview",
+      "/api/memory-console/retry/{job_id}",
+      "/api/memory-console/rules",
+      "/api/memory-console/source/{source_id}",
+      "/api/note-edit-previews/{edit_id}/content",
+      "/api/note-selection-rewrite"
+    ],
+    "pathsRemovedSinceSnapshot": [],
+    "sourceLines": {
+      "src/store/index.tsx": 3038,
+      "server/app/routers/agent.py": 1619,
+      "server/app/routers/notes.py": 793,
+      "server/app/routers/drafts.py": 919,
+      "server/app/routers/edits.py": 971
+    },
+    "contextScopeReferences": [
+      "server/app/schemas/agent.py"
+    ]
+  },
+  "probesReproduced": true,
+  "currentLoopbackProbe": {
+    "directLoopbackNoProxy": true,
+    "results": {
+      "frontend": {
+        "errorType": "ConnectError"
+      },
+      "api": {
+        "errorType": "ConnectError"
+      },
+      "hindsight": {
+        "errorType": "ConnectError"
+      },
+      "console": {
+        "errorType": "ConnectError"
+      }
+    },
+    "listenerCheck": {
+      "ports": [
+        5173,
+        8080,
+        8888,
+        9999
+      ],
+      "listenersObserved": false,
+      "productRootCauseEstablished": false
+    }
+  },
+  "backendUnitTests": {
+    "command": "NOTEFLOW_RUN_DB_TESTS=0 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=server .venv/bin/python -m unittest discover -s server/tests -p 'test_*.py'",
+    "discovered": 311,
+    "passed": 296,
+    "skipped": 15,
+    "failed": 0,
+    "durationSeconds": 4.539,
+    "liveDatabaseTestsRun": false
+  },
+  "newIssueIds": [
+    "DEV-35",
+    "DEV-36",
+    "DEV-37",
+    "PERF-01"
+  ],
+  "historicalEvidenceReused": [
+    "system-fixes-2026-11-11.json",
+    "local-soak-2026-11-11.json",
+    "real-mail-login-2026-11-11.json"
+  ],
+  "limitations": [
+    "Only isolated source/ASGI/provider/filesystem probes and offline backend tests executed today",
+    "No current real-service E2E because all four loopback ports were unreachable",
+    "No paid model calls, real mail, user-data reads/writes, live database tests, production deployment or disaster recovery",
+    "Capacity findings are source-confirmed growth risks; no large-corpus benchmark or maximum capacity established",
+    "Recorded findings remain unresolved; this change contains review documentation only"
+  ]
+}
