@@ -41,7 +41,12 @@ class LlamaIndexRagService:
             retrieval.candidates,
             limit=8,
         )
-        context = build_context(request.question, reranked)
+        context = build_context(
+            request.question,
+            reranked,
+            top_k=3 if request.limit_note_excerpts else None,
+            max_excerpt_chars=800 if request.limit_note_excerpts else None,
+        )
         sources = [citation_to_dict(citation) for citation in context.citations]
         trace = {**retrieval.trace, "reranker": rerank_trace, "context": {
             "citationCount": len(context.citations),

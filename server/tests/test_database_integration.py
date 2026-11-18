@@ -451,11 +451,72 @@ async def _exercise_rag_incremental_and_permissions() -> dict[str, bool]:
         await engine.dispose()
 
 
+async def _exercise_long_note_selection() -> None:
+    from app.agent.langgraph_readonly import _default_rag_search, new_readonly_state
+
+    suffix = uuid.uuid4().hex
+    owner_id = f"selection-owner-{suffix}"
+    owner = User(id=owner_id, email=f"{owner_id}@local.test", display_name="选区验收")
+    long_text = (
+        "## 开头\n\n这是我选中的第一段。\n\n"
+        + "\n\n".join(f"## 日常记录 {i}\n\n" + "这里是与校验口令无关的背景。 " * 18 for i in range(100))
+        + "\n\n## 结尾\n\n远处校验词 NEPTUNE_7429 的值是松果。"
+    )
+    note = Note(id=f"selection-note-{suffix}", user_id=owner_id, title="合成长笔记", content=long_text)
+    other = Note(
+        id=f"selection-other-{suffix}", user_id=owner_id, title="同账号另一篇笔记",
+        content="远处校验词 NEPTUNE_7429 的值是 WRONG_OTHER_NOTE。",
+    )
+    try:
+        with patch.object(cfg, "EMBEDDING_API_KEY", ""), patch.object(cfg, "RAG_VECTOR_ENABLED", False), patch.object(
+            cfg, "RAG_BM25_ENABLED", True,
+        ), patch.object(cfg, "RAG_RERANK_ENABLED", False):
+            async with AsyncSessionLocal() as session:
+                session.add(owner)
+                await session.flush()
+                session.add_all([note, other])
+                await session.flush()
+                for fixture in (note, other):
+                    job = await create_rag_index_job(session, fixture)
+                    await run_rag_index_job(session, fixture, job)
+                    assert job.status == "success"
+                await session.commit()
+
+            state = new_readonly_state(
+                user_id=owner_id, question="这一段里的 NEPTUNE_7429 是什么？", mode="chat",
+                page_state={
+                    "contextScope": "selection", "currentNoteId": note.id,
+                    "selectedText": "这是我选中的第一段。", "selectionContext": {"heading": "开头"},
+                    "dirty": True, "unsavedContent": f"{long_text}\nUNSAVED_EDITOR_MARKER",
+                },
+            )
+            local = await _default_rag_search(state)
+            assert local["context_mode"] == "selection" and not local["sources"]
+            assert "松果" not in local["context_text"]
+            expanded = await _default_rag_search({
+                **state, "question": "请结合全文说明 NEPTUNE_7429 的值",
+            })
+            assert expanded["context_mode"] == "selection_note" and 1 <= len(expanded["sources"]) <= 3
+            assert {source["noteId"] for source in expanded["sources"]} == {note.id}
+            assert "松果" in expanded["context_text"]
+            assert "WRONG_OTHER_NOTE" not in expanded["context_text"]
+            assert "UNSAVED_EDITOR_MARKER" not in expanded["context_text"]
+            assert len(expanded["context_text"]) < 3500
+    finally:
+        async with AsyncSessionLocal() as session:
+            await session.execute(delete(User).where(User.id == owner_id))
+            await session.commit()
+        await engine.dispose()
+
+
 @unittest.skipUnless(RUN_DB_TESTS, "set NOTEFLOW_RUN_DB_TESTS=1 to run real PostgreSQL integration checks")
 class DatabaseIntegrationTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.snapshot = asyncio.run(_database_snapshot())
+
+    def test_selection_only_expands_to_the_attached_long_note(self) -> None:
+        asyncio.run(_exercise_long_note_selection())
 
     def test_runtime_tables_match_sqlalchemy_metadata(self) -> None:
         library_owned = {

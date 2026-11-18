@@ -39,6 +39,7 @@ import { headingNumberPrefixLength } from "../utils/headingNumbering";
 import { updateHeadingDocumentTitle } from "../editor/headingDecorations";
 import { getDocumentHeadings, getDocumentOutlineHeadings, getEditorMarkdown, type TiptapHeading } from "../editor/documentCache";
 import { captureSelectionEdit, type SelectionEditSnapshot } from "../editor/quickSelectionEdit";
+import { captureSelectionSurroundings } from "../editor/selectionChatContext";
 import SelectionQuickEdit from "./SelectionQuickEdit";
 
 const VersionHistoryPanel = lazy(() => import("./VersionHistoryPanel"));
@@ -566,6 +567,7 @@ function NoteEditorDocument({ onReady, presented = true }: {
       text,
       noteId: selectedFile.id,
       noteTitle: titleDraft || selectedFile.name.replace(/\.md$/i, ""),
+      surroundings: captureSelectionSurroundings(editor),
     });
   };
 

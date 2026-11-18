@@ -13,6 +13,7 @@ from app.agent.langgraph_readonly import (
 )
 from app.rag.service import RagResult
 from app.agent.sse import DONE_FRAME, SSEStreamAdapter
+from app.services.selection_context import asks_for_whole_note
 
 
 class FakeReadonlyTools:
@@ -53,6 +54,58 @@ class FakeReadonlyTools:
 
 
 class LangGraphReadonlyTest(unittest.TestCase):
+    def test_attached_selection_stays_local_even_if_planner_requests_full_sources(self) -> None:
+        captured = []
+
+        async def model(_provider, request):
+            captured.append(request.document_content)
+            yield {"choices": [{"delta": {"content": "选区回答"}, "finish_reason": None}]}
+
+        state = new_readonly_state(
+            user_id="owner", question="解释这一段", mode="chat", memory_enabled=False,
+            turn_plan={"context_sources": ["current_note", "knowledge_base"]},
+            page_state={
+                "contextScope": "selection", "currentNoteId": "same-note",
+                "selectedText": "选区正文", "dirty": True,
+                "unsavedContent": "长笔记未发送的正文" * 6000,
+                "selectionContext": {
+                    "heading": "小节",
+                    "before": "远处内容" * 200 + "相邻上文",
+                    "after": "相邻下文" + "远处内容" * 200,
+                },
+            },
+        )
+        with patch("app.rag.pipeline.service.LlamaIndexRagService.retrieve", side_effect=AssertionError("unexpected lookup")), patch(
+            "app.providers.chat.DeepSeekChatModelProvider.stream", new=model,
+        ):
+            result = asyncio.run(invoke_readonly_graph(state))
+        self.assertEqual(result["answer"], "选区回答")
+        self.assertEqual(result["context_mode"], "selection")
+        self.assertFalse(result["rag_called"])
+        self.assertEqual(len(captured), 1)
+        for content in ("小节", "相邻上文", "选区正文", "相邻下文"):
+            self.assertIn(content, captured[0])
+        self.assertLess(len(captured[0]), 900)
+        self.assertNotIn("长笔记未发送的正文", captured[0])
+
+    def test_whole_note_expansion_requires_an_explicit_request(self) -> None:
+        for question in ("请结合全文解释这个概念", "能不能参考整篇笔记再答？", "根据当前笔记的全文说明"):
+            with self.subTest(question=question):
+                self.assertTrue(asks_for_whole_note(question))
+        for question in ("解释这一段", "不要结合全文", "不结合全文", "别参考整篇笔记", "「结合全文」是什么意思？"):
+            with self.subTest(question=question):
+                self.assertFalse(asks_for_whole_note(question))
+
+    def test_full_note_request_without_a_note_id_cannot_search_library(self) -> None:
+        state = new_readonly_state(
+            user_id="owner", question="请结合全文解释这个概念", mode="chat",
+            page_state={"contextScope": "selection", "selectedText": "选区"},
+        )
+        with patch("app.rag.pipeline.service.LlamaIndexRagService.retrieve", side_effect=AssertionError("unexpected lookup")):
+            result = asyncio.run(_default_rag_search(state))
+        self.assertEqual(result["context_mode"], "selection")
+        self.assertFalse(result["rag_called"])
+
     def test_optional_memory_failure_does_not_fail_answer_or_reuse_stale_context(self) -> None:
         tools = FakeReadonlyTools()
         captured = []
