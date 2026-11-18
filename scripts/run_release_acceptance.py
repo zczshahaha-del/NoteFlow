@@ -124,21 +124,18 @@ def main() -> int:
                     latency["concurrentList"].append(future.result())
                 except Exception as exc:
                     errors.append(type(exc).__name__)
-        metrics, _ = client.json("GET", "/api/metrics")
         report = {
             "generatedAt": datetime.now(timezone.utc).isoformat(),
             "baseUrl": args.base_url,
             "workload": {"notes": len(note_ids), "longNoteCharacters": len(long_content), "concurrency": args.concurrency},
             "latency": {name: stats(values) for name, values in latency.items()},
-            "providerUsage": metrics.get("providerUsage", {}),
-            "domainMetrics": metrics.get("domains", {}),
             "errors": errors,
             "passed": not errors,
         }
         REPORT_ROOT.mkdir(parents=True, exist_ok=True)
         (REPORT_ROOT / f"{args.report_name}.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         lines = [
-            "# NoteFlow 步骤 19 发布候选压测与成本统计",
+            "# NoteFlow 发布候选压测",
             "",
             f"- 结果：`{'PASS' if report['passed'] else 'FAIL'}`",
             f"- 笔记：{len(note_ids)}；长笔记：{len(long_content)} 字符；并发：{args.concurrency}",
@@ -148,9 +145,8 @@ def main() -> int:
         ]
         for name, value in report["latency"].items():
             lines.append(f"| `{name}` | {value['samples']} | {value['p50Ms']} ms | {value['p95Ms']} ms | {value['maxMs']} ms |")
-        lines.extend(["", "## Provider token / 调用 / 费用", "", "```json", json.dumps(report["providerUsage"], ensure_ascii=False, indent=2), "```", "", "费用为环境变量单价 × 实际/估算 token；单价为 0 时只统计用量，不虚构供应商费用。", ""])
         (REPORT_ROOT / f"{args.report_name}.md").write_text("\n".join(lines), encoding="utf-8")
-        print(json.dumps({"passed": report["passed"], "latency": report["latency"], "providerUsage": report["providerUsage"]}, ensure_ascii=False))
+        print(json.dumps({"passed": report["passed"], "latency": report["latency"]}, ensure_ascii=False))
         return 0 if report["passed"] else 1
     finally:
         asyncio.run(cleanup(email))

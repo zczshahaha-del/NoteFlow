@@ -114,7 +114,7 @@ npm install
 npm run dev
 ```
 
-若默认 npm 源返回缺包错误，可使用 `npm install --registry=https://registry.npmjs.org`。启动后访问 <http://127.0.0.1:5173/>；运行 `npm run check:dev-ports` 检查端口，访问 `/api/health` 检查基础服务。未配置 AI Key 时健康状态为 `degraded`，同时 `postgresReady`、`redisReady` 应为 `true`。
+若默认 npm 源返回缺包错误，可使用 `npm install --registry=https://registry.npmjs.org`。启动后访问 <http://127.0.0.1:5173/>。运行 `npm run check:dev-ports` 检查端口，访问 `/api/health` 查看基础服务是否就绪（`{"ok": true}`）。排查数据库、缓存和模型时查看后端及相关容器日志。
 
 分别使用两个终端启动：
 
