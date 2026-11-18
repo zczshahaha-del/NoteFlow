@@ -15,13 +15,12 @@ from app.models.db import (
     NoteDraftSection,
     NoteDraftSectionVersion,
     NoteIndexJob,
-    NoteVersion,
 )
 from app.repositories.drafts import DraftRepository
-from app.repositories.index_jobs import IndexJobRepository
 from app.repositories.notes import NoteRepository
-from app.agent.write_runtime import authorize_draft_save, initialize_draft_graph, resume_draft_generation
-from app.services.markdown_index import index_note_now
+from app.agent.write_runtime import initialize_draft_graph, resume_draft_generation
+from app.services.draft_content import assemble_draft_content, clean_draft_title
+from app.services.draft_save import DraftSaveError, save_confirmed_draft
 from app.services.draft_brief import DraftBrief, generation_request
 from app.services.heading_numbers import draft_numbering_style, number_generated_section, number_markdown_headings
 from app.utils import random_id
@@ -125,11 +124,6 @@ def _now() -> datetime:
 
 def _dt(value: Optional[datetime]) -> Optional[str]:
     return value.isoformat() if value else None
-
-
-def _clean_title(value: str) -> str:
-    title = value.strip().removesuffix(".md").strip()
-    return title[:255] or "未命名笔记"
 
 
 def _clean_section_title(value: str) -> str:
@@ -242,18 +236,6 @@ def _make_section_version(section: NoteDraftSection, source: str) -> NoteDraftSe
     )
 
 
-def _make_note_version(note: Note) -> NoteVersion:
-    return NoteVersion(
-        id=random_id(),
-        note_id=note.id,
-        user_id=note.user_id,
-        title=note.title,
-        content=note.content or "",
-        change_summary="AI 草稿保存为正式笔记",
-        source="draft_save",
-    )
-
-
 def _parse_outline_sections(outline: str) -> list[DraftSectionPayload]:
     from app.services.heading_numbers import unnumber_generated_headings
     outline = unnumber_generated_headings(outline)
@@ -309,28 +291,8 @@ def _parse_outline_sections(outline: str) -> list[DraftSectionPayload]:
     return sections
 
 
-def _assemble_from_sections(draft: NoteDraft, sections: list[NoteDraftSection]) -> str:
-    title_pattern = re.compile(rf"(^|\n{{2,}})#\s+{re.escape(draft.title)}\s*\n+", re.IGNORECASE)
-    ordered = sorted(
-        [section for section in sections if section.deleted_at is None],
-        key=lambda item: item.sort_order,
-    )
-    body_parts: list[str] = []
-    for section in ordered:
-        content = (section.content or "").strip()
-        if content:
-            body_parts.append(title_pattern.sub(lambda match: match.group(1), content).strip())
-            continue
-        heading = "#" * max(1, min(section.level, 4))
-        outline_text = section.outline_text.strip()
-        body_parts.append(outline_text if re.match(r"^#{1,6}\s+", outline_text) else f"{heading} {section.title}\n\n{outline_text}".strip())
-    if body_parts:
-        return number_markdown_headings("\n\n".join(body_parts).strip(), draft.title, style=draft_numbering_style(draft))
-    return number_markdown_headings((draft.assembled_content or draft.outline or "").strip(), draft.title, style=draft_numbering_style(draft))
-
-
 def _outline_from_sections(draft: NoteDraft, sections: list[NoteDraftSection]) -> str:
-    parts = [f"# {_clean_title(draft.title)}"]
+    parts = [f"# {clean_draft_title(draft.title)}"]
     ordered = sorted(
         [section for section in sections if section.deleted_at is None],
         key=lambda item: item.sort_order,
@@ -424,8 +386,8 @@ async def create_draft(
         draft = NoteDraft(
             id=random_id(),
             user_id=user.id,
-            title=_clean_title(payload.title or payload.topic),
-            topic=_clean_title(payload.topic),
+            title=clean_draft_title(payload.title or payload.topic),
+            topic=clean_draft_title(payload.topic),
             category_id=payload.categoryId,
             note_type=payload.noteType,
             writing_tone=payload.writingTone,
@@ -508,7 +470,7 @@ async def update_draft(
             config.pop("generationJob", None)
             draft.draft_config = config
             draft.topic = brief["title"].strip()
-            draft.title = _clean_title(brief["title"])
+            draft.title = clean_draft_title(brief["title"])
             draft.extra_request = generation_request(brief)
             if payload.includeCode is not None:
                 draft.include_code = payload.includeCode
@@ -517,7 +479,7 @@ async def update_draft(
         if payload.categoryId is not None:
             await _ensure_category(session, user.id, payload.categoryId)
         if payload.title is not None:
-            draft.title = _clean_title(payload.title)
+            draft.title = clean_draft_title(payload.title)
         if "categoryId" in payload.model_fields_set:
             draft.category_id = payload.categoryId
         if payload.outline is not None:
@@ -727,7 +689,7 @@ async def assemble_draft(
     async with AsyncSessionLocal() as session:
         draft = await _get_draft(session, user.id, draft_id)
         sections = await _get_sections(session, user.id, draft.id)
-        content = payload.content.strip() if payload.content else _assemble_from_sections(draft, sections)
+        content = payload.content.strip() if payload.content else assemble_draft_content(draft, sections)
         content = number_markdown_headings(content, draft.title, style=draft_numbering_style(draft))
         if not content:
             raise HTTPException(status_code=400, detail="draft content is empty")
@@ -834,73 +796,35 @@ async def save_draft_to_notes(
     payload: DraftSavePayload,
     user: CurrentUser = Depends(get_current_user),
 ):
-    if not payload.confirm:
-        raise HTTPException(status_code=400, detail="save confirmation is required")
-
-    async with AsyncSessionLocal() as session:
-        draft = await DraftRepository(session).get_for_update(user.id, draft_id)
-        if draft is None:
-            raise HTTPException(status_code=404, detail="draft not found")
-        if draft.saved_note_id:
-            note = await NoteRepository(session).get(user.id, draft.saved_note_id)
-            job = await IndexJobRepository(session).latest_for_note(user.id, draft.saved_note_id)
-            if note is None:
-                raise HTTPException(status_code=409, detail="draft saved note is unavailable")
-            return {
-                "draft": _draft_out(draft, await _get_sections(session, user.id, draft.id)),
-                "note": _note_out(note),
-                "job": _index_job_out(job) if job else None,
-                "idempotentReplay": True,
-            }
-        category_id = payload.categoryId if "categoryId" in payload.model_fields_set else draft.category_id
-        await _ensure_category(session, user.id, category_id)
-        sections = await _get_sections(session, user.id, draft.id)
-        content = (draft.assembled_content or _assemble_from_sections(draft, sections)).strip()
-        if not content:
-            raise HTTPException(status_code=400, detail="draft content is empty")
-        if not draft.graph_thread_id:
-            draft.runtime = "langgraph"
-            draft.graph_thread_id = f"draft-{random_id()}"
-            initialized = await initialize_draft_graph(
-                user_id=user.id, thread_id=draft.graph_thread_id,
-                draft_id=draft.id, topic=draft.topic, outline=draft.outline,
-            )
-            if not initialized:
-                raise HTTPException(status_code=503, detail="LangGraph 草稿流程初始化失败，请稍后重试")
-        authorized = await authorize_draft_save(
-            thread_id=draft.graph_thread_id, assembled_content=content,
-        )
-        if not authorized:
-            raise HTTPException(status_code=503, detail="LangGraph 草稿保存授权失败，请稍后重试")
-        note = Note(
-            id=random_id(),
+    try:
+        result = await save_confirmed_draft(
             user_id=user.id,
-            title=_clean_title(payload.title or draft.title),
-            category_id=category_id,
-            summary=None,
-            tags=[],
-            content=content,
-            is_pinned=False,
-            is_favorite=False,
-            index_status="pending",
+            draft_id=draft_id,
+            confirmed=payload.confirm,
+            title=payload.title,
+            category_id=payload.categoryId,
+            use_draft_category="categoryId" not in payload.model_fields_set,
         )
-        session.add(note)
-        await session.flush()
-        session.add(_make_note_version(note))
-        job = await index_note_now(session, note)
-        draft.status = "saved"
-        draft.saved_note_id = note.id
-        draft.saved_at = _now()
-        draft.assembled_content = content
-        await session.commit()
-        await session.refresh(draft)
-        await session.refresh(note)
-        await session.refresh(job)
-        return {
-            "draft": _draft_out(draft, await _get_sections(session, user.id, draft.id)),
-            "note": _note_out(note),
-            "job": _index_job_out(job),
-        }
+    except DraftSaveError as exc:
+        status, detail = {
+            "confirmation_required": (400, "save confirmation is required"),
+            "draft_missing": (404, "draft not found"),
+            "saved_note_missing": (409, "draft saved note is unavailable"),
+            "category_missing": (404, "category not found"),
+            "empty_draft": (400, "draft content is empty"),
+            "graph_initialization_failed": (503, "LangGraph 草稿流程初始化失败，请稍后重试"),
+            "graph_authorization_failed": (503, "LangGraph 草稿保存授权失败，请稍后重试"),
+        }[str(exc)]
+        raise HTTPException(status_code=status, detail=detail) from exc
+
+    response = {
+        "draft": _draft_out(result.draft, result.sections),
+        "note": _note_out(result.note),
+        "job": _index_job_out(result.job) if result.job else None,
+    }
+    if result.replayed:
+        response["idempotentReplay"] = True
+    return response
 
 
 @router.post("/note-drafts/{draft_id}/cancel")
