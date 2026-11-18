@@ -3,15 +3,20 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import time
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
+from redis.exceptions import RedisError
+
 from app import database as db
 from app.config import cfg
 
 MAX_MEMORY_CACHE_ITEMS = 256
+REDIS_CACHE_TIMEOUT_SECONDS = 0.25
+logger = logging.getLogger(__name__)
 
 _memory_cache: OrderedDict[str, tuple[float, str]] = OrderedDict()
 _locks: dict[str, asyncio.Lock] = {}
@@ -44,8 +49,13 @@ async def get_cached_ai_text(key: str) -> str | None:
         return None
 
     if db.redis_client is not None:
-        value = await db.redis_client.get(key)
-        return str(value) if value else None
+        try:
+            async with asyncio.timeout(REDIS_CACHE_TIMEOUT_SECONDS):
+                value = await db.redis_client.get(key)
+            return str(value) if value else None
+        except (RedisError, OSError) as exc:
+            logger.warning("AI cache read skipped (%s)", type(exc).__name__)
+            return None
 
     now = time.time()
     cached = _memory_cache.get(key)
@@ -66,7 +76,11 @@ async def set_cached_ai_text(key: str, text: str):
 
     ttl = max(1, cfg.AI_CACHE_TTL_SECONDS)
     if db.redis_client is not None:
-        await db.redis_client.set(key, text, ex=ttl)
+        try:
+            async with asyncio.timeout(REDIS_CACHE_TIMEOUT_SECONDS):
+                await db.redis_client.set(key, text, ex=ttl)
+        except (RedisError, OSError) as exc:
+            logger.warning("AI cache write skipped (%s)", type(exc).__name__)
         return
 
     _memory_cache[key] = (time.time() + ttl, text)
