@@ -14,7 +14,7 @@
 1. 备份 PostgreSQL、附件和部署配置。
 2. 执行 `python3 scripts/quality_gate.py --profile full`。
 3. 执行 `python3 scripts/run_release_acceptance.py --base-url <候选环境地址>`。
-4. 检查 `/api/health`、`/api/metrics`、Outbox 和 IndexJob。
+4. 检查 `/api/health` 的 `ok`、后端日志、Outbox 和 IndexJob。
 5. 验证聊天、全库检索、草稿生成、AI 修改和记忆读取。
 
 ## 发布观察

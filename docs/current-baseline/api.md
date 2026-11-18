@@ -2,8 +2,8 @@
 
 > 由 `scripts/export_current_baseline.py` 从 FastAPI OpenAPI 事实导出。
 
-- API 路径数：77
-- 操作数：91
+- API 路径数：75
+- 操作数：89
 - 全局错误结构：`ApiErrorEnvelope { error: { code, message }, requestId, traceId }`（OpenAPI schema 保持向后兼容，traceId 为运行时关联字段）。
 - 认证实现：HttpOnly session cookie 为当前主路径；部分旧客户端仍兼容 Bearer。
 
@@ -40,7 +40,6 @@
 | PATCH | `/api/chat-sessions/{session_id}` | Update Chat Session | ChatSessionUpdatePayload | object | 200, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503 | cookie / bearer |
 | DELETE | `/api/chat-sessions/{session_id}` | Delete Chat Session | - | object | 200, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503 | cookie / bearer |
 | GET | `/api/chat-sessions/{session_id}/messages` | List Chat Messages | - | object | 200, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503 | cookie / bearer |
-| GET | `/api/diagnostics` | Diagnostics | - | object | 200, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503 | route dependency / public |
 | GET | `/api/health` | Health | - | object | 200, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503 | route dependency / public |
 | GET | `/api/index-jobs` | List Index Jobs | - | object | 200, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503 | cookie / bearer |
 | GET | `/api/knowledge-base` | Load Knowledge Base | - | object | 200, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503 | cookie / bearer |
@@ -55,7 +54,6 @@
 | POST | `/api/memories/search` | Search Memories | MemorySearchPayload | object | 200, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503 | cookie / bearer |
 | PUT | `/api/memories/{memory_id}` | Update Memory | MemoryUpdatePayload | object | 200, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503 | cookie / bearer |
 | DELETE | `/api/memories/{memory_id}` | Delete Memory | - | object | 200, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503 | cookie / bearer |
-| GET | `/api/metrics` | Metrics | - | object | 200, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503 | cookie / bearer |
 | POST | `/api/note-drafts` | Create Draft | DraftCreatePayload | object | 200, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503 | cookie / bearer |
 | GET | `/api/note-drafts/{draft_id}` | Get Draft | - | object | 200, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503 | cookie / bearer |
 | PUT | `/api/note-drafts/{draft_id}` | Update Draft | DraftUpdatePayload | object | 200, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503 | cookie / bearer |
