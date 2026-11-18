@@ -4,15 +4,24 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from app.services.selection_context import HEADING_LIMIT, NEARBY_LIMIT
+
 
 class AgentChatMessageIn(BaseModel):
     role: str
     text: str
 
 
+class SelectionSurroundings(BaseModel):
+    heading: str = Field(default="", max_length=HEADING_LIMIT)
+    before: str = Field(default="", max_length=NEARBY_LIMIT)
+    after: str = Field(default="", max_length=NEARBY_LIMIT)
+
+
 class AgentChatPageState(BaseModel):
     currentNoteId: Optional[str] = None
     selectedText: str = ""
+    selectionContext: SelectionSurroundings | None = None
     currentSectionId: Optional[str] = None
     dirty: bool = False
     unsavedContent: str = ""

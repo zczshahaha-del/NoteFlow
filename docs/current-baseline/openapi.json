@@ -106,6 +106,16 @@
             "title": "Selectedtext",
             "type": "string"
           },
+          "selectionContext": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SelectionSurroundings"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "unsavedContent": {
             "default": "",
             "title": "Unsavedcontent",
@@ -1790,6 +1800,30 @@
           }
         },
         "title": "RunCancelPayload",
+        "type": "object"
+      },
+      "SelectionSurroundings": {
+        "properties": {
+          "after": {
+            "default": "",
+            "maxLength": 400,
+            "title": "After",
+            "type": "string"
+          },
+          "before": {
+            "default": "",
+            "maxLength": 400,
+            "title": "Before",
+            "type": "string"
+          },
+          "heading": {
+            "default": "",
+            "maxLength": 120,
+            "title": "Heading",
+            "type": "string"
+          }
+        },
+        "title": "SelectionSurroundings",
         "type": "object"
       },
       "SessionOut": {

@@ -100,3 +100,5 @@
 | PUT | `/api/settings` | Update Settings | SettingsUpdatePayload | object | 200, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503 | cookie / bearer |
 
 完整机器可读版本见 `openapi.json`。路由是否公开以 FastAPI dependency 为最终事实，OpenAPI 当前未完整表达所有 dependency 认证要求。
+
+`POST /api/note-drafts/{draft_id}/save-to-notes` 需要 `confirm: true`。省略 `categoryId` 会沿用草稿目录，传 `null` 则保存到根目录。成功响应包含 `draft`、`note` 和 `job`。对同一已保存草稿重复提交时，返回原笔记并带 `idempotentReplay: true`。

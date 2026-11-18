@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.services.prompt_templates import render_prompt
 from app.services.ai import ChatMessage, complete_chat
+from app.services.selection_context import has_selection_scope
 
 logger = logging.getLogger(__name__)
 
@@ -334,12 +335,15 @@ def validate_turn_plan(
         ]
 
     parameters = validated.intent_parameters
+    selection_scope = has_selection_scope(state)
+    if selection_scope and validated.primary_intent in {PrimaryIntent.GENERAL_CHAT, PrimaryIntent.NOTE_EDIT}:
+        validated.context_sources = [ContextSource.SELECTED_TEXT]
     if validated.primary_intent == PrimaryIntent.NOTE_CREATE:
         parameters.topic = _normalize_topic_field(parameters.topic)
         if not parameters.topic:
             missing.append("topic")
     elif validated.primary_intent == PrimaryIntent.NOTE_EDIT:
-        note_id = parameters.note_id or state.get("currentNoteId")
+        note_id = state.get("currentNoteId") if selection_scope else parameters.note_id or state.get("currentNoteId")
         parameters.note_id = str(note_id) if note_id else None
         if not note_id:
             missing.append("target_note")

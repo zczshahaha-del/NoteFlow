@@ -6,7 +6,7 @@ import time
 from datetime import datetime
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from app.config import cfg
 from app.database import AsyncSessionLocal
@@ -67,6 +67,7 @@ from app.schemas.agent import (
     RunCancelPayload,
 )
 from app.services.turn_planner import ContextSource, PrimaryIntent, TurnPlan
+from app.services.selection_context import SELECTION_LIMIT, has_selection_scope, whole_note_id
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 logger = logging.getLogger(__name__)
@@ -573,11 +574,23 @@ async def chat(
     payload: AgentChatPayload,
     user: CurrentUser = Depends(redis_rate_limit("agent-chat", cfg.AI_RATE_LIMIT)),
 ):
+    page_state_dict = _page_state_dict(payload.pageState) or {}
+    selection_scope = has_selection_scope(page_state_dict)
+    if payload.pageState and (selection_scope or whole_note_id(page_state_dict, payload.question)):
+        if selection_scope and len(payload.pageState.selectedText.strip()) > SELECTION_LIMIT:
+            raise HTTPException(422, detail="选中文字超过 4000 字，请缩小选区后再发送。")
+        # Strip any editor document before planning or checkpointing a request
+        # that will use a selection or retrieve limited saved excerpts.
+        payload = payload.model_copy(update={
+            "mode": "chat",
+            "documentContent": "",
+            "pageState": payload.pageState.model_copy(update={"unsavedContent": ""}),
+        })
+        page_state_dict = _page_state_dict(payload.pageState) or {}
     run_state = await _start_agent_run(payload, user.id, "planning")
     session_id = run_state["session_id"]
     run_id = run_state["run_id"]
     route_step_id = run_state["route_step_id"]
-    page_state_dict = _page_state_dict(payload.pageState) or {}
 
     try:
         async with postgres_checkpointer() as saver:

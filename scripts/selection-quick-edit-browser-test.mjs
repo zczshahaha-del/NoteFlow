@@ -11,12 +11,16 @@ const original = '## 标题\n\n前面 原句。 后面。\n\n重复 原句。 �
 const css = readdirSync(new URL('../dist/assets/', import.meta.url)).filter(n => /^(index-|NoteEditor-).*\.css$/.test(n)).map(n => readFileSync(new URL('../dist/assets/' + n, import.meta.url), 'utf8')).join('\n');
 const entry = `import React from 'react';import{createRoot}from'react-dom/client';
 import NoteEditor from ${JSON.stringify(path('components/NoteEditor.tsx'))};
+import AIPanel from ${JSON.stringify(path('components/AIPanel.tsx'))};
 import{useAppStore}from ${JSON.stringify(path('store/index.tsx'))};
 const source=${JSON.stringify(original)};
 const api=window.quickTest={store:useAppStore,editor:null,calls:[],next:'改好的句子。',hold:false,failure:false};
+api.openChat=()=>{const panel=document.createElement('aside');document.body.appendChild(panel);createRoot(panel).render(React.createElement(AIPanel));};
 useAppStore.setState({treeData:[{id:'note',name:'合成笔记.md',type:'file',content:source,indexStatus:'indexed'},{id:'other',name:'其他笔记.md',type:'file',content:'别的正文',indexStatus:'indexed'}],selectedFileId:'note',fileContents:{note:source,other:'别的正文'},serverSyncReady:false,hydratedUserId:'quick-test'});
 window.fetch=async(url,init={})=>{url=String(url);const body=init.body?JSON.parse(init.body):null;api.calls.push({url,body});
  if(url.endsWith('/outline'))return new Response('{"sections":[]}',{headers:{'Content-Type':'application/json'}});
+ if(url.endsWith('/api/agent/chat'))return new Response(${JSON.stringify('data: {"choices":[{"delta":{"content":"合成聊天回答"}}]}\n\ndata: [DONE]\n\n')},{headers:{'Content-Type':'text/event-stream'}});
+ if(url.includes('/api/agent/runs'))return new Response('{"runs":[]}',{headers:{'Content-Type':'application/json'}});
  if(url.endsWith('/note-selection-rewrite')){const text=api.next;if(api.hold)await new Promise(resolve=>api.release=resolve);if(api.failure)return new Response('{"detail":"合成网络错误，请重试"}',{status:503,headers:{'Content-Type':'application/json'}});return new Response(JSON.stringify({newContent:text}),{headers:{'Content-Type':'application/json'}});}
  throw Error('Unexpected API '+url);};
 createRoot(document.getElementById('root')).render(React.createElement(React.StrictMode,null,React.createElement(NoteEditor)));`;
@@ -121,6 +125,36 @@ try {
   await page.evaluate(()=>window.quickTest.store.getState().setSelectedFileId('note'));
   await page.waitForFunction(()=>window.quickTest.editor&&!window.quickTest.editor.isDestroyed&&window.quickTest.editor.getText().includes('原句。'));
   await choose();await input.press('Escape');await panel.waitFor({state:'detached'});
+  if (width === 1280) {
+    const longNote = '## 第一节\n\n重复句。\n\n' + ('重复的长笔记背景。'.repeat(210) + '\n\n').repeat(15)
+      + '## 当前小节\n\n远侧前文' + '前'.repeat(500) + '最近上文。\n\n重复句。\n\n最近下文。' + '后'.repeat(500) + '远侧后文\n\n## 结尾\n\n不应发送的远处标记';
+    await page.evaluate(text => {
+      const api = window.quickTest;
+      const editor = api.editor;
+      editor.commands.setContent(text, { contentType: 'markdown' });
+      let to = 0;
+      editor.state.doc.descendants((node, position) => {
+        if (node.isText && node.text === '重复句。') to = position + node.text.length;
+      });
+      editor.chain().focus().setTextSelection({ from: to - '重复句。'.length, to }).scrollIntoView().run();
+    }, longNote);
+    await page.getByRole('button', { name: '加入对话', exact: true }).click();
+    await page.evaluate(() => window.quickTest.openChat());
+    await page.getByRole('textbox', { name: '消息输入框' }).fill('解释这一段');
+    await page.getByRole('button', { name: '发送', exact: true }).click();
+    const sent = await page.evaluate(() => window.quickTest.calls.find(call => call.url.endsWith('/api/agent/chat'))?.body);
+    assert.equal(sent.documentContent, '');
+    assert.equal(sent.pageState.unsavedContent, '');
+    assert.equal(sent.pageState.currentNoteId, 'note');
+    assert.equal(sent.pageState.selectedText, '重复句。');
+    assert.equal(sent.pageState.contextScope, 'selection');
+    const { heading, before, after } = sent.pageState.selectionContext;
+    assert.equal(heading, '当前小节');
+    assert(before.endsWith('最近上文。') && before.length === 400);
+    assert(after.startsWith('最近下文。') && after.length === 400);
+    assert(!JSON.stringify(sent).match(/远侧前文|远侧后文|不应发送的远处标记/));
+    await page.getByText('合成聊天回答', { exact: true }).waitFor();
+  }
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth),width);
   assert.deepEqual(errors,[]);assert.deepEqual(unexpected,[]);
   reports.push({width,lockedSelection:true,duplicatePosition:true,customInstruction:true,continueCurrentDraft:true,headingPreserved:true,richMarks:true,multiParagraph:true,emptyDeletion:true,compositionGuard:true,nativeUndo:true,cancelLateResult:true,staleBlocked:true,errorRetry:true,noteSwitch:true,geometry,errors,unexpected});

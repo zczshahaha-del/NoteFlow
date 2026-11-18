@@ -400,12 +400,12 @@ try {
     assert.ok(conversationContainer.textContent.includes(notice.text));
     assert.equal(supplementButton(), undefined, notice.text);
   }
-  await act(async () => modeTrigger.click());
-  await act(async () => conversationContainer.querySelector('[role="option"][aria-selected="false"]').click());
+  assert.match(modeTrigger.textContent, /对话/, "adding a selection makes the visible scope local");
   await changeComposerInput("解释引用");
   await act(async () => conversationContainer.querySelector('button[aria-label="发送"]').click());
   assert.equal(sentMessages[2][1].contextScope, "selection");
   assert.equal(sentMessages[2][1].selectedText, attachedSelection.text);
+  assert.equal(sentMessages[2][2].mode, "chat");
   assert.equal(conversationContainer.querySelector('button[aria-label="移除选中文字引用"]'), null);
 
   const tableMarkdown = "| 第一列 | 第二列 |\n| --- | --- |\n| 完整内容 | 最后一列 |";

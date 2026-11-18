@@ -7,6 +7,7 @@ import type {
   ChatSource,
   ChatSessionSummary,
   FileNode,
+  SelectionSurroundings,
 } from "../types";
 import { findFileById, initialWorkspaceTree } from "../workspaceTree";
 import { askAIStream } from "../services/aiStream";
@@ -123,6 +124,7 @@ interface ChatSelectionContext {
   text: string;
   noteId: string | null;
   noteTitle: string;
+  surroundings?: SelectionSurroundings;
   createdAt: string;
 }
 
@@ -185,7 +187,7 @@ interface AppState {
   editDraftBrief: (messageId: string, patch: { title?: string; requirements?: string; generatedBrief?: DraftBrief; requestPending?: boolean }) => void;
   generateDraftBrief: (messageId: string) => void;
   consumeDraftCommand: (id: string) => void;
-  addSelectionToChat: (selection: { text: string; noteId?: string | null; noteTitle?: string }) => void;
+  addSelectionToChat: (selection: { text: string; noteId?: string | null; noteTitle?: string; surroundings?: SelectionSurroundings }) => void;
   clearChatSelection: () => void;
   closeDraft: (outcome?: DraftOutcome) => void;
   createEditPreviewRequest: (
@@ -1052,6 +1054,7 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
         text,
         noteId: selection.noteId ?? null,
         noteTitle: selection.noteTitle?.trim() || "当前笔记",
+        surroundings: selection.surroundings,
         createdAt: new Date().toISOString(),
       },
     });
@@ -1843,12 +1846,14 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
       const selectedFile = latest.selectedFileId
         ? findFileById(latest.treeData, latest.selectedFileId)
         : undefined;
-      const documentContent = selectedFile
+      const selectionScope = pageState?.contextScope === "selection";
+      const documentContent = selectedFile && !selectionScope
         ? (latest.fileContents[selectedFile.id] ?? selectedFile.content ?? "")
         : "";
       const requestPageState: ChatPageState = {
-        currentNoteId: selectedFile?.id ?? null,
+        currentNoteId: selectionScope ? state.chatSelection?.noteId ?? null : selectedFile?.id ?? null,
         selectedText: pageState?.selectedText ?? "",
+        selectionContext: selectionScope ? state.chatSelection?.surroundings : undefined,
         currentSectionId: pageState?.currentSectionId ?? latest.activeEditorSectionId,
         dirty: Boolean(
           selectedFile &&
@@ -1857,9 +1862,7 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
               latest.noteSaveState.status === "offline" ||
               latest.noteSaveState.status === "error")
         ),
-        unsavedContent: selectedFile
-          ? latest.fileContents[selectedFile.id] ?? selectedFile.content ?? ""
-          : "",
+        unsavedContent: documentContent,
         centerMode: latest.centerMode,
         activeEditPreviewId: latest.activeEditPreview?.id ?? null,
         draftSeed: latest.draftSeed,
@@ -1871,7 +1874,7 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
       const replyRequest = retryRequest ?? {
         question: text,
         mode: chatMode,
-        documentTitle: selectedFile?.name.replace(/\.md$/, "") ?? "",
+        documentTitle: selectionScope ? state.chatSelection?.noteTitle ?? "" : selectedFile?.name.replace(/\.md$/, "") ?? "",
         documentContent,
         pageState: requestPageState,
         history: state.chatMessages.map(({ role, text }) => ({ role, text })),

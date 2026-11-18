@@ -9,7 +9,7 @@ from sqlalchemy.pool import StaticPool
 from app.deps import CurrentUser
 from app.models.db import User, Note, NoteCategory, NoteVersion, NoteIndexJob, NoteDraft, NoteDraftSection, NoteDraftSectionVersion, NoteEditPreview
 from app.routers import drafts, notes
-from app.services import draft_worker
+from app.services import draft_save, draft_worker
 from app.services.heading_number_repair import repair_heading_numbers, content_hash
 from app.services import heading_number_repair
 
@@ -26,8 +26,12 @@ class GeneratedHeadingLifecycleTest(unittest.IsolatedAsyncioTestCase):
         async with self.sessions() as session:
             session.add(User(id=self.user.id, email=self.user.email, display_name=self.user.display_name))
             await session.commit()
-        self.patches = [patch.object(module, "AsyncSessionLocal", self.sessions) for module in (drafts, notes, draft_worker)]
-        self.patches.extend([patch.object(drafts, "initialize_draft_graph", AsyncMock(return_value=True)), patch.object(drafts, "authorize_draft_save", AsyncMock(return_value=True))])
+        self.patches = [patch.object(module, "AsyncSessionLocal", self.sessions) for module in (drafts, notes, draft_save, draft_worker)]
+        self.patches.extend([
+            patch.object(drafts, "initialize_draft_graph", AsyncMock(return_value=True)),
+            patch.object(draft_save, "initialize_draft_graph", AsyncMock(return_value=True)),
+            patch.object(draft_save, "authorize_draft_save", AsyncMock(return_value=True)),
+        ])
         for item in self.patches:
             item.start()
             self.addCleanup(item.stop)
@@ -60,11 +64,15 @@ class GeneratedHeadingLifecycleTest(unittest.IsolatedAsyncioTestCase):
         assembled = await drafts.assemble_draft(draft["id"], drafts.DraftAssemblePayload(content="# 合成笔记\n\n## 基础\n\n## 安装\n\n" + section_content), self.user)
         content = assembled["draft"]["assembledContent"]
         self.assertIn("### 3.1 示例", content)
-        with patch.object(drafts, "index_note_now", self.index):
+        with patch.object(draft_save, "index_note_now", self.index):
             saved = await drafts.save_draft_to_notes(draft["id"], drafts.DraftSavePayload(confirm=True), self.user)
             replay = await drafts.save_draft_to_notes(draft["id"], drafts.DraftSavePayload(confirm=True), self.user)
         self.assertEqual(saved["note"]["content"], content)
         self.assertEqual(replay["note"]["content"], content)
+        self.assertEqual(replay["note"]["id"], saved["note"]["id"])
+        self.assertEqual(replay["job"]["id"], saved["job"]["id"])
+        self.assertNotIn("idempotentReplay", saved)
+        self.assertTrue(replay["idempotentReplay"])
         edited = content.replace("### 3.1 示例", "### 示例")
         with patch.object(notes, "index_note_now", AsyncMock()):
             await notes.update_note(saved["note"]["id"], notes.NoteUpdatePayload(content=edited, expectedContentHash=saved["note"]["contentHash"]), self.user)
@@ -80,7 +88,7 @@ class GeneratedHeadingLifecycleTest(unittest.IsolatedAsyncioTestCase):
         result = await drafts.update_draft_section(draft["id"], "2", drafts.DraftSectionUpdatePayload(content=manual, source="manual_edit"), self.user)
         self.assertEqual(next(s["content"] for s in result["draft"]["sections"] if s["id"] == "2"), manual)
         await drafts.update_draft(draft["id"], drafts.DraftUpdatePayload(assembledContent=manual, status="assembled"), self.user)
-        with patch.object(drafts, "index_note_now", self.index):
+        with patch.object(draft_save, "index_note_now", self.index):
             saved = await drafts.save_draft_to_notes(draft["id"], drafts.DraftSavePayload(confirm=True), self.user)
         self.assertEqual(saved["note"]["content"], manual.strip())
 
@@ -124,7 +132,7 @@ class GeneratedHeadingLifecycleTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_unassembled_outline_save_does_not_duplicate_heading(self):
         draft = await self.create()
-        with patch.object(drafts, "index_note_now", self.index):
+        with patch.object(draft_save, "index_note_now", self.index):
             saved = await drafts.save_draft_to_notes(draft["id"], drafts.DraftSavePayload(confirm=True), self.user)
         self.assertEqual(saved["note"]["content"], "## 1. 基础\n\n## 2. 安装\n\n## 3. 运行")
 
