@@ -67,7 +67,7 @@ from app.schemas.agent import (
     RunCancelPayload,
 )
 from app.services.turn_planner import ContextSource, PrimaryIntent, TurnPlan
-from app.services.selection_context import SELECTION_LIMIT, has_selection_scope
+from app.services.selection_context import SELECTION_LIMIT, has_selection_scope, whole_note_id
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 logger = logging.getLogger(__name__)
@@ -575,11 +575,12 @@ async def chat(
     user: CurrentUser = Depends(redis_rate_limit("agent-chat", cfg.AI_RATE_LIMIT)),
 ):
     page_state_dict = _page_state_dict(payload.pageState) or {}
-    if payload.pageState and has_selection_scope(page_state_dict):
-        if len(payload.pageState.selectedText.strip()) > SELECTION_LIMIT:
+    selection_scope = has_selection_scope(page_state_dict)
+    if payload.pageState and (selection_scope or whole_note_id(page_state_dict, payload.question)):
+        if selection_scope and len(payload.pageState.selectedText.strip()) > SELECTION_LIMIT:
             raise HTTPException(422, detail="选中文字超过 4000 字，请缩小选区后再发送。")
-        # Old clients may still append the editor document. Strip it before
-        # planning or checkpointing an explicitly attached selection.
+        # Strip any editor document before planning or checkpointing a request
+        # that will use a selection or retrieve limited saved excerpts.
         payload = payload.model_copy(update={
             "mode": "chat",
             "documentContent": "",

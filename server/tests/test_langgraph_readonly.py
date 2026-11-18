@@ -92,7 +92,7 @@ class LangGraphReadonlyTest(unittest.TestCase):
         for question in ("请结合全文解释这个概念", "能不能参考整篇笔记再答？", "根据当前笔记的全文说明"):
             with self.subTest(question=question):
                 self.assertTrue(asks_for_whole_note(question))
-        for question in ("解释这一段", "不要结合全文", "不结合全文", "别参考整篇笔记", "「结合全文」是什么意思？"):
+        for question in ("解释这一段", "不要结合全文", "不结合全文", "不能结合全文", "别参考整篇笔记", "「结合全文」是什么意思？"):
             with self.subTest(question=question):
                 self.assertFalse(asks_for_whole_note(question))
 

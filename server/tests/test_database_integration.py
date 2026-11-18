@@ -494,15 +494,22 @@ async def _exercise_long_note_selection() -> None:
             local = await _default_rag_search(state)
             assert local["context_mode"] == "selection" and not local["sources"]
             assert "松果" not in local["context_text"]
-            expanded = await _default_rag_search({
-                **state, "question": "请结合全文说明 NEPTUNE_7429 的值",
-            })
-            assert expanded["context_mode"] == "selection_note" and 1 <= len(expanded["sources"]) <= 3
-            assert {source["noteId"] for source in expanded["sources"]} == {note.id}
-            assert "松果" in expanded["context_text"]
-            assert "WRONG_OTHER_NOTE" not in expanded["context_text"]
-            assert "UNSAVED_EDITOR_MARKER" not in expanded["context_text"]
-            assert len(expanded["context_text"]) < 3500
+            for page_state in (
+                state["page_state"],
+                {
+                    "contextScope": "current_note", "currentNoteId": note.id,
+                    "dirty": True, "unsavedContent": "UNSAVED_EDITOR_MARKER",
+                },
+            ):
+                expanded = await _default_rag_search({
+                    **state, "page_state": page_state, "question": "请结合全文说明 NEPTUNE_7429 的值",
+                })
+                assert expanded["context_mode"] == "note_excerpt" and 1 <= len(expanded["sources"]) <= 3
+                assert {source["noteId"] for source in expanded["sources"]} == {note.id}
+                assert "松果" in expanded["context_text"]
+                assert "WRONG_OTHER_NOTE" not in expanded["context_text"]
+                assert "UNSAVED_EDITOR_MARKER" not in expanded["context_text"]
+                assert len(expanded["context_text"]) < 3500
     finally:
         async with AsyncSessionLocal() as session:
             await session.execute(delete(User).where(User.id == owner_id))

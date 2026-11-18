@@ -11,10 +11,10 @@ NEARBY_LIMIT = 400
 _QUOTED = re.compile(r'“[^”]*”|「[^」]*」|『[^』]*』|"[^"]*"|`[^`]*`')
 _WHOLE_NOTE = re.compile(
     r"(?:结合|参考|根据|基于|通读|查阅|看|总结|概括)"
-    r"(?:一下|这篇笔记的|这篇文章的|这篇|本篇|当前笔记的|当前文章的|当前)*"
+    r"(?:一下|这篇笔记的?|这篇文章的?|这篇|本篇|当前笔记的?|当前文章的?|当前)*"
     r"(?:全文|全篇|整篇(?:笔记|文章)?|整个(?:笔记|文章))"
 )
-_DENIAL = re.compile(r"(?<!能)不$|(?:不要|不用|无需|不必|不需要|别|禁止|避免|不是要)[^，。！？；,!?;\n]{0,8}$")
+_DENIAL = re.compile(r"(?<!能)不$|(?:不要|不用|无需|不必|不需要|(?<!能)不能|不可|不允许|别|禁止|避免|不是要)[^，。！？；,!?;\n]{0,8}$")
 
 
 def has_selection_scope(state: dict[str, Any]) -> bool:
@@ -25,6 +25,12 @@ def asks_for_whole_note(question: str) -> bool:
     text = re.sub(r"\s+", "", _QUOTED.sub(" ", question))
     matches = list(_WHOLE_NOTE.finditer(text))
     return bool(matches) and all(not _DENIAL.search(text[:match.start()]) for match in matches)
+
+
+def whole_note_id(state: dict[str, Any], question: str) -> str:
+    note_id = str(state.get("currentNoteId") or "").strip()
+    referenced = state.get("contextScope") == "current_note" or has_selection_scope(state)
+    return note_id if note_id and referenced and asks_for_whole_note(question) else ""
 
 
 def selection_context_text(state: dict[str, Any]) -> str:
