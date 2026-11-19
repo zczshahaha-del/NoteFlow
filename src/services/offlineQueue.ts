@@ -2,6 +2,7 @@ export interface OfflineNoteEdit {
   key: string;
   userId: string;
   noteId: string;
+  tabId?: string;
   content: string;
   baseUpdatedAt: string | null;
   baseContentHash?: string | null;
@@ -12,8 +13,8 @@ const DB_NAME = "noteflow-offline";
 const STORE_NAME = "note_edits";
 const DB_VERSION = 1;
 
-function editKey(userId: string, noteId: string): string {
-  return `${userId}:${noteId}`;
+function editKey(userId: string, noteId: string, tabId?: string): string {
+  return tabId ? JSON.stringify([userId, tabId, noteId]) : `${userId}:${noteId}`;
 }
 
 function openDatabase(): Promise<IDBDatabase> {
@@ -48,7 +49,7 @@ export async function queueOfflineNoteEdit(
 ): Promise<OfflineNoteEdit> {
   const record: OfflineNoteEdit = {
     ...edit,
-    key: editKey(edit.userId, edit.noteId),
+    key: editKey(edit.userId, edit.noteId, edit.tabId),
     queuedAt: new Date().toISOString(),
   };
   return withStore("readwrite", (store, resolve, reject) => {
@@ -70,9 +71,17 @@ export async function listOfflineNoteEdits(userId: string): Promise<OfflineNoteE
   });
 }
 
+export async function getOfflineNoteEdit(key: string): Promise<OfflineNoteEdit | undefined> {
+  return withStore("readonly", (store, resolve, reject) => {
+    const request = store.get(key);
+    request.onsuccess = () => resolve(request.result as OfflineNoteEdit | undefined);
+    request.onerror = () => reject(request.error);
+  });
+}
+
 export async function removeOfflineNoteEdit(expected: OfflineNoteEdit): Promise<void> {
   return withStore("readwrite", (store, resolve, reject) => {
-    const key = editKey(expected.userId, expected.noteId);
+    const key = expected.key;
     const lookup = store.get(key);
     lookup.onsuccess = () => {
       const current = lookup.result as OfflineNoteEdit | undefined;

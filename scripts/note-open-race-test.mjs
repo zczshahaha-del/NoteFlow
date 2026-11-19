@@ -20,8 +20,9 @@ try {
     contentHash: 'synthetic-' + content, isPinned: false, isFavorite: false, indexStatus: 'indexed',
     createdAt: null, updatedAt: null, deletedAt: null });
   const reset = () => {
-    // The real hydration boundary clears edits and pending reads from the
-    // preceding scenario. Stub only the unrelated chat request.
+    // Independent scenarios start with empty browser storage. Hydration can
+    // recover an earlier, unacknowledged edit if it is still on disk.
+    localStorage.clear();
     store.setState({ refreshChatSessions: async () => {} });
     store.getState().hydrate('synthetic-one');
     requests.length = 0;

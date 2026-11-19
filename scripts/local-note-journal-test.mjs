@@ -66,7 +66,9 @@ try {
   dom.window.Storage.prototype.setItem = function(key, value) { runtimeWrites.push(key); return original.call(this, key, value); };
   for (let n = 1; n <= 17; n++) useAppStore.getState().updateFileContent('a', '运行输入'.repeat(n));
   assert.equal(runtimeWrites.length, 17, 'Actual store action writes once per edit');
-  assert(runtimeWrites.every(key => key === 'noteflow:runtime:note-draft:a'));
+  const runtimeKey = runtimeWrites[0];
+  assert.match(runtimeKey, /^noteflow:runtime:note-draft-by-tab:[^:]+:a$/);
+  assert(runtimeWrites.every(key => key === runtimeKey));
   assert.equal(loadLocalSnapshot('runtime').fileContents.a, '运行输入'.repeat(17));
   // Exercise the real provider too: its rollback safety subscription must not
   // turn a journal write back into a full snapshot on every character.
@@ -81,10 +83,10 @@ try {
   runtimeWrites.length=0;
   await React.act(async()=>{for(let n=1;n<=17;n++)useAppStore.getState().updateFileContent('a','挂载后输入'.repeat(n));});
   assert.equal(runtimeWrites.length,17,'Mounted provider must not duplicate input writes');
-  assert(runtimeWrites.every(key=>key==='noteflow:runtime:note-draft:a'));
+  assert(runtimeWrites.every(key=>key===runtimeKey));
   window.dispatchEvent(new dom.window.Event('pagehide'));
-  assert.equal(JSON.parse(localStorage.getItem('noteflow:runtime:note-draft:a')).content,'挂载后输入'.repeat(17));
-  assert.equal(JSON.parse(localStorage.getItem('noteflow:runtime:file-contents')).a,'挂载后输入'.repeat(17),'Legacy baseline is current when leaving / rolling back');
+  assert.equal(JSON.parse(localStorage.getItem(runtimeKey)).content,'挂载后输入'.repeat(17));
+  assert.equal(JSON.parse(localStorage.getItem('noteflow:runtime:file-contents')).a,undefined,'Shared cache must not expose the tab’s pending text');
   await React.act(async()=>useAppStore.setState({treeData:[{...snapshot.treeData[0],name:'回滚后的目录'}]}));
   assert.equal(loadLocalSnapshot('runtime').treeData[0].name,'回滚后的目录','Unmanaged metadata / rollback changes still persist');
   assert.equal(loadLocalSnapshot('runtime').fileContents.a,'挂载后输入'.repeat(17));

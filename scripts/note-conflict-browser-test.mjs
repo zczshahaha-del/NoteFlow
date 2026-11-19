@@ -67,7 +67,7 @@ try {
     const request = route.request();
     const url = new URL(request.url());
     const reply = (json, status = 200) => route.fulfill({ json, status });
-    if (url.hostname !== "noteflow.test") { errors.push(url.origin); return route.abort(); }
+    if (url.hostname !== "noteflow.localhost") { errors.push(url.origin); return route.abort(); }
     if (url.pathname === "/") return route.fulfill({ body: html, contentType: "text/html" });
     if (url.pathname === "/bundle.js") return route.fulfill({ body: code, contentType: "text/javascript" });
     if (offlineApi && url.pathname.startsWith("/api/")) return route.abort("internetdisconnected");
@@ -115,7 +115,7 @@ try {
     return reply({ error: "unexpected fixture request" }, 404);
   });
   const enter = async page => {
-    await page.goto("http://noteflow.test/");
+    await page.goto("http://noteflow.localhost/");
     await page.waitForFunction(() => window.testState?.store.getState().serverSyncReady);
     await page.evaluate(() => window.testState.store.getState().setSelectedFileId("note"));
     await page.getByTestId("tiptap-editor-content").getByText("原始内容").waitFor();
@@ -206,8 +206,77 @@ try {
   assert.equal(puts.filter(put => put.content === original.content).length, 1);
   await a.reload();
   await text(a).getByText("断网后立即刷新要保留这行").waitFor();
+  await b.evaluate(() => window.testState.store.getState().setSelectedFileId("note"));
+  await text(b).getByText("断网后立即刷新要保留这行").waitFor();
+  const initialCopyCount = copies.size;
+  const versionA = "A 标签页离线写的版本";
+  const versionB = "B 标签页离线写的版本";
+  offlineApi = true;
+  await context.setOffline(true);
+  await edit(a, versionA);
+  await edit(b, versionB);
+  await Promise.all([a.reload(), b.reload()]);
+  assert.deepEqual(await Promise.all([a, b].map(page => page.evaluate(async () => {
+    while (!window.testState?.store.getState().hydratedUserId) await new Promise(resolve => setTimeout(resolve, 20));
+    return window.testState.store.getState().fileContents.note;
+  }))), [versionA, versionB], "Each tab must restore its own offline edit");
+  await Promise.all([a.getByText("正文已留在本机，等待同步").waitFor(), b.getByText("正文已留在本机，等待同步").waitFor()]);
+  offlineApi = false;
+  await context.setOffline(false);
+  await Promise.all([saved(a), saved(b)]);
+  const newCopies = [...copies.values()].slice(initialCopyCount);
+  assert.equal(newCopies.length, 1);
+  assert.deepEqual(new Set([original.content, newCopies[0].content]), new Set([versionA, versionB]));
+  const conflictTab = original.content === versionA ? b : a;
+  await conflictTab.getByText("你的修改已保存为副本。", { exact: true }).waitFor();
+  await conflictTab.getByRole("button", { name: "打开我的副本" }).click();
+  await text(conflictTab).getByText(newCopies[0].content, { exact: true }).waitFor();
+  for (const page of [a, b]) {
+    await page.evaluate(() => window.testState.store.getState().setSelectedFileId("note"));
+    await text(page).getByText(original.content, { exact: true }).waitFor();
+  }
+  const scopes = await Promise.all([a, b].map(page => page.evaluate(() => sessionStorage.getItem("noteflow:note-journal-tab"))));
+  assert(scopes.every(Boolean) && scopes[0] !== scopes[1]);
+  const opening = context.waitForEvent("page");
+  await a.evaluate(() => { window.open(location.href, "_blank"); });
+  const duplicate = await opening;
+  await duplicate.waitForFunction(() => window.testState?.store.getState().serverSyncReady);
+  const duplicateScope = await duplicate.evaluate(() => {
+    if (!window.opener || !navigator.locks) throw new Error("Expected an opener and Web Locks");
+    return sessionStorage.getItem("noteflow:note-journal-tab");
+  });
+  assert(duplicateScope && !scopes.includes(duplicateScope));
+  await duplicate.close();
+  assert.deepEqual(await a.evaluate(async tabIds => {
+    const { queueOfflineNoteEdit, listOfflineNoteEdits, removeOfflineNoteEdit } = window.testState;
+    const base = { userId: "fallback-fixture", noteId: "note", baseUpdatedAt: null };
+    await Promise.all(tabIds.map((tabId, index) => queueOfflineNoteEdit({ ...base, tabId, content: `fallback-${index}` })));
+    const records = await listOfflineNoteEdits(base.userId);
+    await Promise.all(records.map(removeOfflineNoteEdit));
+    return records.map(record => record.content).sort();
+  }, scopes), ["fallback-0", "fallback-1"]);
+
+  // Test close-before-save and recovery from a new tab with a different scope.
+  const copiesBeforeClosing = copies.size;
+  const closedVersions = ["A 离线输入后关闭", "B 离线输入后关闭"];
+  offlineApi = true;
+  await context.setOffline(true);
+  await Promise.all([edit(a, closedVersions[0]), edit(b, closedVersions[1])]);
+  await Promise.all([a.close(), b.close()]);
+  offlineApi = false;
+  await context.setOffline(false);
+  const reopened = await context.newPage();
+  reopened.on("pageerror", error => errors.push(String(error)));
+  await reopened.goto("http://noteflow.localhost/");
+  await reopened.waitForFunction(count => {
+    const state = window.testState?.store.getState();
+    return state?.serverSyncReady && state.treeData.filter(node => node.id.startsWith("copy-")).length === count;
+  }, copiesBeforeClosing + 1);
+  assert.equal(copies.size, copiesBeforeClosing + 1);
+  assert.deepEqual(new Set([original.content, [...copies.values()].at(-1).content]), new Set(closedVersions));
+  assert.equal(await reopened.evaluate(() => Object.keys(localStorage).filter(key => key.includes(":note-draft-by-tab:")).length), 0);
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ lazyBodyRead: true, cleanRefresh: true, lateRefreshDuringTyping: true, copyFailureRetry: true, versionsPreserved: true, comparison: true, compactViewport: true, offlineReloadAndSync: true }));
+  console.log(JSON.stringify({ lazyBodyRead: true, cleanRefresh: true, lateRefreshDuringTyping: true, copyFailureRetry: true, versionsPreserved: true, comparison: true, compactViewport: true, offlineReloadAndSync: true, simultaneousOfflineTabEdits: true, closedTabsRecovered: true, indexedDbTabIsolation: true, duplicatedTabIsolation: true }));
 
   async function expectReply() {
     for (let i = 0; !releaseRead && i < 80; i++) await new Promise(resolve => setTimeout(resolve, 25));
