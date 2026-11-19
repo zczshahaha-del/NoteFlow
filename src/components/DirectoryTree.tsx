@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import {
   ChevronDown,
@@ -21,8 +21,10 @@ import {
   Star,
   Check,
 } from "lucide-react";
-import { generateId } from "../store";
+import { generateId, useAppStore } from "../store";
 import { useDirectoryRowSlice, useDirectorySlice, readWorkspaceFileContent } from "../store/selectors";
+import { getNote } from "../services/notes";
+import { findFileById } from "../workspaceTree";
 import type { ChatSource, FileNode } from "../types";
 import AccountMenu, { type AccountMenuProps } from "./AppNav";
 import LibrarySearchDialog from "./LibrarySearchDialog";
@@ -222,6 +224,7 @@ function TreeNode({
   onStartRename,
   onCommitRename,
   onCancelRename,
+  onCreateNote,
   onStartMove,
   onExport,
   onDelete,
@@ -241,7 +244,8 @@ function TreeNode({
   onCommitRename: (node: FileNode) => void;
   onCancelRename: () => void;
   onStartMove: (node: FileNode) => void;
-  onExport: (node: FileNode) => void;
+  onCreateNote: (parentId: string) => void;
+  onExport: (node: FileNode) => Promise<void>;
   onDelete: (node: FileNode) => void;
   onTogglePin: (node: FileNode) => void;
   onToggleFavorite: (node: FileNode) => void;
@@ -260,7 +264,43 @@ function TreeNode({
   const hasChildren = isFolder && node.children && node.children.length > 0;
   const isRenaming = renamingId === node.id;
   const menuOpen = menuNodeId === node.id;
+  const menuRoot = useRef<HTMLDivElement>(null);
+  const menuTrigger = useRef<HTMLButtonElement>(null);
   const PinIcon = node.pinned ? PinOff : Pin;
+  const pinAction = (
+    <button type="button" className="nf-soft-menu-item" onClick={() => {
+      menuTrigger.current?.focus({ preventScroll: true });
+      onTogglePin(node);
+    }}>
+      <PinIcon size={17} strokeWidth={1.65} />
+      {node.pinned ? "取消置顶" : "置顶"}
+    </button>
+  );
+
+  useLayoutEffect(() => {
+    if (!menuOpen) return;
+    const root = menuRoot.current;
+    const list = root?.closest(".directory-node-list");
+    const panel = root?.querySelector<HTMLDivElement>(".nf-directory-context-menu");
+    if (!root || !list || !panel) return;
+    const placeMenu = () => {
+      const bounds = list.getBoundingClientRect();
+      if (!bounds.height) return;
+      const trigger = root.getBoundingClientRect();
+      const below = Math.max(0, bounds.bottom - trigger.bottom - 6);
+      const above = Math.max(0, trigger.top - bounds.top - 6);
+      const opensAbove = panel.scrollHeight > below && above > below;
+      panel.dataset.side = opensAbove ? "top" : "bottom";
+      panel.style.setProperty("--directory-menu-space", `${Math.floor(opensAbove ? above : below)}px`);
+    };
+    placeMenu();
+    list.addEventListener("scroll", placeMenu, { passive: true });
+    window.addEventListener("resize", placeMenu);
+    return () => {
+      list.removeEventListener("scroll", placeMenu);
+      window.removeEventListener("resize", placeMenu);
+    };
+  }, [menuOpen]);
 
   return (
     <div>
@@ -362,8 +402,9 @@ function TreeNode({
           )}
         </button>
 
-        <div className="relative shrink-0" data-file-menu-root>
+        <div ref={menuRoot} className="relative shrink-0" data-file-menu-root>
           <button
+            ref={menuTrigger}
             type="button"
             className={`directory-node-more file-node-menu-button flex items-center justify-center transition-opacity ${
               menuOpen || isSelected
@@ -374,13 +415,46 @@ function TreeNode({
               event.stopPropagation();
               onMenuChange(menuOpen ? null : node.id);
             }}
-            aria-label="文件操作"
+            onKeyDown={(event) => {
+              if (!menuOpen || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+              if (event.key === "Escape") {
+                event.preventDefault();
+                event.stopPropagation();
+                onMenuChange(null);
+              } else if (event.key === "ArrowDown") {
+                event.preventDefault();
+                menuRoot.current?.querySelector<HTMLButtonElement>(".nf-directory-context-menu button")?.focus();
+              }
+            }}
+            aria-label={isFolder ? "文件夹操作" : "文件操作"}
             aria-expanded={menuOpen}
           >
             <MoreHorizontal size={15} strokeWidth={1.8} />
           </button>
 
-          <SoftMenu open={menuOpen} onClose={() => onMenuChange(null)} className="nf-action-menu absolute right-0 top-full z-50 mt-1" aria-label="笔记操作">
+          <SoftMenu open={menuOpen} onClose={() => onMenuChange(null)} className="nf-action-menu nf-directory-context-menu absolute right-0 z-50"
+            role="group" aria-label={isFolder ? "文件夹操作" : "笔记操作"}>
+            {isFolder ? (
+              <button type="button" className="nf-soft-menu-item" onClick={() => {
+                onCreateNote(node.id);
+                onFileOpen?.();
+              }}>
+                <FilePlus size={17} strokeWidth={1.65} />
+                新建笔记
+              </button>
+            ) : (
+              <>
+                <button type="button" className="nf-soft-menu-item" onClick={() => {
+                  menuTrigger.current?.focus({ preventScroll: true });
+                  onToggleFavorite(node);
+                }}>
+                  <Star size={17} fill={node.favorite ? "currentColor" : "none"} strokeWidth={1.65} />
+                  {node.favorite ? "取消收藏" : "收藏"}
+                </button>
+                {pinAction}
+              </>
+            )}
+            <hr className="nf-directory-menu-divider" />
             <button
               className="nf-soft-menu-item"
               onClick={(event) => {
@@ -406,40 +480,21 @@ function TreeNode({
                 className="nf-soft-menu-item"
                 onClick={(event) => {
                   event.stopPropagation();
-                  onExport(node);
+                  menuTrigger.current?.focus({ preventScroll: true });
+                  void onExport(node);
                 }}
               >
                 <Download size={17} strokeWidth={1.65} />
-                导出
+                导出 Markdown
               </button>
             )}
-            <button
-              className="nf-soft-menu-item"
-              onClick={(event) => {
-                event.stopPropagation();
-                onTogglePin(node);
-              }}
-            >
-              <PinIcon size={17} strokeWidth={1.65} />
-              {node.pinned ? "取消置顶" : "置顶"}
-            </button>
-            {!isFolder && (
-              <button
-                className="nf-soft-menu-item"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onToggleFavorite(node);
-                }}
-              >
-                <Star size={17} fill={node.favorite ? "currentColor" : "none"} strokeWidth={1.65} />
-                {node.favorite ? "取消收藏" : "收藏"}
-              </button>
-            )}
+            {isFolder && pinAction}
+            <hr className="nf-directory-menu-divider" />
             <button
               className="nf-soft-menu-item nf-soft-menu-danger"
               onClick={(event) => {
                 event.stopPropagation();
-                event.currentTarget.closest("[data-file-menu-root]")?.querySelector<HTMLButtonElement>('button[aria-label="文件操作"]')?.focus({ preventScroll: true });
+                menuTrigger.current?.focus({ preventScroll: true });
                 onDelete(node);
               }}
             >
@@ -451,7 +506,10 @@ function TreeNode({
       </div>
 
       {isFolder && isExpanded && (
-        <div>
+        <div
+          className={hasChildren ? "directory-node-branch" : undefined}
+          style={hasChildren ? ({ "--directory-branch-indent": `${depth * 12}px` } as CSSProperties) : undefined}
+        >
           {hasChildren ? (
             sortPinnedFirst(node.children!).map((child) => (
               <TreeNode
@@ -466,6 +524,7 @@ function TreeNode({
                 onStartRename={onStartRename}
                 onCommitRename={onCommitRename}
                 onCancelRename={onCancelRename}
+                onCreateNote={onCreateNote}
                 onStartMove={onStartMove}
                 onExport={onExport}
                 onDelete={onDelete}
@@ -659,11 +718,8 @@ export default function DirectoryTree({
     setFolderPickerQuery("");
   }, [expanded]);
 
-  const handleNewFile = useCallback(() => {
+  const createNoteIn = useCallback((parentId: string | null) => {
     const id = generateId();
-    const parentId = selectedFileId
-      ? findParentFolderId(treeData, selectedFileId)
-      : null;
     addNode(parentId, {
       id,
       name: "未命名笔记.md",
@@ -671,9 +727,14 @@ export default function DirectoryTree({
       content: "",
     });
     setSelectedFileId(id);
+    setMenuNodeId(null);
     setNewTooltipOpen(false);
     setNewMenuOpen(false);
-  }, [selectedFileId, treeData, addNode, setSelectedFileId]);
+  }, [addNode, setSelectedFileId]);
+
+  const handleNewFile = useCallback(() => {
+    createNoteIn(selectedFileId ? findParentFolderId(treeData, selectedFileId) : null);
+  }, [createNoteIn, selectedFileId, treeData]);
 
   const handleNewFolder = useCallback(() => {
     const parentId = selectedFileId
@@ -744,13 +805,26 @@ export default function DirectoryTree({
   }, [moveNode, moveTargetId, movingNode, movingNodeParentId]);
 
   const handleExport = useCallback(
-    (node: FileNode) => {
+    async (node: FileNode) => {
       if (node.type !== "file") return;
       setMenuNodeId(null);
       setDeleteTarget(null);
 
       const fileName = node.name.endsWith(".md") ? node.name : `${node.name}.md`;
-      const content = readWorkspaceFileContent(node.id) ?? node.content ?? "";
+      const owner = useAppStore.getState().hydratedUserId;
+      let content = readWorkspaceFileContent(node.id) ?? node.content;
+      if (content === undefined) {
+        try {
+          const note = await getNote(node.id);
+          const state = useAppStore.getState();
+          if (state.hydratedUserId !== owner || note.id !== node.id || !findFileById(state.treeData, node.id)) return;
+          content = readWorkspaceFileContent(node.id) ?? note.content;
+        } catch {
+          const state = useAppStore.getState();
+          if (state.hydratedUserId === owner) state.setWorkspaceError("未能读取笔记正文，请稍后重试导出。");
+          return;
+        }
+      }
       const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
@@ -970,6 +1044,7 @@ export default function DirectoryTree({
                 onStartRename={handleStartRename}
                 onCommitRename={handleCommitRename}
                 onCancelRename={handleCancelRename}
+                onCreateNote={createNoteIn}
                 onStartMove={handleStartMove}
                 onExport={handleExport}
                 onDelete={handleDelete}

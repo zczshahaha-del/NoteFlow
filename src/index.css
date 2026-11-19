@@ -198,6 +198,8 @@ button,
   --directory-row-icon: var(--nf-ui-icon);
   --directory-row-hover: var(--nf-ui-soft);
   --directory-row-selected: var(--nf-ui-accent-soft);
+  --directory-arrow-width: 18px;
+  --directory-arrow-shift: 3px;
 }
 
 .theme-dark .directory-tree .directory-node-list {
@@ -246,11 +248,31 @@ button,
   background: transparent;
 }
 
-.directory-tree .directory-node-arrow,
-.directory-tree .directory-node-slot {
+.directory-tree .directory-node-arrow, .directory-tree .directory-node-slot {
   width: 18px;
   height: 32px;
   color: var(--directory-row-muted);
+}
+
+.directory-tree .directory-node-arrow {
+  width: var(--directory-arrow-width);
+}
+
+.directory-tree .directory-node-arrow svg {
+  translate: var(--directory-arrow-shift) 0;
+}
+
+.directory-tree .directory-node-branch {
+  position: relative;
+}
+
+.directory-tree .directory-node-branch::before {
+  content: "";
+  position: absolute;
+  inset-block: 6px 6px;
+  inset-inline-start: calc(var(--directory-branch-indent) + 5px + var(--directory-arrow-width) / 2 + var(--directory-arrow-shift));
+  border-inline-start: 1px dashed color-mix(in srgb, var(--directory-row-icon) 42%, transparent);
+  pointer-events: none;
 }
 
 .directory-tree .directory-node-icon,
@@ -272,13 +294,32 @@ button,
   background: var(--directory-row-selected);
 }
 
+.directory-tree .directory-node-more[aria-expanded="true"] {
+  background: var(--nf-ui-selected);
+  color: var(--nf-ui-text);
+}
+
+.directory-tree .directory-node-more:focus,
+.directory-tree .nf-directory-context-menu button:focus {
+  box-shadow: none !important;
+}
+
+.directory-tree .directory-node-more:focus-visible,
+.directory-tree .nf-directory-context-menu button:focus-visible {
+  outline: 2px solid var(--nf-ui-focus) !important;
+  outline-offset: -2px;
+}
+
 @media (pointer: coarse) {
+  .directory-tree .directory-node-list { --directory-arrow-width: 44px; }
+
   .directory-tree .directory-node-row,
   .directory-tree .directory-node-open {
     min-height: 44px;
   }
 
-  .directory-tree .directory-node-arrow,
+  .directory-tree .directory-node-arrow { height: 44px; }
+
   .directory-tree .directory-node-more {
     width: 44px;
     height: 44px;
