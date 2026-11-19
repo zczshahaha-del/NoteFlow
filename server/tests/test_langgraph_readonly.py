@@ -54,6 +54,18 @@ class FakeReadonlyTools:
 
 
 class LangGraphReadonlyTest(unittest.TestCase):
+    def test_removed_note_reference_does_not_run_note_retrieval(self) -> None:
+        tools = FakeReadonlyTools()
+        state = new_readonly_state(
+            user_id="owner", question="普通问题", mode="chat", memory_enabled=False,
+            turn_plan={"context_sources": ["current_note", "selected_text", "knowledge_base"]},
+            page_state={"contextScope": "none", "currentNoteId": "old-note", "unsavedContent": "旧笔记正文"},
+        )
+        result = asyncio.run(invoke_readonly_graph(state, dependencies=tools.dependencies()))
+        self.assertEqual(result["route"], "general_chat")
+        self.assertEqual(result["context_text"], "")
+        self.assertEqual(tools.rag_calls, 0)
+
     def test_attached_selection_stays_local_even_if_planner_requests_full_sources(self) -> None:
         captured = []
 

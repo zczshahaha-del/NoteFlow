@@ -104,6 +104,10 @@ def _route_after_validation(state: TurnGraphState) -> str:
     if state.get("error_code"):
         return "error"
     plan = TurnPlan.model_validate(state.get("turn_plan") or {})
+    if "target_draft" in plan.missing_fields:
+        # A draft is chosen by the session binding, never by a guessed name in
+        # a clarification reply. Let the executor explain without parking the chat.
+        return "ready"
     if plan.result == PlanResult.CLARIFY:
         return "clarify"
     if plan.result == PlanResult.UNKNOWN:
