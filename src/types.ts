@@ -31,6 +31,12 @@ export interface ChatPageState {
   contextScope?: "auto" | "current_note" | "knowledge_base" | "selection";
 }
 
+export interface NoteSaveConflict {
+  copyId: string;
+  remoteContent: string;
+  localContent: string;
+}
+
 export interface SelectionSurroundings {
   heading: string;
   before: string;
