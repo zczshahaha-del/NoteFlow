@@ -138,7 +138,8 @@ export function saveLocalSnapshot(
         const noteId = key.slice(prefix.length);
         const content = snapshot.fileContents[noteId];
         // Another tab may have journaled a draft that this snapshot lacks.
-        if (content === undefined || localStorage.getItem(key) === JSON.stringify(content)) localStorage.removeItem(key);
+        if ((content === undefined && !findFileById(snapshot.treeData, noteId)) ||
+            (content !== undefined && localStorage.getItem(key) === JSON.stringify(content))) localStorage.removeItem(key);
       }
     } catch {}
   }

@@ -32,7 +32,7 @@ try {
   seed(['a', 'b']);
   store.getState().reloadWorkspace();
   await reply(await request('/api/categories'), { categories: [] });
-  const refresh = await request('/api/notes?includeDeleted=true');
+  const refresh = await request('/api/notes?includeDeleted=true&includeContent=false');
   store.getState().updateFileContent('a', '刷新期间输入');
   store.getState().setSelectedFileId('b');
   await reply(await request('/api/notes/b'), { note: record('b', '缓存-b') });
@@ -43,14 +43,14 @@ try {
 
   store.getState().reloadWorkspace();
   await reply(await request('/api/categories'), { categories: [] });
-  const stale = await request('/api/notes?includeDeleted=true');
+  const stale = await request('/api/notes?includeDeleted=true&includeContent=false');
   store.setState({ hydratedUserId: 'other', treeData: [], fileContents: {}, selectedFileId: null });
   await reply(stale, { notes: [record('a', '另一个账号旧响应')] });
   assert.deepEqual(store.getState().fileContents, {}, 'No old-user workspace response');
 
   seed(['deleted']);store.getState().reloadWorkspace();
   await reply(await request('/api/categories'), { categories: [] });
-  const beforeDelete = await request('/api/notes?includeDeleted=true');
+  const beforeDelete = await request('/api/notes?includeDeleted=true&includeContent=false');
   store.getState().deleteNode('deleted');
   await reply(beforeDelete, { notes: [record('deleted', '已删除')] });
   assert.equal(store.getState().fileContents.deleted, undefined, 'Refresh cannot resurrect a local deletion');

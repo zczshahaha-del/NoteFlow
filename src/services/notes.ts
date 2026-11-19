@@ -17,6 +17,8 @@ export interface NoteRecord {
   deletedAt: string | null;
 }
 
+export type NoteListRecord = Omit<NoteRecord, "content" | "contentHash"> & Partial<Pick<NoteRecord, "content" | "contentHash">>;
+
 export interface NoteVersionRecord {
   id: string;
   noteId: string;
@@ -99,10 +101,10 @@ export interface NoteUpdatePayload {
 
 export class NoteVersionConflictError extends Error {}
 
-export async function listNotes(includeDeleted = false): Promise<NoteRecord[]> {
-  const response = await apiFetch(`/api/notes${includeDeleted ? "?includeDeleted=true" : ""}`);
+export async function listNotes(includeDeleted = false): Promise<NoteListRecord[]> {
+  const response = await apiFetch(`/api/notes?${includeDeleted ? "includeDeleted=true&" : ""}includeContent=false`);
   if (!response.ok) throw new Error(await readApiError(response));
-  const data = await readApiJson<{ notes: NoteRecord[] }>(response);
+  const data = await readApiJson<{ notes: NoteListRecord[] }>(response);
   return data.notes;
 }
 

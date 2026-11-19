@@ -338,6 +338,11 @@ function mergeWorkspaceRefresh(remote: KnowledgeBaseSnapshot, started: Knowledge
       node.updatedAt = latest.node.updatedAt;
       node.indexStatus = 'outdated';
       remote.fileContents[id] = node.content;
+    } else if (latest.node.type === 'file' && node.content === undefined &&
+               node.updatedAt && node.updatedAt === latest.node.updatedAt && current.fileContents[id] !== undefined) {
+      node.content = current.fileContents[id];
+      node.contentHash = latest.node.contentHash;
+      remote.fileContents[id] = node.content;
     }
     for (const field of ['name', 'pinned', 'favorite', 'tags'] as const) {
       if (pendingNodes.has(id) || (previous && latest.node[field] !== previous.node[field])) Object.assign(node, { [field]: latest.node[field] });
@@ -2932,6 +2937,9 @@ async function loadStructuredWorkspace(userId: string, preferredSelectedFileId?:
         current.selectedFileId !== started.selectedFileId ? current.selectedFileId : preferredSelectedFileId ?? current.selectedFileId
       );
       useAppStore.getState().replaceSnapshot(snapshot);
+      if (snapshot.selectedFileId && snapshot.fileContents[snapshot.selectedFileId] === undefined) {
+        void readOpenedNote(snapshot.selectedFileId);
+      }
       useAppStore.setState({
         deletedNotes: allNotes
           .filter((note) => note.deletedAt)
@@ -2990,6 +2998,16 @@ export function AppProvider({
   userId: string;
 }) {
   const hydratedUserId = useAppStore((state) => state.hydratedUserId);
+  const unopenedNoteId = useAppStore((state) => {
+    const id = state.selectedFileId;
+    return id && state.fileContents[id] === undefined && findFileById(state.treeData, id)?.content === undefined ? id : null;
+  });
+
+  useEffect(() => {
+    if (hydratedUserId === userId && unopenedNoteId && !noteOpenRequests.has(unopenedNoteId)) {
+      void readOpenedNote(unopenedNoteId);
+    }
+  }, [hydratedUserId, unopenedNoteId, userId]);
 
   useEffect(() => {
     useAppStore.getState().hydrate(userId);

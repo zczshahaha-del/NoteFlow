@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import math
 import re
 import time
-from dataclasses import dataclass, field
+from collections import OrderedDict
+from dataclasses import dataclass, field, replace
 from typing import Any, Awaitable, Callable
 
 from sqlalchemy import select, text
@@ -17,8 +17,6 @@ from app.services.embeddings import embed_texts, embedding_enabled
 from app.services.note_library import QueryUnderstanding, understand_note_query
 from app.services.pgvector import vector_literal
 
-
-_BM25_SCORE_CACHE: dict[str, tuple[float, list[float]]] = {}
 
 
 @dataclass
@@ -217,26 +215,83 @@ def _fallback_bm25(query_tokens: list[str], documents: list[list[str]]) -> list[
     return scores
 
 
-def _bm25s_scores(query_tokens: list[str], document_tokens: list[list[str]]) -> list[float]:
-    """Use bm25s in production, retaining a deterministic test fallback."""
+@dataclass
+class _Bm25Corpus:
+    revision: tuple
+    expires_at: float
+    nodes: list[RetrievalCandidate]
+    tokens: list[list[str]]
+    index: Any
 
-    try:
-        import bm25s
 
-        corpus = [" ".join(tokens) for tokens in document_tokens]
-        corpus_tokens = bm25s.tokenize(corpus, stopwords=[], show_progress=False)
-        retriever = bm25s.BM25()
-        retriever.index(corpus_tokens, show_progress=False)
-        query = bm25s.tokenize(" ".join(query_tokens), stopwords=[], show_progress=False)
-        indexes, values = retriever.retrieve(query, k=len(corpus), show_progress=False)
-        scores = [0.0] * len(corpus)
-        index_row = indexes[0].tolist() if hasattr(indexes[0], "tolist") else list(indexes[0])
-        value_row = values[0].tolist() if hasattr(values[0], "tolist") else list(values[0])
-        for index, value in zip(index_row, value_row):
-            scores[int(index)] = float(value)
-        return scores
-    except (ImportError, AttributeError, TypeError, ValueError, IndexError):
-        return _fallback_bm25(query_tokens, document_tokens)
+_BM25_CORPORA: OrderedDict[tuple[str, str | None], _Bm25Corpus] = OrderedDict()
+
+
+async def _corpus_revision(user_id: str, note_id: str | None) -> tuple:
+    # Check source versions and visible membership without reading chunks.
+    query = (
+        select(Note.id, Note.title, RagIndexState.source_version, RagIndexState.updated_at)
+        .join(RagIndexState, RagIndexState.note_id == Note.id)
+        .where(Note.user_id == user_id, Note.deleted_at.is_(None), RagIndexState.user_id == user_id,
+               RagIndexState.status == "indexed")
+        .order_by(Note.id)
+    )
+    if note_id:
+        query = query.where(Note.id == note_id)
+    async with AsyncSessionLocal() as session:
+        return tuple((await session.execute(query)).all())
+
+
+def _build_corpus(nodes: list[RetrievalCandidate], revision: tuple, now: float) -> _Bm25Corpus:
+    tokens = [tokenize("\n".join([node.note_title, " / ".join(node.section_path), node.content])) for node in nodes]
+    index = None
+    if nodes:
+        try:
+            import bm25s
+
+            text = [" ".join(document) for document in tokens]
+            retriever = bm25s.BM25()
+            retriever.index(bm25s.tokenize(text, stopwords=[], show_progress=False), show_progress=False)
+            index = retriever
+        except (ImportError, AttributeError, TypeError, ValueError, IndexError):
+            pass
+    return _Bm25Corpus(revision, now + cfg.RAG_QUERY_CACHE_TTL_SECONDS, nodes, tokens, index)
+
+
+def _score_corpus(corpus: _Bm25Corpus, query_tokens: list[str]) -> list[float]:
+    if corpus.index is not None and query_tokens:
+        try:
+            import bm25s
+
+            query = bm25s.tokenize(" ".join(query_tokens), stopwords=[], show_progress=False)
+            indexes, values = corpus.index.retrieve(query, k=len(corpus.nodes), show_progress=False)
+            scores = [0.0] * len(corpus.nodes)
+            for index, value in zip(indexes[0], values[0]):
+                scores[int(index)] = float(value)
+            return scores
+        except (AttributeError, TypeError, ValueError, IndexError):
+            pass
+    return _fallback_bm25(query_tokens, corpus.tokens)
+
+
+async def _get_corpus(user_id: str, note_id: str | None) -> _Bm25Corpus:
+    key = (user_id, note_id)
+    now = time.monotonic()
+    enabled = cfg.RAG_QUERY_CACHE_TTL_SECONDS > 0
+    revision = await _corpus_revision(user_id, note_id) if enabled else ()
+    cached = _BM25_CORPORA.get(key)
+    if enabled and cached is not None and cached.expires_at > now and cached.revision == revision:
+        _BM25_CORPORA.move_to_end(key)
+        return cached
+    _BM25_CORPORA.pop(key, None)
+    nodes = await _visible_nodes(user_id, note_id=note_id)
+    corpus = await asyncio.to_thread(_build_corpus, nodes, revision, now)
+    # Keep a bounded amount of document text per process.
+    if enabled and len(nodes) <= 6000 and sum(len(node.content) for node in nodes) <= 4_000_000:
+        _BM25_CORPORA[key] = corpus
+        while len(_BM25_CORPORA) > 4:
+            _BM25_CORPORA.popitem(last=False)
+    return corpus
 
 
 async def bm25_retrieve(
@@ -246,37 +301,16 @@ async def bm25_retrieve(
     note_id: str | None = None,
     limit: int = 40,
 ) -> list[RetrievalCandidate]:
-    nodes = await _visible_nodes(user_id, note_id=note_id)
+    corpus = await _get_corpus(user_id, note_id)
     query_tokens = tokenize(" ".join(query_plan.rewritten_queries if cfg.RAG_REWRITE_ENABLED else [query_plan.search_query]))
-    documents = [tokenize("\n".join([node.note_title, " / ".join(node.section_path), node.content])) for node in nodes]
-    fingerprint = hashlib.sha256(
-        "|".join([user_id, note_id or "*", *(node.node_id for node in nodes), " ".join(query_tokens)]).encode()
-    ).hexdigest()
-    now = time.monotonic()
-    cached = _BM25_SCORE_CACHE.get(fingerprint)
-    if cached is not None and cached[0] > now:
-        scores = list(cached[1])
-    else:
-        scores = await asyncio.to_thread(_bm25s_scores, query_tokens, documents)
-        if cfg.RAG_QUERY_CACHE_TTL_SECONDS > 0:
-            if len(_BM25_SCORE_CACHE) >= 512:
-                oldest = min(_BM25_SCORE_CACHE, key=lambda key: _BM25_SCORE_CACHE[key][0])
-                _BM25_SCORE_CACHE.pop(oldest, None)
-            _BM25_SCORE_CACHE[fingerprint] = (now + cfg.RAG_QUERY_CACHE_TTL_SECONDS, list(scores))
+    scores = await asyncio.to_thread(_score_corpus, corpus, query_tokens)
     informative_query = {token for token in query_tokens if len(token) >= 2}
-    ranked = sorted(zip(nodes, documents, scores), key=lambda item: item[2], reverse=True)
+    ranked = sorted(zip(corpus.nodes, corpus.tokens, scores), key=lambda item: item[2], reverse=True)
     results: list[RetrievalCandidate] = []
-    for node, document_tokens, score in ranked:
-        if score <= 0:
+    for node, tokens, score in ranked:
+        if score <= 0 or (informative_query and not informative_query.intersection(tokens)):
             continue
-        # Chinese unigram overlap is too weak to be evidence (for example a
-        # shared “是” must not turn an unrelated note into an answer).
-        if informative_query and not informative_query.intersection(document_tokens):
-            continue
-        node.score = float(score)
-        node.channels = ["bm25"]
-        node.scores = {"bm25": round(float(score), 6)}
-        results.append(node)
+        results.append(replace(node, score=float(score), channels=["bm25"], scores={"bm25": round(float(score), 6)}))
         if len(results) >= limit:
             break
     return results
@@ -440,6 +474,6 @@ async def retrieve_candidates(
             "permissionFilter": {"userIdApplied": True, "deletedApplied": True, "sourceVersionApplied": True, "noteIdApplied": bool(note_id)},
             "channels": channel_trace,
             "rrf": {"k": cfg.RAG_RRF_K, "candidateCount": len(fused)},
-            "cache": {"bm25Scores": True, "ttlSeconds": cfg.RAG_QUERY_CACHE_TTL_SECONDS},
+            "cache": {"bm25Corpus": True, "ttlSeconds": cfg.RAG_QUERY_CACHE_TTL_SECONDS},
         },
     )
