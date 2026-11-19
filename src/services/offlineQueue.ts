@@ -36,9 +36,10 @@ async function withStore<T>(
   const database = await openDatabase();
   return new Promise<T>((resolve, reject) => {
     const transaction = database.transaction(STORE_NAME, mode);
-    operation(transaction.objectStore(STORE_NAME), resolve, reject);
-    transaction.oncomplete = () => database.close();
-    transaction.onerror = () => reject(transaction.error ?? new Error("离线存储事务失败"));
+    let result: T;
+    operation(transaction.objectStore(STORE_NAME), value => { result = value; }, reject);
+    transaction.oncomplete = () => { database.close(); resolve(result); };
+    transaction.onabort = () => { database.close(); reject(transaction.error ?? new Error("离线存储事务失败")); };
   });
 }
 

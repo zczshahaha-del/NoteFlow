@@ -99,6 +99,10 @@ export async function publicApiFetch(path: string, init: RequestInit = {}): Prom
 }
 
 export async function readApiError(response: Response): Promise<string> {
+  if (response.status === 429) {
+    const seconds = response.headers.get("Retry-After") ?? "";
+    if (/^\d{1,8}$/.test(seconds)) return `请求太频繁，请在 ${Number(seconds)} 秒后重试。`;
+  }
   // Reverse proxies may return plain English or an HTML error page rather than
   // our JSON contract. Never expose that infrastructure response as UI copy.
   const gatewayMessage = response.status === 502 || response.status === 504 ? "暂时连接不上服务，请稍后重试。"

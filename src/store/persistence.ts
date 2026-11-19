@@ -1,7 +1,7 @@
 import type { KnowledgeBaseSnapshot } from "../services/knowledgeBase";
 import type { FileNode } from "../types";
 import { findFileById } from "../workspaceTree";
-import { updateFileContentInTree } from "./tree";
+import { updateFileContentInTree, updateFileMetadata } from "./tree";
 
 const BUNDLED_DEMO_FILE_IDS = new Set([
   "redis-cache-3-problems",
@@ -33,14 +33,52 @@ function saveToStorage(key: string, value: unknown) {
 // A synchronous, per-note journal: typing never serializes other notes, and there
 // is no debounce window in which closing the tab would lose the last characters.
 function draftPrefix(userId: string) { return userStorageKey(userId, "note-draft:"); }
-export function saveLocalNoteContent(userId: string, noteId: string, content: string) {
-  return saveToStorage(draftPrefix(userId) + noteId, content);
+interface NoteEditBase { updatedAt: string | null; contentHash: string | null }
+interface PendingNoteEdit extends NoteEditBase { content: string }
+
+function pendingEdit(value: unknown): PendingNoteEdit | null {
+  if (!value || typeof value !== "object" || !("content" in value) || typeof value.content !== "string") return null;
+  const { content, updatedAt, contentHash } = value as PendingNoteEdit;
+  return { content, updatedAt: typeof updatedAt === "string" ? updatedAt : null,
+    contentHash: typeof contentHash === "string" ? contentHash : null };
+}
+
+export function saveLocalNoteContent(userId: string, noteId: string, content: string, base?: NoteEditBase) {
+  return saveToStorage(draftPrefix(userId) + noteId, base ? { ...base, content } : content);
+}
+
+export function rebaseLocalNoteContent(userId: string, noteId: string, content: string, base: NoteEditBase) {
+  const previous = pendingEdit(loadFromStorage<unknown>(draftPrefix(userId) + noteId, null));
+  if (previous?.content === content) saveLocalNoteContent(userId, noteId, content, base);
+}
+
+export function hasPendingLocalNoteContent(userId: string, noteId: string, content: string) {
+  return pendingEdit(loadFromStorage<unknown>(draftPrefix(userId) + noteId, null))?.content === content;
+}
+
+export function loadPendingNoteEdits(userId: string, tree: FileNode[]): Map<string, PendingNoteEdit> {
+  const edits = new Map<string, PendingNoteEdit>();
+  const visit = (nodes: FileNode[]) => {
+    for (const node of nodes) {
+      if (node.type === "file") {
+        const value = loadFromStorage<unknown>(draftPrefix(userId) + node.id, null);
+        const edit = typeof value === "string" ? {
+          content: value, updatedAt: node.updatedAt ?? null, contentHash: node.contentHash ?? null,
+        } : pendingEdit(value);
+        if (edit && typeof value === "string") saveLocalNoteContent(userId, node.id, value, edit);
+        if (edit) edits.set(node.id, edit);
+      } else if (node.children) visit(node.children);
+    }
+  };
+  visit(tree);
+  return edits;
 }
 
 export function clearLocalNoteContentIfMatches(userId: string, noteId: string, content: string) {
   try {
     const key = draftPrefix(userId) + noteId;
-    if (localStorage.getItem(key) === JSON.stringify(content)) localStorage.removeItem(key);
+    const item = loadFromStorage<unknown>(key, null);
+    if (item === content || pendingEdit(item)?.content === content) localStorage.removeItem(key);
   } catch {}
 }
 
@@ -97,10 +135,15 @@ export function loadLocalSnapshot(userId: string): KnowledgeBaseSnapshot {
   const restore = (nodes: FileNode[]) => {
     for (const node of nodes) {
       if (node.type === "file") {
-        const content = loadFromStorage<unknown>(draftPrefix(userId) + node.id, null);
+        const value = loadFromStorage<unknown>(draftPrefix(userId) + node.id, null);
+        const edit = pendingEdit(value);
+        const content = edit?.content ?? value;
         if (typeof content === "string") {
           fileContents[node.id] = content;
           treeData = updateFileContentInTree(treeData, node.id, content);
+          if (edit) treeData = updateFileMetadata(treeData, node.id, {
+            updatedAt: edit.updatedAt ?? undefined, contentHash: edit.contentHash ?? undefined,
+          });
         }
       } else if (node.children) restore(node.children);
     }
@@ -139,7 +182,7 @@ export function saveLocalSnapshot(
         const content = snapshot.fileContents[noteId];
         // Another tab may have journaled a draft that this snapshot lacks.
         if ((content === undefined && !findFileById(snapshot.treeData, noteId)) ||
-            (content !== undefined && localStorage.getItem(key) === JSON.stringify(content))) localStorage.removeItem(key);
+            (content !== undefined && loadFromStorage<unknown>(key, null) === content)) localStorage.removeItem(key);
       }
     } catch {}
   }

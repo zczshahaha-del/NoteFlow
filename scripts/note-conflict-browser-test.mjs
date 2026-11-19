@@ -56,6 +56,7 @@ const puts = [];
 let holdRead = false;
 let releaseRead;
 let shouldFailCopy = true;
+let offlineApi = false;
 const browser = await chromium.launch({ executablePath: process.env.NOTEFLOW_BROWSER_EXECUTABLE || undefined, headless: true });
 try {
   const context = await browser.newContext({ viewport: { width: 1280, height: 850 } });
@@ -69,6 +70,7 @@ try {
     if (url.hostname !== "noteflow.test") { errors.push(url.origin); return route.abort(); }
     if (url.pathname === "/") return route.fulfill({ body: html, contentType: "text/html" });
     if (url.pathname === "/bundle.js") return route.fulfill({ body: code, contentType: "text/javascript" });
+    if (offlineApi && url.pathname.startsWith("/api/")) return route.abort("internetdisconnected");
     if (url.pathname === "/api/categories") return reply({ categories: [] });
     if (url.pathname === "/api/chat-sessions") return reply({ sessions: [] });
     if (url.pathname === "/api/knowledge-base") return reply({});
@@ -189,8 +191,23 @@ try {
     await removeOfflineNoteEdit(newer);
     return remaining.map(item => item.content);
   }), ["新离线内容"], "Finishing an older sync cannot remove newer queued text");
+  await text(a).getByText("A 页第二次修改").waitFor();
+  offlineApi = true;
+  await context.setOffline(true);
+  await edit(a, "断网后立即刷新要保留这行");
+  await a.reload();
+  await text(a).getByText("断网后立即刷新要保留这行").waitFor();
+  await a.getByText("正文已留在本机，等待同步").waitFor();
+  assert.equal(original.content, "A 页第二次修改");
+  offlineApi = false;
+  await context.setOffline(false);
+  await saved(a);
+  assert.equal(original.content, "断网后立即刷新要保留这行");
+  assert.equal(puts.filter(put => put.content === original.content).length, 1);
+  await a.reload();
+  await text(a).getByText("断网后立即刷新要保留这行").waitFor();
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ lazyBodyRead: true, cleanRefresh: true, lateRefreshDuringTyping: true, copyFailureRetry: true, versionsPreserved: true, comparison: true, compactViewport: true }));
+  console.log(JSON.stringify({ lazyBodyRead: true, cleanRefresh: true, lateRefreshDuringTyping: true, copyFailureRetry: true, versionsPreserved: true, comparison: true, compactViewport: true, offlineReloadAndSync: true }));
 
   async function expectReply() {
     for (let i = 0; !releaseRead && i < 80; i++) await new Promise(resolve => setTimeout(resolve, 25));

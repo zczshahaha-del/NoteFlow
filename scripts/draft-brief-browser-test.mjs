@@ -25,7 +25,10 @@ window.briefTest=f;
 window.fetch=async(input,options={})=>{const url=String(input),method=options.method||'GET',body=options.body?JSON.parse(options.body):null;f.calls.push({url,method,body});const result=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json'}});
 if(url.includes('/bind')){Object.assign(f.checkpoint.payload,body.payload||{});if(body.draftId)f.checkpoint.payload.draftId=body.draftId;return result({checkpoint:structuredClone(f.checkpoint)});}
 if(url==='/api/note-drafts'&&method==='POST'){if(f.writeFail){f.writeFail=false;return result({error:{message:'合成保存失败'}},503);}f.draft={...body,id:'draft-brief',status:'outline_ready',bodyInstruction:'',assembledContent:'',sections:body.sections.map((s,i)=>({...s,id:'section-'+i,content:'',status:'outline_only'}))};return result({draft:structuredClone(f.draft)});}
-if(url==='/api/note-drafts/draft-brief'&&method==='GET')return result({draft:structuredClone(f.draft)});
+if(url==='/api/note-drafts/draft-brief'&&method==='GET'){
+ if(f.progressReadFails){f.progressReadFails=false;return result({},503);}
+ return result({draft:structuredClone(f.draft)});
+}
 if(url==='/api/agent/chat'){
  const events=[{type:'agent_session',sessionId:'session-brief',runId:'run-revise',intent:'note_draft_continue'},
  {type:'tool_action',toolName:'note_draft_tool',action:'revise_body',payload:{draftId:f.draft.id,checkpointId:f.checkpoint.id,checkpoint:f.checkpoint,seed:f.checkpoint.payload.seed,expectedUpdatedAt:f.draft.updatedAt,feedback:body.question}}];
@@ -191,6 +194,21 @@ try {
       await shell.getByRole('alert').getByText('这次修改没有生成完整正文，原草稿已保留。').waitFor();
       assert.equal(await page.evaluate(()=>window.briefTest.calls.filter(call=>call.url.endsWith('/assemble')).length),1);
       await button(shell.locator('main'),'关闭草稿工作台').click();
+      await page.evaluate(()=>{
+        const f=window.briefTest;
+        f.root.unmount();
+        f.draft.status='generating';
+        f.draft.sections[0]={...f.draft.sections[0],content:'## 教学目标\n\n重启前完成的章节。',status:'confirmed'};
+        f.store.setState({centerMode:'draft',activeDraftContext:null});
+        f.mount();
+      });
+      await shell.getByText('重启前完成的章节。',{exact:true}).waitFor();
+      await page.evaluate(()=>{window.briefTest.progressReadFails=true;});
+      const progressError=shell.getByText('暂时连不上服务，正在重新获取进度。已写完的章节会保留。');
+      await progressError.waitFor();
+      await shell.getByText('重启前完成的章节。',{exact:true}).waitFor();
+      await progressError.waitFor({state:'hidden'});
+      await button(shell.locator('main'),'关闭草稿工作台').click();
     }
     // New topic is a separate brief; old content/requirements cannot become its supplement.
     await page.evaluate(()=>{const f=window.briefTest;f.root.unmount();f.oldDraft=structuredClone(f.draft);f.draft=null;f.writeFail=true;f.store.getState().startDraft('加法笔记');f.mount();});
@@ -203,7 +221,7 @@ try {
     assert.equal(await page.evaluate(()=>window.briefTest.draft.bodyInstruction),'');
     assert.equal(await page.evaluate(()=>window.briefTest.oldDraft.bodyInstruction),'改成两课时，增加板书设计。');
     assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
-    results.push({viewportWidth:width,initialGeometry,manualApproval:true,snapshot:true,doubleClick:true,taskLocked:true,supplementCombined:true,workspaceReplan:width===1280,followUp:width===1280,checkpointRestore:true,newTaskIsolated:true,saveFailureRetry:true,...geometry});
+    results.push({viewportWidth:width,initialGeometry,manualApproval:true,snapshot:true,doubleClick:true,taskLocked:true,supplementCombined:true,workspaceReplan:width===1280,followUp:width===1280,progressReconnect:width===1280,checkpointRestore:true,newTaskIsolated:true,saveFailureRetry:true,...geometry});
     await context.close();
   }
 } finally {await browser.close();}

@@ -96,7 +96,8 @@ def redis_rate_limit(prefix: str, limit: int, window_seconds: int = 60):
         if limit <= 0:
             return user
 
-        bucket = int(time.time()) // window_seconds
+        now = int(time.time())
+        bucket = now // window_seconds
         key = f"noteflow:rate:{prefix}:{user.id}:{bucket}"
         if db.redis_client is not None:
             try:
@@ -110,8 +111,8 @@ def redis_rate_limit(prefix: str, limit: int, window_seconds: int = 60):
         if count > limit:
             raise HTTPException(
                 status_code=429,
-                detail="AI 请求较多，请稍等十几秒后重试。",
-                headers={"Retry-After": str(window_seconds)},
+                detail="AI 请求太频繁，请稍后重试。",
+                headers={"Retry-After": str((bucket + 1) * window_seconds - now)},
             )
 
         return user

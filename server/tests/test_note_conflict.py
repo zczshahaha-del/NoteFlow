@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from datetime import datetime
 
-from app.routers.notes import _has_note_version_conflict
+from app.services.note_write import has_note_version_conflict as _has_note_version_conflict
 
 
 class NoteConflictTest(unittest.TestCase):

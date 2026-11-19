@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from datetime import datetime
 from typing import Literal, Optional
 
@@ -12,6 +11,10 @@ from app.models.db import Note, NoteCategory, NoteIndexJob, NoteSection, NoteVer
 from app.repositories.index_jobs import IndexJobRepository
 from app.repositories.notes import NoteRepository
 from app.services.markdown_index import index_note_now
+from app.services.note_write import (
+    NoteChanges, NoteWriteError, apply_note_changes, clean_note_title as _clean_title,
+    content_hash as _content_hash, make_note_version as _make_version,
+)
 from app.services.note_library import (
     build_note_context,
     hybrid_search_notes,
@@ -118,27 +121,6 @@ class ReadSectionsPayload(BaseModel):
 
 def _now() -> datetime:
     return datetime.utcnow()
-
-
-def _has_note_version_conflict(expected_updated_at: Optional[str], current_updated_at: Optional[datetime]) -> bool:
-    return bool(
-        expected_updated_at
-        and current_updated_at
-        and expected_updated_at != current_updated_at.isoformat()
-    )
-
-
-def _content_hash(content: str) -> str:
-    return hashlib.sha256((content or "").encode("utf-8")).hexdigest()
-
-
-def _has_note_content_conflict(expected_content_hash: Optional[str], current_content: str) -> bool:
-    return bool(expected_content_hash and expected_content_hash != _content_hash(current_content))
-
-
-def _clean_title(value: str) -> str:
-    title = value.strip().removesuffix(".md").strip()
-    return title[:255] or "未命名笔记"
 
 
 def _clean_category_name(value: str) -> str:
@@ -272,18 +254,6 @@ async def _get_category(
 
 async def _descendant_category_ids(session, user_id: str, category_id: str) -> set[str]:
     return await NoteRepository(session).descendant_category_ids(user_id, category_id)
-
-
-def _make_version(note: Note, source: str, change_summary: Optional[str]) -> NoteVersion:
-    return NoteVersion(
-        id=random_id(),
-        note_id=note.id,
-        user_id=note.user_id,
-        title=note.title,
-        content=note.content or "",
-        change_summary=change_summary,
-        source=source or "manual_edit",
-    )
 
 
 @router.get("/categories")
@@ -583,55 +553,20 @@ async def update_note(
     payload: NoteUpdatePayload,
     user: CurrentUser = Depends(get_current_user),
 ):
+    changes = NoteChanges(
+        title=payload.title, category_id=payload.categoryId,
+        category_provided="categoryId" in payload.model_fields_set, summary=payload.summary,
+        tags=payload.tags, content=payload.content, pinned=payload.isPinned, favorite=payload.isFavorite,
+        index_status=payload.indexStatus, source=payload.source, change_summary=payload.changeSummary,
+        expected_updated_at=payload.expectedUpdatedAt, expected_content_hash=payload.expectedContentHash,
+    )
     async with AsyncSessionLocal() as session:
-        note = await _get_note(session, user.id, note_id, include_deleted=True, for_update=True)
-        if note.deleted_at is not None:
-            raise HTTPException(status_code=409, detail="note is deleted")
-        category_provided = "categoryId" in payload.model_fields_set
-        if category_provided and payload.categoryId is not None:
-            await _ensure_category(session, user.id, payload.categoryId)
-
-        content_conflict = (
-            _has_note_content_conflict(payload.expectedContentHash, note.content or "")
-            if payload.expectedContentHash
-            else _has_note_version_conflict(payload.expectedUpdatedAt, note.updated_at)
-        )
-        if content_conflict:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "NOTE_VERSION_CONFLICT",
-                    "message": "笔记已在其他设备更新，请先处理同步冲突。",
-                    "currentUpdatedAt": note.updated_at.isoformat(),
-                    "currentContentHash": _content_hash(note.content or ""),
-                },
-            )
-
-        content_changed = payload.content is not None and payload.content != (note.content or "")
-        if content_changed:
-            session.add(_make_version(note, payload.source, payload.changeSummary))
-            note.content = payload.content or ""
-            note.index_status = payload.indexStatus or "pending"
-
-        if payload.title is not None:
-            note.title = _clean_title(payload.title)
-        if category_provided:
-            note.category_id = payload.categoryId
-        if payload.summary is not None:
-            note.summary = payload.summary
-        if payload.tags is not None:
-            note.tags = payload.tags
-        if payload.isPinned is not None:
-            note.is_pinned = payload.isPinned
-        if payload.isFavorite is not None:
-            note.is_favorite = payload.isFavorite
-        if payload.indexStatus is not None and not content_changed:
-            note.index_status = payload.indexStatus
-
-        if content_changed:
-            await index_note_now(session, note)
-
-        return {"note": await _commit_note(session, note)}
+        try:
+            note = await apply_note_changes(session, user.id, note_id, changes)
+        except NoteWriteError as error:
+            status = 404 if error.code in {"note_missing", "category_missing"} else 409
+            raise HTTPException(status_code=status, detail=error.detail) from error
+        return {"note": _note_out(note)}
 
 
 @router.delete("/notes/{note_id}")

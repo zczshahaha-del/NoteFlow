@@ -55,7 +55,7 @@ try {
   assert.equal(loadLocalSnapshot('two').fileContents.a, '旧内容', 'Corrupt journal falls back to baseline');
   const store = readFileSync(new URL('../src/store/index.tsx', import.meta.url), 'utf8');
   const action = store.slice(store.indexOf('  updateFileContent: (id, content) =>'), store.indexOf('  sendMessage: async'));
-  assert(action.includes('saveLocalNoteContent(userId, id, content)'));
+  assert(action.includes('saveLocalNoteContent(userId, id, content,'));
   assert(!action.includes('persistLocalCurrentState()'));
   const provider = store.slice(store.indexOf('export function AppProvider('));
   assert(!provider.includes('saveLocalSnapshot('), 'Provider must not duplicate whole snapshots on input');
@@ -83,7 +83,7 @@ try {
   assert.equal(runtimeWrites.length,17,'Mounted provider must not duplicate input writes');
   assert(runtimeWrites.every(key=>key==='noteflow:runtime:note-draft:a'));
   window.dispatchEvent(new dom.window.Event('pagehide'));
-  assert.equal(localStorage.getItem('noteflow:runtime:note-draft:a'),null);
+  assert.equal(JSON.parse(localStorage.getItem('noteflow:runtime:note-draft:a')).content,'挂载后输入'.repeat(17));
   assert.equal(JSON.parse(localStorage.getItem('noteflow:runtime:file-contents')).a,'挂载后输入'.repeat(17),'Legacy baseline is current when leaving / rolling back');
   await React.act(async()=>useAppStore.setState({treeData:[{...snapshot.treeData[0],name:'回滚后的目录'}]}));
   assert.equal(loadLocalSnapshot('runtime').treeData[0].name,'回滚后的目录','Unmanaged metadata / rollback changes still persist');

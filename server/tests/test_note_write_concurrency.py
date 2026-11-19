@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.deps import CurrentUser
 from app.models.db import Base, Note, NoteCategory, NoteEditPreview, NoteIndexJob, NoteSection, NoteVersion, User
 from app.routers import edits, notes
+from app.services import note_write
 
 DATABASE_URL = os.getenv("NOTEFLOW_NOTE_CONCURRENCY_DB_URL")
 BASE_CONTENT = "原始正文"
@@ -124,7 +125,7 @@ class NoteWriteConcurrencyTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual({job.source_version for job in jobs}, {notes._content_hash(winner)})
 
     async def test_two_devices_cannot_both_save_the_same_base(self):
-        await self.assert_conflict_after(notes, lambda: self.save("设备一的正文"), "设备一的正文")
+        await self.assert_conflict_after(note_write, lambda: self.save("设备一的正文"), "设备一的正文")
 
     async def test_manual_save_conflicts_with_version_restore(self):
         version_id = f"version-{self.user.id}"

@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from app.deps import CurrentUser
 from app.models.db import User, Note, NoteCategory, NoteVersion, NoteIndexJob, NoteDraft, NoteDraftSection, NoteDraftSectionVersion, NoteEditPreview
 from app.routers import agent, drafts, notes
-from app.services import draft_save, draft_worker
+from app.services import draft_save, draft_worker, note_write
 from app.services.heading_number_repair import repair_heading_numbers, content_hash
 from app.services import heading_number_repair
 
@@ -110,7 +110,7 @@ class GeneratedHeadingLifecycleTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("idempotentReplay", saved)
         self.assertTrue(replay["idempotentReplay"])
         edited = content.replace("### 3.1 示例", "### 示例")
-        with patch.object(notes, "index_note_now", AsyncMock()):
+        with patch.object(note_write, "index_note_now", AsyncMock()):
             await notes.update_note(saved["note"]["id"], notes.NoteUpdatePayload(content=edited, expectedContentHash=saved["note"]["contentHash"]), self.user)
         async with self.sessions() as session:
             reopened = await session.get(Note, saved["note"]["id"])

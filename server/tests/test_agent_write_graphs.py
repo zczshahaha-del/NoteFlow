@@ -183,11 +183,6 @@ class DraftGraphTest(unittest.TestCase):
     def test_revision_sections_remain_claimable_by_background_worker(self) -> None:
         self.assertIn("needs_revision", _PENDING_SECTION_STATUSES)
 
-    def test_worker_recovers_stale_jobs_before_accepting_new_work(self) -> None:
-        source = (Path(__file__).parents[1] / "app/services/draft_worker.py").read_text()
-        self.assertIn("await _recover_stale_generation_jobs()", source)
-        self.assertIn('job["status"] = "interrupted"', source)
-
     def test_worker_persists_nested_generation_job_updates(self) -> None:
         draft = SimpleNamespace(draft_config={"generationJob": {"status": "queued", "attempts": {}}})
         job = _job_config(draft)

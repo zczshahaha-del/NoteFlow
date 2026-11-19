@@ -3,13 +3,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
+from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.services.prompt_templates import render_prompt
 from app.config import cfg
-from app.database import AsyncSessionLocal
+from app.database import AsyncSessionLocal, engine
 from app.models.db import NoteDraft, NoteDraftSection
 from app.services.ai import ERR_RATE_LIMITED, complete_chat
 from app.services.prompts import NoteGenerateRequest, build_note_generate_prompt
@@ -21,7 +22,7 @@ _worker_task: asyncio.Task | None = None
 _wake_event: asyncio.Event | None = None
 _stop_event: asyncio.Event | None = None
 _active_claim_tasks: dict[str, asyncio.Task] = {}
-_STALE_GENERATION_AFTER = timedelta(minutes=30)
+_DRAFT_WORKER_LOCK = 1_289_786_611
 _PENDING_SECTION_STATUSES = {"outline_only", "failed", "generating", "needs_revision"}
 
 
@@ -56,28 +57,17 @@ def reset_interrupted_sections(sections: list[NoteDraftSection]) -> None:
             section.status = "generated" if (section.content or "").strip() else "outline_only"
 
 
-def _job_updated_at(draft: NoteDraft) -> datetime:
-    raw_value = str(
-        ((draft.draft_config or {}).get("generationJob") or {}).get("updatedAt") or ""
-    ).strip()
-    if raw_value:
-        try:
-            return datetime.fromisoformat(raw_value.replace("Z", "+00:00")).replace(tzinfo=None)
-        except ValueError:
-            pass
-    return draft.updated_at or draft.created_at or _now()
-
-
-async def _recover_stale_generation_jobs() -> int:
+async def _resume_interrupted_jobs() -> int:
     recovered = 0
-    cutoff = _now() - _STALE_GENERATION_AFTER
     async with AsyncSessionLocal() as session:
         async with session.begin():
             result = await session.execute(
                 select(NoteDraft).where(NoteDraft.status == "generating").with_for_update()
             )
             for draft in result.scalars().all():
-                if _job_updated_at(draft) >= cutoff:
+                job = _job_config(draft)
+                interrupted_id = job.get("currentSectionId")
+                if job.get("status") != "generating" or job.get("cancelRequested") or not interrupted_id:
                     continue
                 sections_result = await session.execute(
                     select(NoteDraftSection).where(
@@ -85,20 +75,20 @@ async def _recover_stale_generation_jobs() -> int:
                         NoteDraftSection.user_id == draft.user_id,
                     )
                 )
-                sections = list(sections_result.scalars().all())
-                reset_interrupted_sections(sections)
-                job = _job_config(draft)
-                job["status"] = "interrupted"
-                job["cancelRequested"] = False
-                job["error"] = "上次后台生成已中断，请点击全部生成继续。"
+                for section in sections_result.scalars():
+                    if section.id == interrupted_id and section.status == "generating":
+                        section.status = "outline_only"
+                        section.generation_key = None
+                        job["attempts"][section.id] = max(0, int(job["attempts"].get(section.id, 0)) - 1)
+                job["status"] = "resuming"
+                job["error"] = ""
                 job.pop("currentSectionId", None)
                 job.pop("currentSectionTitle", None)
                 job["updatedAt"] = _now().isoformat()
                 _persist_job_config(draft, job)
-                draft.status = "outline_ready"
                 recovered += 1
     if recovered:
-        logger.warning("recovered %s stale note draft generation job(s)", recovered)
+        logger.info("resuming %s interrupted note draft generation job(s)", recovered)
     return recovered
 
 
@@ -245,7 +235,7 @@ async def _generate_section(draft: NoteDraft, section: NoteDraftSection) -> str:
     return unnumber_generated_headings(reviewed.strip() or first_pass.strip())
 
 
-async def _claim_one() -> tuple[str, str] | None:
+async def _claim_one() -> tuple[str, str, str | None] | None:
     async with AsyncSessionLocal() as session:
         async with session.begin():
             result = await session.execute(
@@ -315,7 +305,7 @@ async def _claim_one() -> tuple[str, str] | None:
                     job["status"] = "assembling"
                     job["updatedAt"] = _now().isoformat()
                     _persist_job_config(draft, job)
-                    return draft.id, ""
+                    return draft.id, "", None
                 draft.status = "failed"
                 job["status"] = "failed"
                 job["error"] = "生成队列状态异常，请点击继续重试。"
@@ -332,8 +322,8 @@ async def _claim_one() -> tuple[str, str] | None:
             _persist_job_config(draft, job)
             pending.status = "generating"
             pending.retry_count = max(0, attempts - 1)
-            pending.generation_key = f"{draft.id}:{pending.id}:{attempts}"
-            return draft.id, pending.id
+            pending.generation_key = uuid4().hex
+            return draft.id, pending.id, pending.generation_key
 
 
 async def _finalize_draft(draft_id: str) -> None:
@@ -396,7 +386,7 @@ async def _mark_claim_cancelled(draft_id: str, section_id: str) -> None:
             _persist_job_config(draft, job)
 
 
-async def _run_claim(draft_id: str, section_id: str) -> None:
+async def _run_claim(draft_id: str, section_id: str, generation_key: str | None = None) -> None:
     if not section_id:
         await _finalize_draft(draft_id)
         return
@@ -415,6 +405,8 @@ async def _run_claim(draft_id: str, section_id: str) -> None:
                 )
             ).scalar_one_or_none()
             if draft is None or section is None:
+                return
+            if generation_key and (section.generation_key != generation_key or draft.status != "generating"):
                 return
             try:
                 content = await _generate_section(draft, section)
@@ -442,6 +434,8 @@ async def _run_claim(draft_id: str, section_id: str) -> None:
             ).scalar_one_or_none()
             if draft is None or section is None:
                 return
+            if generation_key and (section.generation_key != generation_key or draft.status != "generating" or section.status != "generating"):
+                return
             job = _job_config(draft)
             if job.get("cancelRequested"):
                 reset_interrupted_sections([section])
@@ -468,15 +462,45 @@ async def _run_claim(draft_id: str, section_id: str) -> None:
 
 
 async def _worker_loop() -> None:
+    assert _stop_event is not None
+    while not _stop_event.is_set():
+        try:
+            async with engine.connect() as connection:
+                acquired = await connection.scalar(text("SELECT pg_try_advisory_lock(:key)"), {"key": _DRAFT_WORKER_LOCK})
+                if acquired:
+                    try:
+                        await connection.commit()
+                        await _resume_interrupted_jobs()
+                        await _process_generation_queue(connection)
+                    finally:
+                        # The session lock must never return to the pool held.
+                        try:
+                            await connection.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": _DRAFT_WORKER_LOCK})
+                        except BaseException:
+                            await connection.invalidate()
+                            raise
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            logger.exception("note draft worker could not run")
+        try:
+            await asyncio.wait_for(_stop_event.wait(), timeout=2.0)
+        except asyncio.TimeoutError:
+            pass
+
+
+async def _process_generation_queue(connection) -> None:
     assert _wake_event is not None and _stop_event is not None
     logger.info("note draft generation worker started")
     while not _stop_event.is_set():
+        await connection.execute(text("SELECT 1"))
+        await connection.commit()
         try:
             claimed = await _claim_one()
             if claimed is not None:
-                draft_id, section_id = claimed
+                draft_id, section_id, generation_key = claimed
                 claim_task = asyncio.create_task(
-                    _run_claim(draft_id, section_id),
+                    _run_claim(draft_id, section_id, generation_key),
                     name=f"noteflow-draft-claim-{draft_id}",
                 )
                 _active_claim_tasks[draft_id] = claim_task
@@ -507,7 +531,6 @@ async def start_draft_worker() -> None:
     global _worker_task, _wake_event, _stop_event
     if _worker_task and not _worker_task.done():
         return
-    await _recover_stale_generation_jobs()
     _wake_event = asyncio.Event()
     _stop_event = asyncio.Event()
     _worker_task = asyncio.create_task(_worker_loop(), name="noteflow-draft-worker")
