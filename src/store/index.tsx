@@ -76,6 +76,7 @@ import {
 } from "../services/chatSessions";
 import {
   hasRemoteConflict,
+  getOfflineNoteEdit,
   listOfflineNoteEdits,
   queueOfflineNoteEdit,
   removeOfflineNoteEdit,
@@ -102,14 +103,18 @@ import {
 import {
   isBundledDemoSnapshot,
   clearLocalNoteContentIfMatches,
+  clearRecoveredNoteEdit,
   hasPendingLocalNoteContent,
   loadLocalSnapshot,
   loadPendingNoteEdits,
+  listRecoverableNoteEdits,
+  readRecoverableNoteEdit,
   rebaseLocalNoteContent,
   resolveSelectedFileId,
   saveLocalSnapshot,
   saveLocalNoteContent,
 } from "./persistence";
+import { noteJournalScope, prepareNoteJournal, withInactiveNoteJournal } from "./noteJournalScope";
 
 export { reconcilePersistedNoteRecord };
 
@@ -289,6 +294,7 @@ let workspaceEpoch = 0;
 const noteMutationQueues = new Map<string, Promise<void>>();
 const noteOpenRequests = new Map<string, object>();
 const localNoteEdits = new Map<string, { userId: string | null; content: string }>();
+const ownOfflineFallbacks = new Map<string, OfflineNoteEdit>();
 const noteCreationRequests = new Map<string, object>();
 let workspaceLoadRequest: object | null = null;
 const workspaceOperations = new Map<string, { nodeId: string; deletedIds: Set<string>; run: () => Promise<void>; busy: boolean }>();
@@ -523,7 +529,7 @@ function persistLocalCurrentState() {
   const state = useAppStore.getState();
   if (state.hydratedUserId) {
     const snapshot = snapshotFromState(state);
-    if (saveLocalSnapshot(state.hydratedUserId, snapshot)) {
+    if (saveLocalSnapshot(state.hydratedUserId, snapshot, new Set(localNoteEdits.keys()))) {
       localStateCheckpoint = { userId: state.hydratedUserId, snapshot };
     }
   }
@@ -558,6 +564,13 @@ function scheduleNoteSave(noteId: string, content: string) {
     if (useAppStore.getState().hydratedUserId !== ownerId || workspaceEpoch !== epoch || !findFileById(useAppStore.getState().treeData, noteId)) return;
     startPersistNoteContent(noteId, content);
   }, 700));
+}
+
+function clearOwnOfflineFallback(userId: string, noteId: string) {
+  const edit = ownOfflineFallbacks.get(noteId);
+  if (edit?.userId !== userId) return;
+  ownOfflineFallbacks.delete(noteId);
+  void removeOfflineNoteEdit(edit).catch(() => undefined);
 }
 
 async function persistNoteContent(noteId: string, content: string) {
@@ -603,7 +616,10 @@ async function persistNoteContent(noteId: string, content: string) {
     });
     setNoteSaveState(noteId, noteSaveState("saved"));
     if (localNoteEdits.get(noteId) === editOwner) {
-      if (ownerId) clearLocalNoteContentIfMatches(ownerId, noteId, content);
+      if (ownerId) {
+        clearLocalNoteContentIfMatches(ownerId, noteId, content);
+        clearOwnOfflineFallback(ownerId, noteId);
+      }
       localNoteEdits.delete(noteId);
     }
     persistLocalCurrentState();
@@ -618,7 +634,8 @@ async function persistNoteContent(noteId: string, content: string) {
     if (isNetworkFailure && current.hydratedUserId) {
       try {
         if (!hasPendingLocalNoteContent(current.hydratedUserId, noteId, content)) {
-          await queueOfflineNoteEdit({ userId: current.hydratedUserId, noteId, content, baseUpdatedAt, baseContentHash });
+          const queued = await queueOfflineNoteEdit({ userId: current.hydratedUserId, noteId, content, baseUpdatedAt, baseContentHash, tabId: noteJournalScope() });
+          if (ownsNote()) ownOfflineFallbacks.set(noteId, queued);
         }
         if (!ownsNote() || useAppStore.getState().fileContents[noteId] !== content || localNoteEdits.get(noteId) !== editOwner) return;
         setNoteSaveState(noteId, noteSaveState("offline", "已离线保存在本机，联网后会自动同步。"));
@@ -628,7 +645,7 @@ async function persistNoteContent(noteId: string, content: string) {
     }
     if (error instanceof NoteVersionConflictError && current.hydratedUserId) {
       try {
-        await preserveConflictCopy(current.hydratedUserId, noteId, content);
+        await preserveConflictCopy(current.hydratedUserId, noteId, content, { baseVersion: baseContentHash ?? baseUpdatedAt });
         return;
       } catch {
         if (ownsNote() && useAppStore.getState().fileContents[noteId] === content && localNoteEdits.get(noteId) === editOwner) {
@@ -693,7 +710,8 @@ async function contentFingerprint(value: string): Promise<string> {
   return `fallback-${(hash >>> 0).toString(16)}-${value.length}`;
 }
 
-async function preserveConflictCopy(userId: string, noteId: string, localContent: string, offlineEdit?: OfflineNoteEdit) {
+async function preserveConflictCopy(userId: string, noteId: string, localContent: string,
+                                    { recovered = false, baseVersion = null }: { recovered?: boolean; baseVersion?: string | null } = {}) {
   const epoch = workspaceEpoch;
   const localEdit = localNoteEdits.get(noteId);
   const ownsNote = () => {
@@ -704,11 +722,11 @@ async function preserveConflictCopy(userId: string, noteId: string, localContent
     useAppStore.getState().fileContents[noteId] === localContent;
 
   const remote = await getNote(noteId);
-  if (!ownsNote() || remote.id !== noteId || (!offlineEdit && !isCurrentEdit())) return;
+  if (!ownsNote() || remote.id !== noteId || (!recovered && !isCurrentEdit())) return false;
   let copy = null;
   if (remote.content !== localContent) {
-    const fingerprint = await contentFingerprint(`${noteId}\n${remote.contentHash}\n${localContent}`);
-    if (!ownsNote() || (!offlineEdit && !isCurrentEdit())) return;
+    const fingerprint = await contentFingerprint(`${noteId}\n${baseVersion ?? remote.contentHash}\n${localContent}`);
+    if (!ownsNote() || (!recovered && !isCurrentEdit())) return false;
     const stamp = new Date().toLocaleString("zh-CN", {
       month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
     }).replace(/[/:]/g, "-");
@@ -722,7 +740,7 @@ async function preserveConflictCopy(userId: string, noteId: string, localContent
       idempotencyKey: `sync-conflict:${fingerprint}`,
     });
   }
-  if (!ownsNote()) return;
+  if (!ownsNote()) return false;
   const current = useAppStore.getState();
   let treeData = current.treeData;
   const fileContents = { ...current.fileContents };
@@ -734,10 +752,13 @@ async function preserveConflictCopy(userId: string, noteId: string, localContent
   }
   // A later edit or navigation during the request cannot be replaced by an
   // earlier save result. The copy, if created, remains in the workspace.
-  const editStillCurrent = isCurrentEdit();
+  const editStillCurrent = !recovered && isCurrentEdit();
   const canResolveHere = editStillCurrent || (!localNoteEdits.has(noteId) && fileContents[noteId] === remote.content);
   if (canResolveHere) {
-    if (editStillCurrent) clearLocalNoteContentIfMatches(userId, noteId, localContent);
+    if (editStillCurrent) {
+      clearLocalNoteContentIfMatches(userId, noteId, localContent);
+      clearOwnOfflineFallback(userId, noteId);
+    }
     localNoteEdits.delete(noteId);
     fileContents[noteId] = remote.content;
     treeData = replaceNoteRecordInTree(treeData, remote);
@@ -752,68 +773,72 @@ async function preserveConflictCopy(userId: string, noteId: string, localContent
     useAppStore.setState({ treeData, fileContents });
   }
   persistLocalCurrentState();
-  if (offlineEdit) await removeOfflineNoteEdit(offlineEdit).catch(() => undefined);
+  return true;
+}
+
+async function replayRecoveredNoteEdit(
+  userId: string, noteId: string, content: string, baseUpdatedAt: string | null, baseContentHash: string | null,
+): Promise<boolean> {
+  return enqueueNoteMutation(noteId, async () => {
+    const available = () => useAppStore.getState().hydratedUserId === userId && !localNoteEdits.has(noteId);
+    const remote = await getNote(noteId);
+    if (!available()) return false;
+    if (remote.content === content) return true;
+    const preserveCopy = () => preserveConflictCopy(userId, noteId, content, {
+      recovered: true, baseVersion: baseContentHash ?? baseUpdatedAt,
+    });
+    if ((!baseContentHash && !baseUpdatedAt) || hasRemoteConflict(
+      baseContentHash, remote.contentHash, baseUpdatedAt, remote.updatedAt, remote.content, content,
+    )) return preserveCopy();
+    try {
+      await updateNote(noteId, {
+        content,
+        source: "auto_save",
+        changeSummary: "离线队列恢复",
+        expectedUpdatedAt: remote.updatedAt,
+        expectedContentHash: remote.contentHash,
+      });
+      return true;
+    } catch (error) {
+      if (error instanceof NoteVersionConflictError && available()) return preserveCopy();
+      throw error;
+    }
+  });
 }
 
 async function flushOfflineNoteQueue(userId: string) {
-  if (typeof indexedDB === "undefined") return;
-  const edits = await listOfflineNoteEdits(userId);
-  if (!edits.length) return;
   let changed = false;
-  for (const edit of edits) {
-    if (useAppStore.getState().hydratedUserId !== userId) return;
+  const dbEdits = typeof indexedDB === "undefined" ? [] : await listOfflineNoteEdits(userId).catch(() => []);
+  for (const edit of dbEdits) {
+    if (useAppStore.getState().hydratedUserId !== userId || !navigator.onLine) return;
+    const replay = async () => {
+      if (localNoteEdits.has(edit.noteId)) return;
+      const latest = await getOfflineNoteEdit(edit.key);
+      if (latest && await replayRecoveredNoteEdit(userId, latest.noteId, latest.content, latest.baseUpdatedAt, latest.baseContentHash ?? null)) {
+        await removeOfflineNoteEdit(latest);
+        changed = true;
+      }
+    };
     try {
-      // The current page's pending edit is replayed by the normal writer.
-      const pending = localNoteEdits.get(edit.noteId);
-      if (pending) {
-        if (hasPendingLocalNoteContent(userId, edit.noteId, pending.content)) await removeOfflineNoteEdit(edit);
-        continue;
-      }
-      const remote = await getNote(edit.noteId);
-      if (useAppStore.getState().hydratedUserId !== userId || localNoteEdits.has(edit.noteId)) continue;
-      if (remote.content === edit.content) {
-        await removeOfflineNoteEdit(edit);
-        if (useAppStore.getState().hydratedUserId === userId && useAppStore.getState().fileContents[edit.noteId] === edit.content) {
-          localNoteEdits.delete(edit.noteId); setNoteSaveState(edit.noteId, noteSaveState('saved'));
+      if (edit.tabId && edit.tabId !== noteJournalScope()) await withInactiveNoteJournal(edit.tabId, replay);
+      else await replay();
+    } catch {}
+  }
+  for (const { noteId, scope } of listRecoverableNoteEdits(userId)) {
+    if (useAppStore.getState().hydratedUserId !== userId || !navigator.onLine) return;
+    try {
+      await withInactiveNoteJournal(scope, async () => {
+        if (localNoteEdits.has(noteId)) return;
+        const edit = readRecoverableNoteEdit(userId, noteId, scope);
+        if (edit && await replayRecoveredNoteEdit(userId, noteId, edit.content, edit.updatedAt, edit.contentHash)) {
+          clearRecoveredNoteEdit(userId, noteId, scope, edit);
+          changed = true;
         }
-        changed = true;
-        continue;
-      }
-      if (hasRemoteConflict(
-        edit.baseContentHash,
-        remote.contentHash,
-        edit.baseUpdatedAt,
-        remote.updatedAt,
-        remote.content,
-        edit.content
-      )) {
-        await preserveConflictCopy(userId, edit.noteId, edit.content, edit);
-        changed = true;
-        continue;
-      }
-      const saved = await enqueueNoteMutation(edit.noteId, async () => {
-        if (useAppStore.getState().hydratedUserId !== userId || localNoteEdits.has(edit.noteId)) return null;
-        return updateNote(edit.noteId, {
-          content: edit.content,
-          source: "auto_save",
-          changeSummary: "离线队列恢复",
-          expectedUpdatedAt: remote.updatedAt,
-          expectedContentHash: remote.contentHash,
-        });
       });
-      if (!saved) continue;
-      await removeOfflineNoteEdit(edit);
-      if (useAppStore.getState().hydratedUserId === userId && useAppStore.getState().fileContents[edit.noteId] === edit.content) {
-        localNoteEdits.delete(edit.noteId); setNoteSaveState(edit.noteId, noteSaveState('saved'));
-      }
-      changed = true;
-    } catch {
-      if (typeof navigator !== "undefined" && !navigator.onLine) break;
-    }
+    } catch {}
   }
   if (changed && useAppStore.getState().hydratedUserId === userId) {
-    const selectedFileId = useAppStore.getState().selectedFileId;
-    await loadStructuredWorkspace(userId, selectedFileId);
+    await loadStructuredWorkspace(userId, useAppStore.getState().selectedFileId);
   }
 }
 
@@ -1713,6 +1738,7 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
     noteCreationRequests.clear();
     noteOpenRequests.clear();
     localNoteEdits.clear();
+    ownOfflineFallbacks.clear();
     const snapshot = loadLocalSnapshot(userId);
     const pending = loadPendingNoteEdits(userId, snapshot.treeData);
     const restored = noteSaveState("offline", "未同步的正文已恢复，联网后会自动提交。");
@@ -3020,6 +3046,7 @@ export function AppProvider({
   userId: string;
 }) {
   const hydratedUserId = useAppStore((state) => state.hydratedUserId);
+  const serverSyncReady = useAppStore((state) => state.serverSyncReady);
   const unopenedNoteId = useAppStore((state) => {
     const id = state.selectedFileId;
     return id && state.fileContents[id] === undefined && findFileById(state.treeData, id)?.content === undefined ? id : null;
@@ -3032,8 +3059,12 @@ export function AppProvider({
   }, [hydratedUserId, unopenedNoteId, userId]);
 
   useEffect(() => {
-    useAppStore.getState().hydrate(userId);
+    let active = true;
+    void prepareNoteJournal().then(() => {
+      if (active) useAppStore.getState().hydrate(userId);
+    });
     return () => {
+      active = false;
       generationAbortController?.abort();
       generationAbortController = null;
       clearScheduledNoteSave();
@@ -3118,22 +3149,36 @@ export function AppProvider({
 
   useEffect(() => {
     if (hydratedUserId !== userId) return;
-    const flush = () => {
+    let active = true;
+    let syncing = false;
+    const flush = async () => {
       const state = useAppStore.getState();
-      if (state.hydratedUserId !== userId || !navigator.onLine) return;
-      void flushOfflineNoteQueue(userId).catch(() => undefined).then(() => {
-        const current = useAppStore.getState();
-        if (current.hydratedUserId !== userId) return;
+      if (state.hydratedUserId !== userId || !navigator.onLine || syncing) return;
+      if (!state.serverSyncReady) {
+        if (!state.workspaceLoading) await loadStructuredWorkspace(userId);
+        return;
+      }
+      syncing = true;
+      try {
         for (const [id, edit] of localNoteEdits) {
-          if (edit.userId === userId && current.noteSaveStates[id]?.status === "offline") current.retryNoteSave(id);
+          if (edit.userId === userId && state.noteSaveStates[id]?.status === "offline") state.retryNoteSave(id);
         }
-      });
-      if (!state.serverSyncReady && !state.workspaceLoading) void loadStructuredWorkspace(userId);
+        await Promise.allSettled(noteSavesInFlight.values());
+        if (active) await flushOfflineNoteQueue(userId);
+      } finally {
+        syncing = false;
+      }
     };
-    window.addEventListener("online", flush);
-    if (navigator.onLine) flush();
-    return () => window.removeEventListener("online", flush);
-  }, [hydratedUserId, userId]);
+    const sync = () => void flush().catch(() => undefined);
+    window.addEventListener("online", sync);
+    window.addEventListener("focus", sync);
+    sync();
+    return () => {
+      active = false;
+      window.removeEventListener("online", sync);
+      window.removeEventListener("focus", sync);
+    };
+  }, [hydratedUserId, serverSyncReady, userId]);
 
   useEffect(() => {
     if (hydratedUserId !== userId) return;
