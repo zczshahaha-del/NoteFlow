@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import {
   ChevronDown,
@@ -451,7 +451,10 @@ function TreeNode({
       </div>
 
       {isFolder && isExpanded && (
-        <div>
+        <div
+          className={hasChildren ? "directory-node-branch" : undefined}
+          style={hasChildren ? ({ "--directory-branch-indent": `${depth * 12}px` } as CSSProperties) : undefined}
+        >
           {hasChildren ? (
             sortPinnedFirst(node.children!).map((child) => (
               <TreeNode
