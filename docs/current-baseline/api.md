@@ -6,6 +6,8 @@
 - 操作数：89
 - 全局错误结构：`ApiErrorEnvelope { error: { code, message }, requestId, traceId }`（OpenAPI schema 保持向后兼容，traceId 为运行时关联字段）。
 - 认证实现：HttpOnly session cookie 为当前主路径；部分旧客户端仍兼容 Bearer。
+- `GET /api/notes?includeContent=false` 返回目录用的笔记信息，正文及 `contentHash` 由 `GET /api/notes/{note_id}` 返回。列表参数默认为 `true`，兼容旧客户端。
+- 草稿续改可向 `PUT /api/note-drafts/{draft_id}` 和 `POST /api/note-drafts/{draft_id}/assemble` 提交 `expectedUpdatedAt`。草稿版本或阶段变化时返回 `409`。
 
 | 方法 | 路径 | 操作 | 请求模型 | 成功响应 | 已声明状态码 | 认证基线 |
 |---|---|---|---|---|---|---|
