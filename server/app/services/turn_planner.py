@@ -24,6 +24,7 @@ class PrimaryIntent(str, Enum):
     GENERAL_CHAT = "general_chat"
     NOTE_CREATE = "note_create"
     NOTE_EDIT = "note_edit"
+    DRAFT_REVISE = "draft_revise"
     MEMORY = "memory"
     UNKNOWN = "unknown"
 
@@ -335,6 +336,10 @@ def validate_turn_plan(
         ]
 
     parameters = validated.intent_parameters
+    if state.get("contextScope") == "none":
+        validated.context_sources = [source for source in validated.context_sources if source not in {
+            ContextSource.CURRENT_NOTE, ContextSource.SELECTED_TEXT,
+        }]
     selection_scope = has_selection_scope(state)
     if selection_scope and validated.primary_intent in {PrimaryIntent.GENERAL_CHAT, PrimaryIntent.NOTE_EDIT}:
         validated.context_sources = [ContextSource.SELECTED_TEXT]
@@ -343,11 +348,16 @@ def validate_turn_plan(
         if not parameters.topic:
             missing.append("topic")
     elif validated.primary_intent == PrimaryIntent.NOTE_EDIT:
-        note_id = state.get("currentNoteId") if selection_scope else parameters.note_id or state.get("currentNoteId")
+        note_id = None if state.get("contextScope") == "none" else state.get("currentNoteId") if selection_scope else parameters.note_id or state.get("currentNoteId")
         parameters.note_id = str(note_id) if note_id else None
         if not note_id:
             missing.append("target_note")
         if not _clean(parameters.instruction, 600):
+            missing.append("instruction")
+    elif validated.primary_intent == PrimaryIntent.DRAFT_REVISE:
+        if not state.get("boundDraftId"):
+            missing.append("target_draft")
+        if not parameters.instruction:
             missing.append("instruction")
     elif validated.primary_intent == PrimaryIntent.MEMORY:
         if parameters.memory_action == "none":
@@ -389,6 +399,8 @@ def validate_turn_plan(
 
 
 def clarification_question(plan: TurnPlan) -> str:
+    if "target_draft" in plan.missing_fields:
+        return "这段对话里没有可接着修改的草稿。请回到那篇草稿的对话再试。"
     if "topic" in plan.missing_fields:
         return "你想生成什么主题的笔记？"
     if "target_note" in plan.missing_fields:
@@ -445,6 +457,7 @@ def _planner_messages(
             mode=_mode(mode).value,
             note_id=state.get('currentNoteId') or '无',
             selection=_clean(state.get('selectedText'), 320) or '无',
+            active_draft=_clean(state.get("boundDraftTitle"), 160) or "无",
             history=_history_text(history),
             question=question.strip(),
         )

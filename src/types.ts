@@ -28,7 +28,7 @@ export interface ChatPageState {
   activeDraftId?: string | null;
   activeDraftTitle?: string;
   activeDraftTopic?: string;
-  contextScope?: "auto" | "current_note" | "knowledge_base" | "selection";
+  contextScope?: "auto" | "none" | "current_note" | "knowledge_base" | "selection";
 }
 
 export interface NoteSaveConflict {

@@ -116,7 +116,9 @@ type ChatMode = "chat" | "ask_notes";
 
 interface DraftCommand {
   id: string;
-  action: "generate_outline" | "regenerate_outline" | "generate_all" | "stop" | "cancel";
+  action: "generate_outline" | "regenerate_outline" | "revise_body" | "generate_all" | "stop" | "cancel";
+  draftId?: string;
+  expectedUpdatedAt?: string;
   seed: string;
   feedback: string;
   brief?: DraftBrief;
@@ -335,6 +337,11 @@ function mergeWorkspaceRefresh(remote: KnowledgeBaseSnapshot, started: Knowledge
       node.contentHash = latest.node.contentHash;
       node.updatedAt = latest.node.updatedAt;
       node.indexStatus = 'outdated';
+      remote.fileContents[id] = node.content;
+    } else if (latest.node.type === 'file' && node.content === undefined &&
+               node.updatedAt && node.updatedAt === latest.node.updatedAt && current.fileContents[id] !== undefined) {
+      node.content = current.fileContents[id];
+      node.contentHash = latest.node.contentHash;
       remote.fileContents[id] = node.content;
     }
     for (const field of ['name', 'pinned', 'favorite', 'tags'] as const) {
@@ -1890,16 +1897,17 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
         ? findFileById(latest.treeData, latest.selectedFileId)
         : undefined;
       const selectionScope = pageState?.contextScope === "selection";
-      const documentContent = selectedFile && !selectionScope
+      const useCurrentNote = pageState?.contextScope === "current_note" || pageState?.contextScope === undefined;
+      const documentContent = selectedFile && useCurrentNote
         ? (latest.fileContents[selectedFile.id] ?? selectedFile.content ?? "")
         : "";
       const requestPageState: ChatPageState = {
-        currentNoteId: selectionScope ? state.chatSelection?.noteId ?? null : selectedFile?.id ?? null,
+        currentNoteId: selectionScope ? state.chatSelection?.noteId ?? null : useCurrentNote ? selectedFile?.id ?? null : null,
         selectedText: pageState?.selectedText ?? "",
         selectionContext: selectionScope ? state.chatSelection?.surroundings : undefined,
-        currentSectionId: pageState?.currentSectionId ?? latest.activeEditorSectionId,
+        currentSectionId: useCurrentNote || selectionScope ? pageState?.currentSectionId ?? latest.activeEditorSectionId : null,
         dirty: Boolean(
-          selectedFile &&
+          useCurrentNote && selectedFile &&
             (latest.noteSaveState.status === "unsaved" ||
               latest.noteSaveState.status === "saving" ||
               latest.noteSaveState.status === "offline" ||
@@ -1917,7 +1925,7 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
       const replyRequest = retryRequest ?? {
         question: text,
         mode: chatMode,
-        documentTitle: selectionScope ? state.chatSelection?.noteTitle ?? "" : selectedFile?.name.replace(/\.md$/, "") ?? "",
+        documentTitle: selectionScope ? state.chatSelection?.noteTitle ?? "" : useCurrentNote ? selectedFile?.name.replace(/\.md$/, "") ?? "" : "",
         documentContent,
         pageState: requestPageState,
         history: state.chatMessages.map(({ role, text }) => ({ role, text })),
@@ -1984,25 +1992,30 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
           return;
         }
 
-        if (action.toolName === "note_draft_tool" && action.action === "regenerate_outline") {
-          const currentDraft = get().activeDraftContext;
+        if (action.toolName === "note_draft_tool" && (action.action === "regenerate_outline" || action.action === "revise_body")) {
+          const current = get();
+          const draftId = typeof payload.draftId === "string" ? payload.draftId : "";
+          const expectedUpdatedAt = typeof payload.expectedUpdatedAt === "string" ? payload.expectedUpdatedAt : "";
+          const pending = current.pendingCheckpoint;
+          const bound = checkpointFromPayload(payload.checkpoint);
+          if (!isCurrentReply() || !draftId || !expectedUpdatedAt || !bound || bound.id !== checkpointId ||
+              bound.sessionId !== current.agentSessionId || bound.payload?.draftId !== draftId ||
+              (pending && pending.id !== checkpointId) || (current.activeDraftContext?.id && current.activeDraftContext.id !== draftId)) return;
           const payloadSeed = typeof payload.seed === "string" ? payload.seed.trim() : "";
-          const seed =
-            currentDraft?.topic.trim() ||
-            currentDraft?.title.trim() ||
-            payloadSeed ||
-            get().draftSeed ||
-            text;
+          const seed = payloadSeed || current.activeDraftContext?.topic || current.draftSeed;
           const feedback =
             typeof payload.feedback === "string" && payload.feedback.trim()
               ? payload.feedback.trim()
               : text;
           set({
             centerMode: "draft",
+            pendingCheckpoint: bound,
             draftSeed: seed,
             draftCommand: {
               id: `draft-command-${Date.now()}`,
-              action: "regenerate_outline",
+              action: action.action,
+              draftId,
+              expectedUpdatedAt,
               seed,
               feedback,
             },
@@ -2924,6 +2937,9 @@ async function loadStructuredWorkspace(userId: string, preferredSelectedFileId?:
         current.selectedFileId !== started.selectedFileId ? current.selectedFileId : preferredSelectedFileId ?? current.selectedFileId
       );
       useAppStore.getState().replaceSnapshot(snapshot);
+      if (snapshot.selectedFileId && snapshot.fileContents[snapshot.selectedFileId] === undefined) {
+        void readOpenedNote(snapshot.selectedFileId);
+      }
       useAppStore.setState({
         deletedNotes: allNotes
           .filter((note) => note.deletedAt)
@@ -2982,6 +2998,16 @@ export function AppProvider({
   userId: string;
 }) {
   const hydratedUserId = useAppStore((state) => state.hydratedUserId);
+  const unopenedNoteId = useAppStore((state) => {
+    const id = state.selectedFileId;
+    return id && state.fileContents[id] === undefined && findFileById(state.treeData, id)?.content === undefined ? id : null;
+  });
+
+  useEffect(() => {
+    if (hydratedUserId === userId && unopenedNoteId && !noteOpenRequests.has(unopenedNoteId)) {
+      void readOpenedNote(unopenedNoteId);
+    }
+  }, [hydratedUserId, unopenedNoteId, userId]);
 
   useEffect(() => {
     useAppStore.getState().hydrate(userId);

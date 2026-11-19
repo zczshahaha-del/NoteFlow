@@ -47,6 +47,8 @@ const record = (id, title, content) => ({
   createdAt: null, updatedAt: new Date(1_700_000_000_000 + revision * 1000).toISOString(), deletedAt: null,
 });
 let original = record("note", "双页笔记", "原始内容");
+const unopened = record("unopened", "尚未打开的笔记", "单独加载的正文");
+let unopenedReads = 0;
 const copies = new Map();
 const savedKeys = new Map();
 const errors = [];
@@ -71,7 +73,15 @@ try {
     if (url.pathname === "/api/chat-sessions") return reply({ sessions: [] });
     if (url.pathname === "/api/knowledge-base") return reply({});
     if (url.pathname.endsWith("/outline")) return reply({ sections: [] });
-    if (url.pathname === "/api/notes" && request.method() === "GET") return reply({ notes: [original, ...copies.values()] });
+    if (url.pathname === "/api/notes" && request.method() === "GET") {
+      assert.equal(url.searchParams.get("includeContent"), "false");
+      const notes = [original, unopened, ...copies.values()].map(({ content, contentHash, ...metadata }) => metadata);
+      return reply({ notes });
+    }
+    if (url.pathname === "/api/notes/unopened") {
+      unopenedReads++;
+      return reply({ note: unopened });
+    }
     if (url.pathname === "/api/notes" && request.method() === "POST") {
       if (shouldFailCopy) { shouldFailCopy = false; return reply({ error: "模拟副本保存失败" }, 503); }
       const payload = request.postDataJSON();
@@ -110,6 +120,13 @@ try {
   };
   await enter(a);
   await enter(b);
+  assert.equal(unopenedReads, 0, "Loading the library should not request unopened text");
+  assert.equal(await b.evaluate(() => window.testState.store.getState().fileContents.unopened), undefined);
+  await a.evaluate(() => window.testState.store.getState().setSelectedFileId("unopened"));
+  await a.getByTestId("tiptap-editor-content").getByText("单独加载的正文").waitFor();
+  assert.equal(unopenedReads, 1);
+  await a.evaluate(() => window.testState.store.getState().setSelectedFileId("note"));
+  await a.getByTestId("tiptap-editor-content").getByText("原始内容").waitFor();
   const edit = (page, content) => page.evaluate(value => {
     window.testState.editor.commands.setContent(value, { contentType: "markdown" });
   }, content);
@@ -173,7 +190,7 @@ try {
     return remaining.map(item => item.content);
   }), ["新离线内容"], "Finishing an older sync cannot remove newer queued text");
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ cleanRefresh: true, lateRefreshDuringTyping: true, copyFailureRetry: true, versionsPreserved: true, comparison: true, compactViewport: true }));
+  console.log(JSON.stringify({ lazyBodyRead: true, cleanRefresh: true, lateRefreshDuringTyping: true, copyFailureRetry: true, versionsPreserved: true, comparison: true, compactViewport: true }));
 
   async function expectReply() {
     for (let i = 0; !releaseRead && i < 80; i++) await new Promise(resolve => setTimeout(resolve, 25));

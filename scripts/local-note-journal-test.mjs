@@ -34,6 +34,9 @@ try {
   assert.equal(loadLocalSnapshot('two').fileContents.a, '另一个账号');
   saveLocalSnapshot('two', snapshot);
   assert.equal(loadLocalSnapshot('two').fileContents.a, '另一个账号', 'A saved snapshot from another tab cannot clear a different pending draft');
+  saveLocalSnapshot('two', { treeData: [{ id: 'a', type: 'file', name: 'A.md' }], fileContents: {}, selectedFileId: 'a' });
+  assert.equal(loadLocalSnapshot('two').fileContents.a, '另一个账号', 'A metadata-only refresh must retain the draft');
+  saveLocalSnapshot('two', snapshot);
   const compacted = loadLocalSnapshot('one'); saveLocalSnapshot('one', compacted);
   assert.equal(localStorage.getItem('noteflow:one:note-draft:a'), null);
   assert.equal(loadLocalSnapshot('one').fileContents.a, '');

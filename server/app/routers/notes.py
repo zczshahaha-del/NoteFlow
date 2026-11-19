@@ -162,15 +162,13 @@ def _category_out(category: NoteCategory) -> dict:
     }
 
 
-def _note_out(note: Note) -> dict:
-    return {
+def _note_out(note: Note, *, include_content: bool = True) -> dict:
+    result = {
         "id": note.id,
         "title": note.title,
         "categoryId": note.category_id,
         "summary": note.summary,
         "tags": note.tags or [],
-        "content": note.content or "",
-        "contentHash": _content_hash(note.content or ""),
         "isPinned": note.is_pinned,
         "isFavorite": note.is_favorite,
         "indexStatus": note.index_status,
@@ -178,6 +176,9 @@ def _note_out(note: Note) -> dict:
         "updatedAt": _dt(note.updated_at),
         "deletedAt": _dt(note.deleted_at),
     }
+    if include_content:
+        result.update(content=note.content or "", contentHash=_content_hash(note.content or ""))
+    return result
 
 
 def _version_out(version: NoteVersion) -> dict:
@@ -362,10 +363,11 @@ async def delete_category(
 async def list_notes(
     includeDeleted: bool = Query(False),
     user: CurrentUser = Depends(get_current_user),
+    includeContent: bool = True,
 ):
     async with AsyncSessionLocal() as session:
-        notes = await NoteRepository(session).list(user.id, include_deleted=includeDeleted)
-        return {"notes": [_note_out(note) for note in notes]}
+        notes = await NoteRepository(session).list(user.id, include_deleted=includeDeleted, include_content=includeContent)
+        return {"notes": [_note_out(note, include_content=includeContent) for note in notes]}
 
 
 @router.post("/notes/search")

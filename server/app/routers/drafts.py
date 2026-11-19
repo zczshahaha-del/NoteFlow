@@ -80,6 +80,7 @@ class DraftCreatePayload(BaseModel):
 
 
 class DraftUpdatePayload(BaseModel):
+    expectedUpdatedAt: Optional[str] = None
     title: Optional[str] = None
     categoryId: Optional[str] = None
     outline: Optional[str] = None
@@ -106,6 +107,7 @@ class DraftSectionUpdatePayload(BaseModel):
 
 class DraftAssemblePayload(BaseModel):
     content: Optional[str] = None
+    expectedUpdatedAt: Optional[str] = None
 
 
 class DraftSavePayload(BaseModel):
@@ -312,11 +314,18 @@ async def _ensure_category(session, user_id: str, category_id: Optional[str]):
         raise HTTPException(status_code=404, detail="category not found")
 
 
-async def _get_draft(session, user_id: str, draft_id: str) -> NoteDraft:
-    draft = await DraftRepository(session).get(user_id, draft_id)
+async def _get_draft(session, user_id: str, draft_id: str, *, for_update: bool = False) -> NoteDraft:
+    repository = DraftRepository(session)
+    get_draft = repository.get_for_update if for_update else repository.get
+    draft = await get_draft(user_id, draft_id)
     if draft is None:
         raise HTTPException(status_code=404, detail="draft not found")
     return draft
+
+
+def _require_section_draft(draft: NoteDraft) -> None:
+    if draft.status == "assembled" and (draft.draft_config or {}).get("assembledRevision"):
+        raise HTTPException(status_code=409, detail="草稿正文已整篇更新，请重新打开查看修改后的正文。")
 
 
 async def _get_sections(session, user_id: str, draft_id: str) -> list[NoteDraftSection]:
@@ -448,9 +457,15 @@ async def update_draft(
     user: CurrentUser = Depends(get_current_user),
 ):
     async with AsyncSessionLocal() as session:
-        draft = await DraftRepository(session).get_for_update(user.id, draft_id) if payload.generationBrief else await _get_draft(session, user.id, draft_id)
-        if draft is None:
-            raise HTTPException(status_code=404, detail="draft not found")
+        draft = await _get_draft(session, user.id, draft_id, for_update=True)
+        if payload.regenerateGenerated or payload.model_fields_set.intersection({
+            "outline", "assembledContent", "status", "sections", "sectionOrder", "generationBrief",
+        }):
+            _require_section_draft(draft)
+        if payload.expectedUpdatedAt and (
+            draft.status != "outline_ready" or _dt(draft.updated_at) != payload.expectedUpdatedAt
+        ):
+            raise HTTPException(status_code=409, detail="草稿已变化，请重新打开后再修改。")
         if payload.generationBrief is not None:
             if draft.status in {"generating", "saved", "canceled"}:
                 raise HTTPException(status_code=409, detail="草稿当前状态不允许重新生成大纲")
@@ -489,6 +504,11 @@ async def update_draft(
         if payload.status is not None:
             draft.status = _normalize_status(payload.status, DRAFT_STATUSES, draft.status)
         if payload.sections is not None:
+            if payload.expectedUpdatedAt and any(
+                section.deleted_at is None and section.content.strip()
+                for section in await _get_sections(session, user.id, draft.id)
+            ):
+                raise HTTPException(status_code=409, detail="这篇草稿已有部分正文，请在工作台选择要修改的章节。")
             await _replace_sections(session, draft, payload.sections)
             if payload.status is None:
                 draft.status = "outline_ready"
@@ -557,7 +577,8 @@ async def update_draft_section(
     user: CurrentUser = Depends(get_current_user),
 ):
     async with AsyncSessionLocal() as session:
-        draft = await _get_draft(session, user.id, draft_id)
+        draft = await _get_draft(session, user.id, draft_id, for_update=True)
+        _require_section_draft(draft)
         section = await _get_section(session, user.id, draft.id, section_id)
         session.add(_make_section_version(section, payload.source))
 
@@ -596,6 +617,7 @@ async def update_draft_section(
                 draft,
                 await _get_sections(session, user.id, draft.id),
             )
+        draft.updated_at = _now()
         await session.commit()
         await session.refresh(draft)
         return {"draft": _draft_out(draft, await _get_sections(session, user.id, draft.id))}
@@ -608,7 +630,8 @@ async def create_draft_section(
     user: CurrentUser = Depends(get_current_user),
 ):
     async with AsyncSessionLocal() as session:
-        draft = await _get_draft(session, user.id, draft_id)
+        draft = await _get_draft(session, user.id, draft_id, for_update=True)
+        _require_section_draft(draft)
         if draft.status in {"generating", "saved", "canceled"}:
             raise HTTPException(status_code=409, detail="current draft cannot add sections")
         sections = await _get_sections(session, user.id, draft.id)
@@ -687,7 +710,15 @@ async def assemble_draft(
     user: CurrentUser = Depends(get_current_user),
 ):
     async with AsyncSessionLocal() as session:
-        draft = await _get_draft(session, user.id, draft_id)
+        draft = await _get_draft(session, user.id, draft_id, for_update=True)
+        if not payload.expectedUpdatedAt:
+            _require_section_draft(draft)
+        if draft.status in {"saved", "canceled"} or (payload.expectedUpdatedAt and (
+            draft.status != "assembled" or _dt(draft.updated_at) != payload.expectedUpdatedAt
+        )):
+            raise HTTPException(status_code=409, detail="草稿已变化，请重新打开后再修改。")
+        if payload.expectedUpdatedAt and not (payload.content or "").strip():
+            raise HTTPException(status_code=400, detail="修改后的草稿正文不能为空。")
         sections = await _get_sections(session, user.id, draft.id)
         content = payload.content.strip() if payload.content else assemble_draft_content(draft, sections)
         content = number_markdown_headings(content, draft.title, style=draft_numbering_style(draft))
@@ -695,6 +726,8 @@ async def assemble_draft(
             raise HTTPException(status_code=400, detail="draft content is empty")
         draft.assembled_content = content
         draft.status = "assembled"
+        if payload.expectedUpdatedAt:
+            draft.draft_config = {**(draft.draft_config or {}), "assembledRevision": True}
         await session.commit()
         await session.refresh(draft)
         return {"draft": _draft_out(draft, await _get_sections(session, user.id, draft.id))}
@@ -709,7 +742,8 @@ async def generate_all_draft_sections(
     from app.services.draft_worker import notify_draft_worker
 
     async with AsyncSessionLocal() as session:
-        draft = await _get_draft(session, user.id, draft_id)
+        draft = await _get_draft(session, user.id, draft_id, for_update=True)
+        _require_section_draft(draft)
         if draft.status == "saved":
             return {"draft": _draft_out(draft, await _get_sections(session, user.id, draft.id))}
         if draft.status == "canceled":

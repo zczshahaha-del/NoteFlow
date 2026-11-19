@@ -910,7 +910,7 @@ export default function AIPanel({ onCollapse }: { onCollapse?: () => void }) {
             ? "knowledge_base"
             : currentNoteReferenced && selectedFile
               ? "current_note"
-              : "auto";
+              : "none";
       sendMessage(
         msg,
         {

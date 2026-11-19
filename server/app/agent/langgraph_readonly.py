@@ -76,6 +76,8 @@ async def _default_memory_recall(state: ReadonlyAgentState) -> str:
 async def _default_rag_search(state: ReadonlyAgentState) -> dict[str, Any]:
     from app.rag.service import RagRequest, configured_rag_service
     page_state = state.get("page_state") or {}
+    if page_state.get("contextScope") == "none" and state.get("mode") != "ask_notes":
+        return {"context_mode": "general", "context_text": "", "sources": [], "rag_called": False}
     selection_scope = has_selection_scope(page_state)
     selection = selection_context_text(page_state) if selection_scope else ""
     note_id = whole_note_id(page_state, state["question"])
@@ -240,6 +242,8 @@ def build_readonly_graph(
         plan = state.get("turn_plan") or {}
         context_sources = set(plan.get("context_sources") or [])
         page_state = state.get("page_state") or {}
+        if page_state.get("contextScope") == "none" and state.get("mode") != "ask_notes":
+            context_sources &= {"user_memory"}
         bounded_note_scope = has_selection_scope(page_state) or bool(whole_note_id(page_state, state["question"]))
         use_note_context = bounded_note_scope or bool(
             context_sources.intersection({"knowledge_base", "current_note", "selected_text"})

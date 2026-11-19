@@ -448,6 +448,17 @@
               }
             ],
             "title": "Content"
+          },
+          "expectedUpdatedAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expectedupdatedat"
           }
         },
         "title": "DraftAssemblePayload",
@@ -759,6 +770,17 @@
               }
             ],
             "title": "Categoryid"
+          },
+          "expectedUpdatedAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expectedupdatedat"
           },
           "outline": {
             "anyOf": [
@@ -11012,6 +11034,16 @@
             "schema": {
               "default": false,
               "title": "Includedeleted",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "includeContent",
+            "required": false,
+            "schema": {
+              "default": true,
+              "title": "Includecontent",
               "type": "boolean"
             }
           }

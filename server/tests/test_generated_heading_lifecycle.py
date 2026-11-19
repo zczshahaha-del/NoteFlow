@@ -5,16 +5,52 @@ from unittest.mock import AsyncMock, patch
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
+from fastapi import HTTPException
 
 from app.deps import CurrentUser
 from app.models.db import User, Note, NoteCategory, NoteVersion, NoteIndexJob, NoteDraft, NoteDraftSection, NoteDraftSectionVersion, NoteEditPreview
-from app.routers import drafts, notes
+from app.routers import agent, drafts, notes
 from app.services import draft_save, draft_worker
 from app.services.heading_number_repair import repair_heading_numbers, content_hash
 from app.services import heading_number_repair
 
 
 class GeneratedHeadingLifecycleTest(unittest.IsolatedAsyncioTestCase):
+    async def test_chat_revision_checks_the_assembled_draft_version(self):
+        draft = await self.create()
+        original = (await drafts.assemble_draft(
+            draft["id"], drafts.DraftAssemblePayload(content="原草稿"), self.user,
+        ))["draft"]
+        checkpoint = {"checkpointType": "draft_workspace", "payload": {"draftId": draft["id"]}}
+        with (patch.object(agent, "AsyncSessionLocal", self.sessions),
+              patch.object(agent, "_latest_waiting_checkpoint", AsyncMock(return_value=checkpoint)) as load_checkpoint):
+            _, bound = await agent._bound_draft(self.user.id, "session", draft["id"])
+            load_checkpoint.assert_awaited_once_with(self.user.id, "session")
+            self.assertEqual(bound.id, draft["id"])
+            self.assertEqual(await agent._bound_draft(self.user.id, "session", "another-draft"), (None, None))
+            self.assertEqual(await agent._bound_draft("another-owner", "session", draft["id"]), (None, None))
+        revised = (await drafts.assemble_draft(
+            draft["id"], drafts.DraftAssemblePayload(content="缩短后", expectedUpdatedAt=original["updatedAt"]), self.user,
+        ))["draft"]
+        self.assertEqual(revised["id"], draft["id"])
+        self.assertEqual(revised["assembledContent"], "缩短后")
+        self.assertTrue(revised["draftConfig"]["assembledRevision"])
+        with self.assertRaises(HTTPException) as conflict:
+            await drafts.assemble_draft(
+                draft["id"], drafts.DraftAssemblePayload(content="迟到的修改", expectedUpdatedAt=original["updatedAt"]), self.user,
+            )
+        self.assertEqual(conflict.exception.status_code, 409)
+        with self.assertRaises(HTTPException) as outdated_section:
+            await drafts.update_draft_section(draft["id"], draft["sections"][0]["id"],
+                                            drafts.DraftSectionUpdatePayload(content="另一处的分章改写"), self.user)
+        self.assertEqual(outdated_section.exception.status_code, 409)
+        async with self.sessions() as session:
+            self.assertEqual((await session.get(NoteDraft, draft["id"])).assembled_content, "缩短后")
+            self.assertEqual(list((await session.execute(select(Note))).scalars()), [])
+        with patch.object(draft_save, "index_note_now", self.index):
+            saved = await drafts.save_draft_to_notes(draft["id"], drafts.DraftSavePayload(confirm=True), self.user)
+        self.assertEqual(saved["note"]["content"], "缩短后")
+
     async def asyncSetUp(self):
         self.engine = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool)
         self.addAsyncCleanup(self.engine.dispose)

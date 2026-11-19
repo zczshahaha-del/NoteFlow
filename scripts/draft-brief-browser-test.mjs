@@ -19,13 +19,23 @@ import{useAppStore as store}from ${JSON.stringify(path.join(repo,'src/store/inde
 const original='给我生成一份关于两小儿辩日的一份教案';const seed='《两小儿辩日》教案';
 const f={calls:[],requests:[],hold:false,fail:false,writeFail:false,store,root:null,draft:null,
 checkpoint:{id:'cp-brief',checkpointType:'draft_workspace',status:'waiting_user_confirm',sessionId:'session-brief',runId:'run-brief',payload:{seed,rawRequest:original}},
-async generate(p){this.requests.push(p);if(this.hold)await new Promise(r=>this.release=r);if(this.fail){this.fail=false;throw new Error('合成大纲失败，已有内容未改动')}if(p.signal.aborted)throw new DOMException('aborted','AbortError');p.onDelta(p.mode==='outline'?'## 教学目标\\n\\n## 教学过程\\n\\n## 课堂小结':'## 教学目标\\n\\n合成课堂讨论与板书设计。');},
+async generate(p){this.requests.push(p);if(this.hold)await new Promise(r=>this.release=r);if(this.fail){this.fail=false;throw new Error('合成大纲失败，已有内容未改动')}if(p.signal.aborted)throw new DOMException('aborted','AbortError');p.onDelta(p.mode==='outline'?'## 教学目标\\n\\n## 教学过程\\n\\n## 课堂小结':'## 教学目标\\n\\n合成课堂讨论与板书设计。');if(!this.incomplete)p.onFinishReason?.('stop');},
 mount(){this.root=createRoot(document.getElementById('root'));this.root.render(React.createElement(React.StrictMode,null,React.createElement(Panel),React.createElement(Draft)))}};
 window.briefTest=f;
 window.fetch=async(input,options={})=>{const url=String(input),method=options.method||'GET',body=options.body?JSON.parse(options.body):null;f.calls.push({url,method,body});const result=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json'}});
 if(url.includes('/bind')){Object.assign(f.checkpoint.payload,body.payload||{});if(body.draftId)f.checkpoint.payload.draftId=body.draftId;return result({checkpoint:structuredClone(f.checkpoint)});}
 if(url==='/api/note-drafts'&&method==='POST'){if(f.writeFail){f.writeFail=false;return result({error:{message:'合成保存失败'}},503);}f.draft={...body,id:'draft-brief',status:'outline_ready',bodyInstruction:'',assembledContent:'',sections:body.sections.map((s,i)=>({...s,id:'section-'+i,content:'',status:'outline_only'}))};return result({draft:structuredClone(f.draft)});}
 if(url==='/api/note-drafts/draft-brief'&&method==='GET')return result({draft:structuredClone(f.draft)});
+if(url==='/api/agent/chat'){
+ const events=[{type:'agent_session',sessionId:'session-brief',runId:'run-revise',intent:'note_draft_continue'},
+ {type:'tool_action',toolName:'note_draft_tool',action:'revise_body',payload:{draftId:f.draft.id,checkpointId:f.checkpoint.id,checkpoint:f.checkpoint,seed:f.checkpoint.payload.seed,expectedUpdatedAt:f.draft.updatedAt,feedback:body.question}}];
+ return new Response(events.map(event=>'data: '+JSON.stringify(event)+'\\n\\n').join('')+'data: [DONE]\\n\\n',{headers:{'Content-Type':'text/event-stream'}});
+}
+if(url==='/api/note-drafts/draft-brief/assemble'&&method==='POST'){
+ if(body.expectedUpdatedAt!==f.draft.updatedAt)return result({error:{message:'草稿已变化'}},409);
+ f.draft={...f.draft,assembledContent:body.content,draftConfig:{...f.draft.draftConfig,assembledRevision:true},updatedAt:'2026-11-19T02:00:01'};
+ return result({draft:structuredClone(f.draft)});
+}
 if(url==='/api/note-drafts/draft-brief'&&method==='PUT'){f.draft={...f.draft,...body,topic:body.generationBrief?.title||f.draft.topic,draftConfig:{...f.draft.draftConfig,...(body.generationBrief?{generationBrief:body.generationBrief}: {})},sections:body.sections?body.sections.map((s,i)=>({...s,id:'new-section-'+i,content:'',status:'outline_only'})):f.draft.sections};return result({draft:structuredClone(f.draft)});}
 if(url.includes('/note-drafts/draft-brief/sections/')){const id=url.split('/sections/')[1].split('/')[0];Object.assign(f.draft.sections.find(s=>s.id===id),body);return result({draft:structuredClone(f.draft)});}
 if(url.includes('/chat-sessions'))return result({sessions:[]});if(url.includes('/checkpoints/latest'))return result({checkpoint:f.checkpoint});if(url.includes('/runs/latest'))return result({task:null});if(url.includes('/runs'))return result({tasks:[]});throw new Error('Unexpected synthetic HTTP '+url);};
@@ -143,6 +153,45 @@ try {
     assert(geometry.fits);if(width===320)assert(geometry.buttonHeight>=44);
     await page.evaluate(()=>document.documentElement.classList.add('theme-dark'));
     await card.screenshot({path:path.join(output,'card-dark-'+width+'.png')});await page.emulateMedia({reducedMotion:'reduce'});
+    if(width===1280){
+      const beforeFollowUp=await page.evaluate(()=>{
+        const f=window.briefTest;
+        f.root.unmount();
+        f.draft={...f.draft,status:'assembled',assembledContent:'## 教学目标\n\n修改前的完整正文。',updatedAt:'2026-11-19T02:00:00'};
+        f.store.setState({activeDraftContext:null,treeData:[{id:'unrelated',type:'file',name:'无关笔记.md'}],fileContents:{unrelated:'不应发送的笔记正文'},selectedFileId:'unrelated'});
+        f.mount();
+        return f.calls.length;
+      });
+      await page.getByRole('button',{name:'移除当前笔记引用'}).click();
+      await page.getByRole('textbox',{name:'消息输入框'}).fill('把刚才那篇再缩短一点');
+      await page.getByRole('button',{name:'发送',exact:true}).click();
+      try { await page.waitForFunction(()=>window.briefTest.draft.updatedAt==='2026-11-19T02:00:01'); }
+      catch(error) {
+        console.error(await page.evaluate(start=>({text:document.body.innerText,calls:window.briefTest.calls.slice(start),
+          modes:window.briefTest.requests.map(r=>r.mode),command:window.briefTest.store.getState().draftCommand,
+          checkpoint:window.briefTest.store.getState().pendingCheckpoint}),beforeFollowUp));
+        throw error;
+      }
+      const revised=await page.evaluate(start=>({calls:window.briefTest.calls.slice(start),draft:window.briefTest.draft,
+        requests:window.briefTest.requests.filter(r=>r.mode==='revise').map(r=>({markdown:r.markdown,instruction:r.extraRequest}))}),beforeFollowUp);
+      assert.equal(revised.draft.id,'draft-brief');
+      assert.match(revised.draft.assembledContent,/合成课堂讨论/);
+      assert.deepEqual(revised.requests,[{markdown:'## 教学目标\n\n修改前的完整正文。',instruction:'把刚才那篇再缩短一点'}]);
+      const chat=revised.calls.find(call=>call.url==='/api/agent/chat');
+      assert.equal(chat.body.pageState.contextScope,'none');
+      assert.equal(chat.body.pageState.currentNoteId,null);
+      assert.equal(chat.body.documentContent,'');
+      assert(!revised.calls.some(call=>call.method==='POST'&&['/api/notes','/api/note-drafts'].includes(call.url)));
+      await shell.getByRole('heading',{name:'修改后的正文'}).waitFor();
+      await shell.getByText('合成课堂讨论与板书设计。',{exact:true}).waitFor();
+      await button(shell.locator('main'),'关闭草稿工作台').click();
+      await page.evaluate(()=>{window.briefTest.incomplete=true;});
+      await page.getByRole('textbox',{name:'消息输入框'}).fill('再改短一点');
+      await page.getByRole('button',{name:'发送',exact:true}).click();
+      await shell.getByRole('alert').getByText('这次修改没有生成完整正文，原草稿已保留。').waitFor();
+      assert.equal(await page.evaluate(()=>window.briefTest.calls.filter(call=>call.url.endsWith('/assemble')).length),1);
+      await button(shell.locator('main'),'关闭草稿工作台').click();
+    }
     // New topic is a separate brief; old content/requirements cannot become its supplement.
     await page.evaluate(()=>{const f=window.briefTest;f.root.unmount();f.oldDraft=structuredClone(f.draft);f.draft=null;f.writeFail=true;f.store.getState().startDraft('加法笔记');f.mount();});
     const newCard=card.last(),newRequirements=newCard.getByRole('textbox',{name:'草稿要求'});
@@ -154,7 +203,7 @@ try {
     assert.equal(await page.evaluate(()=>window.briefTest.draft.bodyInstruction),'');
     assert.equal(await page.evaluate(()=>window.briefTest.oldDraft.bodyInstruction),'改成两课时，增加板书设计。');
     assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
-    results.push({viewportWidth:width,initialGeometry,manualApproval:true,snapshot:true,doubleClick:true,taskLocked:true,supplementCombined:true,workspaceReplan:width===1280,checkpointRestore:true,newTaskIsolated:true,saveFailureRetry:true,...geometry});
+    results.push({viewportWidth:width,initialGeometry,manualApproval:true,snapshot:true,doubleClick:true,taskLocked:true,supplementCombined:true,workspaceReplan:width===1280,followUp:width===1280,checkpointRestore:true,newTaskIsolated:true,saveFailureRetry:true,...geometry});
     await context.close();
   }
 } finally {await browser.close();}
