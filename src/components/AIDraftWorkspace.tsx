@@ -379,6 +379,7 @@ export default function AIDraftWorkspace() {
   const [busyMode, setBusyMode] = useState<BusyMode>("idle");
   const [statusText, setStatusText] = useState("");
   const [errorText, setErrorText] = useState("");
+  const [progressConnectionLost, setProgressConnectionLost] = useState(false);
   const [outlineInstruction, setOutlineInstruction] = useState("");
   const [sectionInstruction, setSectionInstruction] = useState("");
   const [newSectionTitle, setNewSectionTitle] = useState("");
@@ -1073,10 +1074,14 @@ export default function AIDraftWorkspace() {
   useEffect(() => {
     if (!draft || draft.status !== "generating") return;
     let alive = true;
+    let pending = false;
     const sync = async () => {
+      if (pending) return;
+      pending = true;
       try {
         const latest = await getNoteDraft(draft.id);
         if (!alive) return;
+        setProgressConnectionLost(false);
         replaceDraft(latest);
         if (latest.status === "saved" && latest.savedNoteId && completedNoteRef.current !== latest.savedNoteId) {
           completedNoteRef.current = latest.savedNoteId;
@@ -1089,8 +1094,10 @@ export default function AIDraftWorkspace() {
           }
           closeDraft({ status: "resolved", draftId: latest.id });
         }
-      } catch (error) {
-        if (alive) setErrorText(error instanceof Error ? error.message : "读取生成进度失败");
+      } catch {
+        if (alive) setProgressConnectionLost(true);
+      } finally {
+        pending = false;
       }
     };
     void sync();
@@ -1652,6 +1659,9 @@ export default function AIDraftWorkspace() {
 
               <div className="min-h-0 flex-1 overflow-y-auto">
                 <div className="nf-draft-reading py-7 sm:py-10">
+                  {draft?.status === "generating" && progressConnectionLost && (
+                    <p role="status" className="mb-5 text-[12px] text-jelly-text-muted">暂时连不上服务，正在重新获取进度。已写完的章节会保留。</p>
+                  )}
                   {errorText && (
                     <div role="alert" className="mb-5 rounded-lg border border-jelly-red/25 bg-jelly-red-bg px-3 py-2 text-[12px] leading-relaxed text-jelly-red">
                       {errorText}

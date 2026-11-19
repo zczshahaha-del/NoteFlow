@@ -802,7 +802,7 @@ async def stop_all_draft_sections(
     )
 
     async with AsyncSessionLocal() as session:
-        draft = await _get_draft(session, user.id, draft_id)
+        draft = await _get_draft(session, user.id, draft_id, for_update=True)
         if draft.status not in {"generating", "failed"}:
             return {"draft": _draft_out(draft, await _get_sections(session, user.id, draft.id))}
         config = dict(draft.draft_config or {})

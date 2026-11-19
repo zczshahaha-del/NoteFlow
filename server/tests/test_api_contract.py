@@ -22,6 +22,16 @@ class ApiContractTest(unittest.TestCase):
         async def ok():
             return {"ok": True}
 
+        @app.get("/limited")
+        async def limited():
+            raise HTTPException(429, "请稍候", headers={"retry-after": "17", "X-Internal": "private"})
+
+        @app.get("/note-conflict")
+        async def note_conflict():
+            raise HTTPException(409, {"code": "NOTE_VERSION_CONFLICT", "message": "已更新",
+                                      "currentContentHash": "f" * 64, "currentUpdatedAt": "2026-11-19T01:23:45",
+                                      "internal": "private"})
+
         self.client = TestClient(app)
         self.app = app
 
@@ -32,6 +42,15 @@ class ApiContractTest(unittest.TestCase):
         self.assertEqual(response.json()["error"], {"code": "CONFLICT", "message": "version changed"})
         self.assertEqual(response.json()["requestId"], "test-request-1")
         self.assertEqual(response.headers["x-request-id"], "test-request-1")
+
+    def test_rate_limit_and_note_conflict_keep_only_public_recovery_fields(self) -> None:
+        limited = self.client.get("/limited")
+        self.assertEqual(limited.headers["Retry-After"], "17")
+        self.assertNotIn("X-Internal", limited.headers)
+        conflict = self.client.get("/note-conflict")
+        self.assertEqual(conflict.json()["error"]["details"], {
+            "currentContentHash": "f" * 64, "currentUpdatedAt": "2026-11-19T01:23:45",
+        })
 
     def test_security_headers_and_metrics_are_recorded(self) -> None:
         response = self.client.get("/ok")

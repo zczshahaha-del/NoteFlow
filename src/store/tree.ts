@@ -133,7 +133,7 @@ export function togglePinned(nodes: FileNode[], id: string): FileNode[] {
 export function updateFileMetadata(
   nodes: FileNode[],
   id: string,
-  metadata: Partial<Pick<FileNode, "tags" | "favorite" | "lastOpenedAt">>
+  metadata: Partial<Pick<FileNode, "tags" | "favorite" | "lastOpenedAt" | "updatedAt" | "contentHash">>
 ): FileNode[] {
   return nodes.map((node) => {
     if (node.id === id && node.type === "file") {

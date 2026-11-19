@@ -61,6 +61,7 @@
     "test:search-snippet": "node --experimental-strip-types scripts/search-snippet-text-test.ts",
     "test:draft-ui": "node scripts/draft-surface-browser-test.mjs",
     "test:draft-lifecycle": "node scripts/draft-lifecycle-test.mjs",
+    "test:draft-restart": "node scripts/run-python.mjs scripts/test_draft_worker_restart.py",
     "test:draft-brief": "node scripts/draft-brief-browser-test.mjs",
     "test:ai-writing-flow": "node --experimental-strip-types scripts/ai-writing-flow-test.ts",
     "test:e2e-runtime": "node scripts/run-python.mjs server/tests/runtime_e2e.py",

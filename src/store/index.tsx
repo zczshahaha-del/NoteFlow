@@ -102,7 +102,10 @@ import {
 import {
   isBundledDemoSnapshot,
   clearLocalNoteContentIfMatches,
+  hasPendingLocalNoteContent,
   loadLocalSnapshot,
+  loadPendingNoteEdits,
+  rebaseLocalNoteContent,
   resolveSelectedFileId,
   saveLocalSnapshot,
   saveLocalNoteContent,
@@ -588,6 +591,9 @@ async function persistNoteContent(noteId: string, content: string) {
       useAppStore.setState({
         treeData: updateNodeIndexStatus(reconcilePersistedNoteRecord(current.treeData, note, latestLocalContent), noteId, 'outdated'),
       });
+      if (ownerId) rebaseLocalNoteContent(ownerId, noteId, latestLocalContent, {
+        updatedAt: note.updatedAt, contentHash: note.contentHash,
+      });
       persistLocalCurrentState();
       return;
     }
@@ -596,7 +602,10 @@ async function persistNoteContent(noteId: string, content: string) {
       treeData: replaceNoteRecordInTree(current.treeData, note),
     });
     setNoteSaveState(noteId, noteSaveState("saved"));
-    if (localNoteEdits.get(noteId) === editOwner) localNoteEdits.delete(noteId);
+    if (localNoteEdits.get(noteId) === editOwner) {
+      if (ownerId) clearLocalNoteContentIfMatches(ownerId, noteId, content);
+      localNoteEdits.delete(noteId);
+    }
     persistLocalCurrentState();
   } catch (error) {
     if (!ownsNote() || useAppStore.getState().fileContents[noteId] !== content || localNoteEdits.get(noteId) !== editOwner) return;
@@ -608,13 +617,9 @@ async function persistNoteContent(noteId: string, content: string) {
       /failed to fetch|networkerror|network request failed/i.test(message);
     if (isNetworkFailure && current.hydratedUserId) {
       try {
-        await queueOfflineNoteEdit({
-          userId: current.hydratedUserId,
-          noteId,
-          content,
-          baseUpdatedAt,
-          baseContentHash,
-        });
+        if (!hasPendingLocalNoteContent(current.hydratedUserId, noteId, content)) {
+          await queueOfflineNoteEdit({ userId: current.hydratedUserId, noteId, content, baseUpdatedAt, baseContentHash });
+        }
         if (!ownsNote() || useAppStore.getState().fileContents[noteId] !== content || localNoteEdits.get(noteId) !== editOwner) return;
         setNoteSaveState(noteId, noteSaveState("offline", "已离线保存在本机，联网后会自动同步。"));
         persistLocalCurrentState();
@@ -758,7 +763,14 @@ async function flushOfflineNoteQueue(userId: string) {
   for (const edit of edits) {
     if (useAppStore.getState().hydratedUserId !== userId) return;
     try {
+      // The current page's pending edit is replayed by the normal writer.
+      const pending = localNoteEdits.get(edit.noteId);
+      if (pending) {
+        if (hasPendingLocalNoteContent(userId, edit.noteId, pending.content)) await removeOfflineNoteEdit(edit);
+        continue;
+      }
       const remote = await getNote(edit.noteId);
+      if (useAppStore.getState().hydratedUserId !== userId || localNoteEdits.has(edit.noteId)) continue;
       if (remote.content === edit.content) {
         await removeOfflineNoteEdit(edit);
         if (useAppStore.getState().hydratedUserId === userId && useAppStore.getState().fileContents[edit.noteId] === edit.content) {
@@ -779,13 +791,17 @@ async function flushOfflineNoteQueue(userId: string) {
         changed = true;
         continue;
       }
-      await updateNote(edit.noteId, {
-        content: edit.content,
-        source: "auto_save",
-        changeSummary: "离线队列恢复",
-        expectedUpdatedAt: remote.updatedAt,
-        expectedContentHash: remote.contentHash,
+      const saved = await enqueueNoteMutation(edit.noteId, async () => {
+        if (useAppStore.getState().hydratedUserId !== userId || localNoteEdits.has(edit.noteId)) return null;
+        return updateNote(edit.noteId, {
+          content: edit.content,
+          source: "auto_save",
+          changeSummary: "离线队列恢复",
+          expectedUpdatedAt: remote.updatedAt,
+          expectedContentHash: remote.contentHash,
+        });
       });
+      if (!saved) continue;
       await removeOfflineNoteEdit(edit);
       if (useAppStore.getState().hydratedUserId === userId && useAppStore.getState().fileContents[edit.noteId] === edit.content) {
         localNoteEdits.delete(edit.noteId); setNoteSaveState(edit.noteId, noteSaveState('saved'));
@@ -1698,6 +1714,9 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
     noteOpenRequests.clear();
     localNoteEdits.clear();
     const snapshot = loadLocalSnapshot(userId);
+    const pending = loadPendingNoteEdits(userId, snapshot.treeData);
+    const restored = noteSaveState("offline", "未同步的正文已恢复，联网后会自动提交。");
+    for (const [id, edit] of pending) localNoteEdits.set(id, { userId, content: edit.content });
     set({
       hydratedUserId: userId,
       serverSyncReady: false,
@@ -1717,8 +1736,8 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
       noteOpenError: null,
       expandedFolderIds: new Set(),
       fileContents: snapshot.fileContents,
-      noteSaveState: noteSaveState("idle"),
-      noteSaveStates: {},
+      noteSaveState: pending.has(snapshot.selectedFileId ?? "") ? restored : noteSaveState("idle"),
+      noteSaveStates: Object.fromEntries([...pending.keys()].map(id => [id, restored])),
       deletedNotes: [],
       workspaceLoading: true,
       workspaceError: null,
@@ -1820,6 +1839,7 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
 
   updateFileContent: (id, content) => {
     const unsaved = noteSaveState("unsaved");
+    const base = findFileById(get().treeData, id);
     set((state) => ({
       fileContents: { ...state.fileContents, [id]: content },
       treeData: updateFileContentInTree(state.treeData, id, content),
@@ -1828,7 +1848,9 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
     }));
     const userId = get().hydratedUserId;
     localNoteEdits.set(id, { userId, content });
-    if (userId && saveLocalNoteContent(userId, id, content)) {
+    if (userId && saveLocalNoteContent(userId, id, content, {
+      updatedAt: base?.updatedAt ?? null, contentHash: base?.contentHash ?? null,
+    })) {
       localStateCheckpoint = { userId, snapshot: snapshotFromState(get()) };
     }
     scheduleNoteSave(id, content);
@@ -3096,7 +3118,18 @@ export function AppProvider({
 
   useEffect(() => {
     if (hydratedUserId !== userId) return;
-    const flush = () => void flushOfflineNoteQueue(userId).catch(() => undefined);
+    const flush = () => {
+      const state = useAppStore.getState();
+      if (state.hydratedUserId !== userId || !navigator.onLine) return;
+      void flushOfflineNoteQueue(userId).catch(() => undefined).then(() => {
+        const current = useAppStore.getState();
+        if (current.hydratedUserId !== userId) return;
+        for (const [id, edit] of localNoteEdits) {
+          if (edit.userId === userId && current.noteSaveStates[id]?.status === "offline") current.retryNoteSave(id);
+        }
+      });
+      if (!state.serverSyncReady && !state.workspaceLoading) void loadStructuredWorkspace(userId);
+    };
     window.addEventListener("online", flush);
     if (navigator.onLine) flush();
     return () => window.removeEventListener("online", flush);
