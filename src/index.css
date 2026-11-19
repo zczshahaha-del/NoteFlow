@@ -198,6 +198,7 @@ button,
   --directory-row-icon: var(--nf-ui-icon);
   --directory-row-hover: var(--nf-ui-soft);
   --directory-row-selected: var(--nf-ui-accent-soft);
+  --directory-guide-color: #d5d2cd;
   --directory-arrow-width: 18px;
   --directory-arrow-shift: 3px;
 }
@@ -208,6 +209,7 @@ button,
   --directory-row-icon: #99a8b7;
   --directory-row-hover: #313a44;
   --directory-row-selected: var(--nf-ui-accent-soft);
+  --directory-guide-color: var(--nf-ui-line);
 }
 
 .directory-tree .directory-node-row {
@@ -273,7 +275,7 @@ button,
   inset-block: 6px 6px;
   /* Align to the desktop folder icon without crossing child icons on touch layouts. */
   inset-inline-start: calc(var(--directory-branch-indent) + 36px);
-  border-inline-start: 1px solid var(--nf-ui-line);
+  border-inline-start: 1px solid var(--directory-guide-color);
   pointer-events: none;
 }
 
