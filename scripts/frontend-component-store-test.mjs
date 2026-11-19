@@ -865,7 +865,7 @@ try {
   await act(async () => {
     fileMenu.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
   });
-  assert.deepEqual(Array.from(directoryContainer.querySelector('.nf-action-menu[data-open="true"]').querySelectorAll('button')).map(button => button.textContent.trim()), ["重命名", "移动到", "导出", "置顶", "取消收藏", "删除"]);
+  assert.deepEqual(Array.from(directoryContainer.querySelector('.nf-action-menu[data-open="true"]').querySelectorAll('button')).map(button => button.textContent.trim()), ["取消收藏", "置顶", "重命名", "移动到", "导出 Markdown", "删除"]);
   // Export reads the latest body at action time, without subscribing navigation
   // to every keystroke. No system download or clipboard is used in this test.
   const exportId = useAppStore.getState().selectedFileId;
@@ -876,7 +876,7 @@ try {
   URL.revokeObjectURL = () => {};
   dom.window.HTMLAnchorElement.prototype.click = function () {};
   await act(async () => useAppStore.setState(state => ({fileContents:{...state.fileContents,[exportId]:'最新尚未同步的导出正文'}})));
-  await act(async () => Array.from(directoryContainer.querySelector('.nf-action-menu[data-open="true"]').querySelectorAll('button')).find(button=>button.textContent.trim()==='导出').click());
+  await act(async () => Array.from(directoryContainer.querySelector('.nf-action-menu[data-open="true"]').querySelectorAll('button')).find(button=>button.textContent.trim()==='导出 Markdown').click());
   assert.equal(await exportedBlob.text(),'最新尚未同步的导出正文');
   URL.createObjectURL = savedCreateUrl; URL.revokeObjectURL = savedRevokeUrl;
   dom.window.HTMLAnchorElement.prototype.click = savedAnchorClick;
@@ -926,10 +926,10 @@ try {
   assert.ok(selectedRow.querySelector('svg[aria-label="已置顶"]'));
   assert.ok(selectedRow.querySelector('svg[aria-label="已收藏"]'));
   const folderArrow = rowContainer.querySelector('button[aria-label="收起全栈开发"]');
-  const rowFolderMore = folderArrow.closest('.directory-node-row').querySelector('button[aria-label="文件操作"]');
+  const rowFolderMore = folderArrow.closest('.directory-node-row').querySelector('button[aria-label="文件夹操作"]');
   await act(async () => rowFolderMore.click());
   const folderMenu = rowContainer.querySelector('.nf-action-menu[data-open="true"]');
-  assert.deepEqual(Array.from(folderMenu.querySelectorAll('button')).map(button => button.textContent.trim()), ["重命名", "移动到", "置顶", "删除"]);
+  assert.deepEqual(Array.from(folderMenu.querySelectorAll('button')).map(button => button.textContent.trim()), ["新建笔记", "重命名", "移动到", "置顶", "删除"]);
   await act(async () => folderMenu.querySelector('button').dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   assert.equal(document.activeElement === rowFolderMore, true);
   await act(async () => folderArrow.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })));
@@ -954,6 +954,20 @@ try {
   await act(async () => renameInput.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   assert.equal(rowContainer.querySelector('.directory-node-open input'), null);
   assert.equal(useAppStore.getState().treeData[0].children[0].name, note.name);
+  const rootNote = { ...note, id: 'root-note' };
+  const noteCreations = [];
+  await act(async () => useAppStore.setState({
+    treeData: [folder, rootNote], selectedFileId: rootNote.id,
+    addNode(parentId, node) { noteCreations.push({ parentId, node }); },
+  }));
+  await act(async () => rowFolderMore.click());
+  await act(async () => rowContainer.querySelector('.nf-directory-context-menu[data-open="true"] button').click());
+  assert.equal(noteCreations.length, 1);
+  assert.equal(noteCreations[0].parentId, folder.id);
+  assert.equal(noteCreations[0].node.type, 'file');
+  assert.equal(useAppStore.getState().selectedFileId, noteCreations[0].node.id);
+  assert.equal(fileOpenCalls, 2);
+  await act(async () => useAppStore.setState({ addNode: originalAddNode }));
   await act(async () => rowRoot.unmount());
   rowContainer.remove();
 
@@ -1281,7 +1295,7 @@ try {
   const deleteRoot = createRoot(deleteContainer);
   await act(async () => deleteRoot.render(React.createElement(DirectoryTree, { ...accountProps, pinned: true, onPinnedChange() {} })));
   const confirmDialog = () => document.querySelector('.nf-overlay[data-open="true"] [role="alertdialog"]');
-  const deleteMore = label => deleteContainer.querySelector('button[aria-label="' + label + '"]').closest('.directory-node-row').querySelector('button[aria-label="文件操作"]');
+  const deleteMore = label => deleteContainer.querySelector('button[aria-label="' + label + '"]').closest('.directory-node-row').querySelector('.file-node-menu-button');
   const noteMore = deleteMore("组件测试笔记");
   await clickAccount(noteMore);
   await clickAccount(action(noteMore.closest('[data-file-menu-root]'), "删除"));
