@@ -270,9 +270,8 @@ button,
   content: "";
   position: absolute;
   inset-block: 6px 6px;
-  /* Use the compact icon column so a wider touch arrow never pushes the guide past its children. */
-  inset-inline-start: calc(var(--directory-branch-indent) + 36px);
-  border-inline-start: 1px solid var(--nf-ui-line);
+  inset-inline-start: calc(var(--directory-branch-indent) + 5px + var(--directory-arrow-width) / 2 + var(--directory-arrow-shift));
+  border-inline-start: 1px dashed color-mix(in srgb, var(--directory-row-icon) 42%, transparent);
   pointer-events: none;
 }
 
