@@ -69,11 +69,20 @@ export async function listOfflineNoteEdits(userId: string): Promise<OfflineNoteE
   });
 }
 
-export async function removeOfflineNoteEdit(userId: string, noteId: string): Promise<void> {
+export async function removeOfflineNoteEdit(expected: OfflineNoteEdit): Promise<void> {
   return withStore("readwrite", (store, resolve, reject) => {
-    const request = store.delete(editKey(userId, noteId));
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error);
+    const key = editKey(expected.userId, expected.noteId);
+    const lookup = store.get(key);
+    lookup.onsuccess = () => {
+      const current = lookup.result as OfflineNoteEdit | undefined;
+      if (current?.queuedAt === expected.queuedAt && current.content === expected.content &&
+          current.baseContentHash === expected.baseContentHash && current.baseUpdatedAt === expected.baseUpdatedAt) {
+        const request = store.delete(key);
+        request.onsuccess = () => resolve();
+        request.onerror = () => reject(request.error);
+      } else resolve();
+    };
+    lookup.onerror = () => reject(lookup.error);
   });
 }
 

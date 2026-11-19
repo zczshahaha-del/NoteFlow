@@ -20,6 +20,10 @@ try {
     contentHash: 'synthetic-' + content, isPinned: false, isFavorite: false, indexStatus: 'indexed',
     createdAt: null, updatedAt: null, deletedAt: null });
   const reset = () => {
+    // The real hydration boundary clears edits and pending reads from the
+    // preceding scenario. Stub only the unrelated chat request.
+    store.setState({ refreshChatSessions: async () => {} });
+    store.getState().hydrate('synthetic-one');
     requests.length = 0;
     store.setState({ hydratedUserId: 'synthetic-one', selectedFileId: 'a', serverSyncReady: false,
       treeData: ['a', 'b'].map(id => ({ id, name: id + '.md', type: 'file', content: '缓存-' + id })),

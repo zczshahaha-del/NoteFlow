@@ -32,6 +32,8 @@ try {
   saveLocalSnapshot('two', snapshot); saveLocalNoteContent('two', 'a', '另一个账号');
   assert.equal(loadLocalSnapshot('one').fileContents.a, '');
   assert.equal(loadLocalSnapshot('two').fileContents.a, '另一个账号');
+  saveLocalSnapshot('two', snapshot);
+  assert.equal(loadLocalSnapshot('two').fileContents.a, '另一个账号', 'A saved snapshot from another tab cannot clear a different pending draft');
   const compacted = loadLocalSnapshot('one'); saveLocalSnapshot('one', compacted);
   assert.equal(localStorage.getItem('noteflow:one:note-draft:a'), null);
   assert.equal(loadLocalSnapshot('one').fileContents.a, '');

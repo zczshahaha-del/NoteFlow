@@ -37,6 +37,13 @@ export function saveLocalNoteContent(userId: string, noteId: string, content: st
   return saveToStorage(draftPrefix(userId) + noteId, content);
 }
 
+export function clearLocalNoteContentIfMatches(userId: string, noteId: string, content: string) {
+  try {
+    const key = draftPrefix(userId) + noteId;
+    if (localStorage.getItem(key) === JSON.stringify(content)) localStorage.removeItem(key);
+  } catch {}
+}
+
 function findFirstFileId(nodes: FileNode[]): string | null {
   for (const node of nodes) {
     if (node.type === "file") return node.id;
@@ -126,7 +133,13 @@ export function saveLocalSnapshot(
     try {
       const prefix = draftPrefix(userId);
       const keys = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index));
-      for (const key of keys) if (key?.startsWith(prefix)) localStorage.removeItem(key);
+      for (const key of keys) {
+        if (!key?.startsWith(prefix)) continue;
+        const noteId = key.slice(prefix.length);
+        const content = snapshot.fileContents[noteId];
+        // Another tab may have journaled a draft that this snapshot lacks.
+        if (content === undefined || localStorage.getItem(key) === JSON.stringify(content)) localStorage.removeItem(key);
+      }
     } catch {}
   }
   return contentsSaved && treeSaved && selectionSaved;

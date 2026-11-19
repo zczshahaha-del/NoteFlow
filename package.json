@@ -24,6 +24,7 @@
     "test:outline-reading-ui": "node scripts/outline-reading-browser-test.mjs",
     "test:note-entry": "node scripts/note-entry-browser-test.mjs",
     "test:note-open-race": "node scripts/note-open-race-test.mjs",
+    "test:note-conflict": "node scripts/note-conflict-browser-test.mjs",
     "test:note-write-race": "node scripts/note-write-race-test.mjs",
     "test:note-save-scheduler": "node scripts/note-save-scheduler-test.mjs",
     "test:workspace-operations": "node scripts/workspace-operation-test.mjs",

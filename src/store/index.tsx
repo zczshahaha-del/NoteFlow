@@ -7,6 +7,7 @@ import type {
   ChatSource,
   ChatSessionSummary,
   FileNode,
+  NoteSaveConflict,
   SelectionSurroundings,
 } from "../types";
 import { findFileById, initialWorkspaceTree } from "../workspaceTree";
@@ -32,6 +33,7 @@ import {
   getNote,
   listIndexJobs,
   listNotes,
+  NoteVersionConflictError,
   reindexNote as reindexNoteRequest,
   restoreNote,
   restoreNoteVersion as restoreNoteVersionRequest,
@@ -77,6 +79,7 @@ import {
   listOfflineNoteEdits,
   queueOfflineNoteEdit,
   removeOfflineNoteEdit,
+  type OfflineNoteEdit,
 } from "../services/offlineQueue";
 import {
   buildTreeFromRecords,
@@ -98,6 +101,7 @@ import {
 } from "./tree";
 import {
   isBundledDemoSnapshot,
+  clearLocalNoteContentIfMatches,
   loadLocalSnapshot,
   resolveSelectedFileId,
   saveLocalSnapshot,
@@ -145,6 +149,7 @@ interface NoteSaveState {
   status: NoteSaveStatus;
   message?: string;
   updatedAt?: string;
+  conflict?: NoteSaveConflict;
 }
 
 interface WorkspaceIssue { id: string; label: string; message: string; busy: boolean }
@@ -327,6 +332,8 @@ function mergeWorkspaceRefresh(remote: KnowledgeBaseSnapshot, started: Knowledge
     const node = { ...entry.node };
     if (latest.node.type === 'file' && dirty(id)) {
       node.content = current.fileContents[id] ?? latest.node.content ?? '';
+      node.contentHash = latest.node.contentHash;
+      node.updatedAt = latest.node.updatedAt;
       node.indexStatus = 'outdated';
       remote.fileContents[id] = node.content;
     }
@@ -607,13 +614,57 @@ async function persistNoteContent(noteId: string, content: string) {
         return;
       } catch {}
     }
-    if (/同步冲突|其他设备更新/.test(message) && current.hydratedUserId) {
+    if (error instanceof NoteVersionConflictError && current.hydratedUserId) {
       try {
         await preserveConflictCopy(current.hydratedUserId, noteId, content);
         return;
-      } catch {}
+      } catch {
+        if (ownsNote() && useAppStore.getState().fileContents[noteId] === content && localNoteEdits.get(noteId) === editOwner) {
+          setNoteSaveState(noteId, noteSaveState("error", "另一处已保存更新。你的修改仍在当前页面，重试可以保存为副本。"));
+        }
+        return;
+      }
     }
     if (ownsNote() && useAppStore.getState().fileContents[noteId] === content && localNoteEdits.get(noteId) === editOwner) setNoteSaveState(noteId, noteSaveState("error", message));
+  }
+}
+
+function noteHasPendingWrites(state: AppState, noteId: string) {
+  const status = state.noteSaveStates[noteId]?.status;
+  return localNoteEdits.has(noteId) || noteCreationRequests.has(noteId) || noteMutationQueues.has(noteId) ||
+    status === "unsaved" || status === "saving" || status === "offline" || status === "error";
+}
+
+async function readOpenedNote(noteId: string, background = false) {
+  const opened = useAppStore.getState();
+  const node = findFileById(opened.treeData, noteId);
+  if (!node || (background && (noteOpenRequests.has(noteId) || noteHasPendingWrites(opened, noteId)))) return;
+  const content = opened.fileContents[noteId];
+  const epoch = workspaceEpoch;
+  const request = {};
+  noteOpenRequests.set(noteId, request);
+  const ownsRequest = () => noteOpenRequests.get(noteId) === request &&
+    workspaceEpoch === epoch && useAppStore.getState().hydratedUserId === opened.hydratedUserId;
+  try {
+    const note = await getNote(noteId);
+    const current = useAppStore.getState();
+    if (!ownsRequest() || note.id !== noteId || (background && current.selectedFileId !== noteId) ||
+        findFileById(current.treeData, noteId) !== node || current.fileContents[noteId] !== content ||
+        noteHasPendingWrites(current, noteId)) return;
+    if (note.content === content && note.contentHash === node.contentHash &&
+        note.updatedAt === node.updatedAt && note.indexStatus === node.indexStatus) return;
+    useAppStore.setState({
+      fileContents: { ...current.fileContents, [noteId]: note.content },
+      treeData: replaceNoteRecordInTree(current.treeData, note),
+      ...(current.noteOpenError?.noteId === noteId ? { noteOpenError: null } : {}),
+    });
+    persistLocalCurrentState();
+  } catch {
+    if (!background && ownsRequest() && useAppStore.getState().selectedFileId === noteId) {
+      useAppStore.setState({ noteOpenError: { noteId } });
+    }
+  } finally {
+    if (noteOpenRequests.get(noteId) === request) noteOpenRequests.delete(noteId);
   }
 }
 
@@ -630,49 +681,66 @@ async function contentFingerprint(value: string): Promise<string> {
   return `fallback-${(hash >>> 0).toString(16)}-${value.length}`;
 }
 
-async function preserveConflictCopy(userId: string, noteId: string, localContent: string) {
+async function preserveConflictCopy(userId: string, noteId: string, localContent: string, offlineEdit?: OfflineNoteEdit) {
+  const epoch = workspaceEpoch;
+  const localEdit = localNoteEdits.get(noteId);
+  const ownsNote = () => {
+    const state = useAppStore.getState();
+    return state.hydratedUserId === userId && workspaceEpoch === epoch && Boolean(findFileById(state.treeData, noteId));
+  };
+  const isCurrentEdit = () => localNoteEdits.get(noteId) === localEdit &&
+    useAppStore.getState().fileContents[noteId] === localContent;
+
   const remote = await getNote(noteId);
-  if (useAppStore.getState().hydratedUserId !== userId || !findFileById(useAppStore.getState().treeData, noteId)) return;
-  if (remote.content === localContent) {
-    const current = useAppStore.getState();
-    if (current.fileContents[noteId] !== localContent) return;
-    useAppStore.setState({
-      fileContents: { ...current.fileContents, [remote.id]: remote.content },
-      treeData: replaceNoteRecordInTree(current.treeData, remote),
+  if (!ownsNote() || remote.id !== noteId || (!offlineEdit && !isCurrentEdit())) return;
+  let copy = null;
+  if (remote.content !== localContent) {
+    const fingerprint = await contentFingerprint(`${noteId}\n${remote.contentHash}\n${localContent}`);
+    if (!ownsNote() || (!offlineEdit && !isCurrentEdit())) return;
+    const stamp = new Date().toLocaleString("zh-CN", {
+      month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
+    }).replace(/[/:]/g, "-");
+    const suffix = `（同步冲突 ${stamp}）`;
+    copy = await createNote({
+      title: remote.title.slice(0, 255 - suffix.length) + suffix,
+      categoryId: remote.categoryId,
+      summary: "保留与已保存版本冲突的修改。",
+      tags: Array.from(new Set([...(remote.tags ?? []), "同步冲突"])),
+      content: localContent,
+      idempotencyKey: `sync-conflict:${fingerprint}`,
     });
-    if (current.fileContents[noteId] === localContent) {
-      localNoteEdits.delete(noteId);
-      setNoteSaveState(noteId, noteSaveState("saved", "内容已经同步，无需创建冲突副本。"));
-    }
-    await removeOfflineNoteEdit(userId, noteId).catch(() => undefined);
-    persistLocalCurrentState();
-    return;
   }
-  const conflictFingerprint = await contentFingerprint(
-    `${noteId}\n${remote.contentHash}\n${localContent}`
-  );
-  const stamp = new Date().toLocaleString("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).replace(/[/:]/g, "-");
-  const conflict = await createNote({
-    title: `${remote.title}（同步冲突 ${stamp}）`,
-    categoryId: remote.categoryId,
-    summary: "离线编辑与远端版本发生冲突，已保留为独立副本，请人工合并。",
-    tags: Array.from(new Set([...(remote.tags ?? []), "同步冲突"])),
-    content: localContent,
-    idempotencyKey: `sync-conflict:${conflictFingerprint}`,
-  });
-  if (useAppStore.getState().hydratedUserId !== userId) return;
-  if (useAppStore.getState().fileContents[noteId] === localContent) {
+  if (!ownsNote()) return;
+  const current = useAppStore.getState();
+  let treeData = current.treeData;
+  const fileContents = { ...current.fileContents };
+  if (copy && !findFileById(treeData, copy.id)) {
+    const node = buildTreeFromRecords([], [copy]).treeData[0];
+    const parent = copy.categoryId && findNode(treeData, copy.categoryId);
+    treeData = parent && parent.type === "folder" ? insertNode(treeData, parent.id, node) : [...treeData, node];
+    fileContents[copy.id] = copy.content;
+  }
+  // A later edit or navigation during the request cannot be replaced by an
+  // earlier save result. The copy, if created, remains in the workspace.
+  const editStillCurrent = isCurrentEdit();
+  const canResolveHere = editStillCurrent || (!localNoteEdits.has(noteId) && fileContents[noteId] === remote.content);
+  if (canResolveHere) {
+    if (editStillCurrent) clearLocalNoteContentIfMatches(userId, noteId, localContent);
     localNoteEdits.delete(noteId);
-    setNoteSaveState(noteId, noteSaveState("saved", "离线内容已保留为同步冲突副本。"));
+    fileContents[noteId] = remote.content;
+    treeData = replaceNoteRecordInTree(treeData, remote);
+    const saved: NoteSaveState = noteSaveState("saved");
+    if (copy) saved.conflict = { copyId: copy.id, remoteContent: remote.content, localContent };
+    useAppStore.setState({
+      treeData, fileContents,
+      noteSaveStates: { ...current.noteSaveStates, [noteId]: saved },
+      ...(current.selectedFileId === noteId ? { noteSaveState: saved } : {}),
+    });
+  } else if (treeData !== current.treeData) {
+    useAppStore.setState({ treeData, fileContents });
   }
-  await removeOfflineNoteEdit(userId, noteId).catch(() => undefined);
-  await loadStructuredWorkspace(userId, conflict.id);
-  if (useAppStore.getState().hydratedUserId === userId) setNoteSaveState(conflict.id, noteSaveState("saved", "检测到其他设备的更新，离线内容已保留为“同步冲突”副本。"));
+  persistLocalCurrentState();
+  if (offlineEdit) await removeOfflineNoteEdit(offlineEdit).catch(() => undefined);
 }
 
 async function flushOfflineNoteQueue(userId: string) {
@@ -685,7 +753,7 @@ async function flushOfflineNoteQueue(userId: string) {
     try {
       const remote = await getNote(edit.noteId);
       if (remote.content === edit.content) {
-        await removeOfflineNoteEdit(userId, edit.noteId);
+        await removeOfflineNoteEdit(edit);
         if (useAppStore.getState().hydratedUserId === userId && useAppStore.getState().fileContents[edit.noteId] === edit.content) {
           localNoteEdits.delete(edit.noteId); setNoteSaveState(edit.noteId, noteSaveState('saved'));
         }
@@ -700,7 +768,7 @@ async function flushOfflineNoteQueue(userId: string) {
         remote.content,
         edit.content
       )) {
-        await preserveConflictCopy(userId, edit.noteId, edit.content);
+        await preserveConflictCopy(userId, edit.noteId, edit.content, edit);
         changed = true;
         continue;
       }
@@ -711,7 +779,7 @@ async function flushOfflineNoteQueue(userId: string) {
         expectedUpdatedAt: remote.updatedAt,
         expectedContentHash: remote.contentHash,
       });
-      await removeOfflineNoteEdit(userId, edit.noteId);
+      await removeOfflineNoteEdit(edit);
       if (useAppStore.getState().hydratedUserId === userId && useAppStore.getState().fileContents[edit.noteId] === edit.content) {
         localNoteEdits.delete(edit.noteId); setNoteSaveState(edit.noteId, noteSaveState('saved'));
       }
@@ -1674,6 +1742,9 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
   replaceSnapshot: (snapshot) => {
     set((state) => ({
       selectedFileId: snapshot.selectedFileId,
+      ...(state.selectedFileId !== snapshot.selectedFileId ? {
+        noteSaveState: state.noteSaveStates[snapshot.selectedFileId ?? ""] ?? noteSaveState("idle"),
+      } : {}),
       noteOpenError: null,
       fileContents: snapshot.fileContents,
       treeData: snapshot.treeData,
@@ -1729,35 +1800,7 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
     });
     persistLocalCurrentState();
     if (!id) return;
-    const openedState = get();
-    const openedNode = findFileById(openedState.treeData, id);
-    const openedContent = openedState.fileContents[id];
-    const request = {};
-    noteOpenRequests.set(id, request);
-    const ownsRequest = () => noteOpenRequests.get(id) === request &&
-      get().hydratedUserId === openedState.hydratedUserId;
-    void getNote(id)
-      .then((note) => {
-        const current = get();
-        const localEdit = localNoteEdits.get(id);
-        // The cached editor is usable while this read is pending. Never replace
-        // newer typing, save/rename results, removed notes or another account.
-        if (!ownsRequest() || note.id !== id || !openedNode ||
-          findFileById(current.treeData, id) !== openedNode ||
-          current.fileContents[id] !== openedContent ||
-          (localEdit?.userId === current.hydratedUserId && localEdit?.content === openedContent)) return;
-        set({
-          fileContents: { ...current.fileContents, [note.id]: note.content },
-          treeData: replaceNoteRecordInTree(current.treeData, note),
-        });
-        persistLocalCurrentState();
-      })
-      .catch(() => {
-        if (ownsRequest() && get().selectedFileId === id) set({ noteOpenError: { noteId: id } });
-      })
-      .finally(() => {
-        if (noteOpenRequests.get(id) === request) noteOpenRequests.delete(id);
-      });
+    void readOpenedNote(id);
   },
 
   toggleFolder: (id) =>
@@ -3031,6 +3074,23 @@ export function AppProvider({
     window.addEventListener("online", flush);
     if (navigator.onLine) flush();
     return () => window.removeEventListener("online", flush);
+  }, [hydratedUserId, userId]);
+
+  useEffect(() => {
+    if (hydratedUserId !== userId) return;
+    const refresh = () => {
+      const state = useAppStore.getState();
+      if (document.visibilityState === "visible" && state.hydratedUserId === userId && state.serverSyncReady &&
+          state.centerMode === "note" && state.selectedFileId) {
+        void readOpenedNote(state.selectedFileId, true);
+      }
+    };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
   }, [hydratedUserId, userId]);
 
   return <>{children}</>;

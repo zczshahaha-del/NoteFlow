@@ -166,7 +166,7 @@ assert.match(aiPanel, /对话/);
 assert.match(aiPanel, /全库搜索/);
 assert.match(aiPanel, /当前笔记引用/);
 assert.equal(aiPanel.includes(">问笔记<"), false);
-assert.match(aiPanel, /mode: composerMode/);
+assert.match(aiPanel, /mode: activeComposerMode/);
 assert.match(aiPanel, /contextScope,/);
 assert.match(aiPanel, /"knowledge_base"/);
 assert.match(aiPanel, /"current_note"/);
