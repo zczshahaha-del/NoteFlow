@@ -32,4 +32,5 @@ cd server
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
-步骤 2 会新增 `npm run test:quality` 作为分类明确的统一入口，并把固定 RAG/Memory 评测与 PostgreSQL 集成门禁纳入报告。
+- `npm run test:chat-live` 使用本机开发 PostgreSQL 和已配置的模型复测选区引用、笔记检索和草稿意图。夹具为合成笔记，运行后删除。`npm run test:quality:live` 也会执行这组检查。
+- `npm run test:draft-restart` 在临时 PostgreSQL schema 用两个独立进程验收强制退出后的草稿恢复。模型调用使用替身，测试结束清理临时 schema。
