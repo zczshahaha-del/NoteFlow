@@ -37,10 +37,9 @@ dom.window.HTMLElement.prototype.scrollTo ??= function scrollTo() {};
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const { createRoot } = await import("react-dom/client");
 const testFetch = async (input) => new Response(JSON.stringify(
-  String(input).endsWith("/api/auth/sessions") ? []
-    : String(input).endsWith("/api/settings")
-      ? { settings: { memoryEnabled: true, preferences: {}, createdAt: null, updatedAt: null } }
-      : { revisions: [] }
+  String(input).endsWith("/api/settings")
+    ? { settings: { memoryEnabled: true, preferences: {}, createdAt: null, updatedAt: null } }
+    : { revisions: [] }
 ), {
   status: 200,
   headers: { "Content-Type": "application/json" },
@@ -1047,9 +1046,8 @@ try {
   let signOutCalls = 0, changedSession = null, restoredId = null;
   const accountStore = useAppStore.getState();
   const apiCalls = [];
-  let failSessions = false, failMemorySetting = false, importResolve;
+  let failMemorySetting = false, importResolve;
   const importRequests=[];
-  const sessionFixture = (id, current) => ({ id, current, userAgent: "Chrome/130 Mac OS X", ipAddress: null, createdAt: "2026-01-01T00:00:00Z", lastSeenAt: "2026-01-01T00:00:00Z", expiresAt: "2027-01-01T00:00:00Z" });
   const memoryFixture = { provider: "reference", sourceRef: "source-ui-test", id: "memory-ui-test", memoryType: "preference", content: "偏好简洁排版", layer: "semantic", importance: 3, status: "pending" };
   const siblingMemory = { ...memoryFixture, id: "memory-same-source", content: "偏好先看图示", status: "active" };
   const unrelatedMemory = { ...siblingMemory, id: "memory-other-source", sourceRef: "other-source", content: "正在学习数据库" };
@@ -1067,11 +1065,7 @@ try {
     else if (path === "/api/settings") {
       if (method === "PUT" && failMemorySetting) { status = 500; data = { detail: "保存设置失败" }; }
       else data = { settings: { memoryEnabled: payload?.memoryEnabled ?? true, preferences: {} } };
-    } else if (path === "/api/auth/sessions") {
-      if (failSessions) { status = 500; data = { detail: "设备加载失败" }; }
-      else data = [sessionFixture("other-device", false), sessionFixture("current-device", true)];
-    } else if (path.startsWith("/api/auth/sessions/")) data = { currentSessionRevoked: path.endsWith("/current-device") };
-    else if (path.endsWith("/email-change/request")) data = { message: "验证码已发送", developmentCode: "123456" };
+    } else if (path.endsWith("/email-change/request")) data = { message: "验证码已发送", developmentCode: "123456" };
     else if (path.endsWith("/email-change/confirm")) data = { user: { id: "test-user", email: "test@example.com", displayName: "test", emailVerified: true } };
     else if (path === "/api/memory-console") data = { engine: "reference", capabilities: { rules: true, graph: true, sources: true, importLegacy: true }, mission: "用户偏好", ruleVersion: 1, history: [], jobs: [] };
     else if (path === "/api/memory-console/impact/memory-ui-test") data = { sourceId: "source-ui-test", memories: [memoryFixture, siblingMemory] };
@@ -1162,17 +1156,8 @@ try {
   assert.equal(changedSession.user.email, "test@example.com");
   assert.ok(apiCalls.some(call => call.path.endsWith("/email-change/confirm") && call.payload.code === "123456"));
   assert.equal(activeSettings().querySelector('input[type="email"]'), null);
-  await clickAccount(Array.from(activeSettings().querySelectorAll("button")).find(b => b.textContent.includes("登录设备")));
-  assert.match(activeSettings().textContent, /有效会话|当前设备/);
-  const sessionExits = () => Array.from(activeSettings().querySelectorAll(".nf-device button"));
-  await clickAccount(sessionExits()[0]);
-  assert.equal(sessionExits().length, 1);
-  await clickAccount(sessionExits()[0]);
-  assert.equal(signOutCalls, 1);
-  failSessions = true;
-  await clickAccount(settingAction("刷新"));
-  assert.match(activeSettings().querySelector('[role="alert"]').textContent, /设备加载失败/);
-  failSessions = false;
+  assert.doesNotMatch(activeSettings().textContent, /登录设备|有效会话/);
+  assert.ok(!apiCalls.some(({ path }) => path.startsWith("/api/auth/sessions")));
 
   await clickAccount(settingAction("外观")); await clickAccount(settingAction("深色"));
   assert.deepEqual(themeCalls, ["dark"]);
@@ -1260,7 +1245,7 @@ try {
   await waitExit();
   await clickAccount(accountTrigger);
   await clickAccount(action(accountPanel(), "退出登录"));
-  assert.equal(signOutCalls, 2);
+  assert.equal(signOutCalls, 1);
   await act(async () => accountRoot.unmount()); accountContainer.remove();
 
   const compactAccountContainer = document.createElement("div"); document.body.appendChild(compactAccountContainer);
@@ -1596,7 +1581,7 @@ try {
       "AccountMenu",
       "AIPanel",
     ],
-    accountMenuCoverage: ["single-entry", "username", "no-native-tooltip", "username-click", "long-username", "unframed-footer-menu", "numeric-avatar-fallback", "enter-exit", "email-confirm", "devices-revoke", "device-error", "memory-CRUD", "memory-button-rollback-only", "ZIP-JSON-export", "import", "trash-restore", "modal-focus-trap", "escape-focus", "IME", "outside-pointer", "focus-leave", "sign-out", "compact", "note-folder-delete-confirm"],
+    accountMenuCoverage: ["single-entry", "username", "no-native-tooltip", "username-click", "long-username", "unframed-footer-menu", "numeric-avatar-fallback", "enter-exit", "email-confirm", "no-device-settings", "memory-CRUD", "memory-button-rollback-only", "ZIP-JSON-export", "import", "trash-restore", "modal-focus-trap", "escape-focus", "IME", "outside-pointer", "focus-leave", "sign-out", "compact", "note-folder-delete-confirm"],
     directoryRowCoverage: ["whole-row-selection", "full-name", "selected-more", "nested-indent", "pin-favorite-glyphs", "folder-disclosure", "file-open-callback", "independent-menu", "rename-cancel"],
     conversationCoverage: ["empty-wait", "whitespace-wait", "streaming-markdown", "hide-status-on-first-text", "no-status-during-transport-cleanup", "single-status", "completion", "stop-callback", "error-clears-status", "fallback-wait", "empty-send-disabled", "Enter-Shift-IME", "send-context", "library-mode", "remove-note-reference", "citation-open", "selection-expand", "selection-send", "scoped-scrollable-tables", "both-role-copy", "reply-copy-before-time", "user-time-before-copy", "raw-Markdown-copy", "copy-success-reset", "copy-failure-retry", "copy-duplicate-lock", "copy-late-result", "copy-fallback-focus-draft-selection", "copy-hint-label-portal", "copy-hint-keyboard-IME-Escape", "copy-hint-viewport-flip", "copy-hint-hover-delay-bridge", "copy-hint-scroll-resize-blur-lifecycle"],
     softMenuCoverage: ["exit-inert", "unmount-after-exit", "quick-reopen", "reduced-motion", "Escape-focus", "IME-Escape", "file-action-order", "history-search-label-focus-filter", "history-inline-actions", "history-IME-default-composition-229", "history-rename-IME-Enter-Escape", "history-rename-cancel-focus", "history-rename-callback", "history-delete-confirmation", "history-switch-callback"],

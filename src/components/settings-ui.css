@@ -117,9 +117,8 @@
 .nf-settings-system .nf-switch[aria-pressed="true"]::before { background:var(--nf-ui-accent); }
 .nf-settings-system .nf-switch span { position: absolute; left: 5px; top: calc(50% - 9px); width: 18px; height: 18px; border-radius: 50%; background: var(--nf-surface); transition: transform 180ms ease; }
 .nf-settings-system .nf-switch[aria-pressed="true"] span { transform: translateX(16px); }
-.nf-settings-system .nf-list-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; font-size: var(--nf-font-caption, 12px); color: var(--nf-muted); }
 .nf-settings-system .nf-record { padding: 14px 0; border-bottom: 1px solid var(--nf-line); min-width: 0; overflow-wrap: anywhere; }
-.nf-settings-system .nf-device, .nf-settings-system .nf-trash-record { display: flex; align-items: center; gap: 12px; }
+.nf-settings-system .nf-trash-record { display: flex; align-items: center; gap: 12px; }
 .nf-settings-system .nf-record-main { min-width: 0; flex: 1; }
 .nf-settings-system .nf-record-title { margin: 0; font-size: var(--nf-font-control, 13px); font-weight: 500; overflow-wrap: anywhere; }
 .nf-settings-system .nf-record-meta { display: flex; flex-wrap: wrap; gap: 6px 12px; color: var(--nf-muted); font-size: var(--nf-font-caption, 12px); margin: 4px 0; }

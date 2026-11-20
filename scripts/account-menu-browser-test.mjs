@@ -78,6 +78,10 @@ try{
   // Existing settings / trash routing is unchanged; no dangerous action is submitted.
   await panel.getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('dialog',{name:'设置',exact:true}).waitFor();await settled(page);
   assert.equal(await page.getByRole('button',{name:'账号与安全',exact:true}).getAttribute('aria-current'),'page');
+  const accountPage=page.getByRole('region',{name:'账号与安全内容',exact:true});
+  assert.equal(await accountPage.getByRole('button',{name:/登录设备/}).count(),0);
+  await accountPage.getByRole('button',{name:/^登录邮箱/}).click();
+  assert.equal(await accountPage.getByRole('textbox',{name:'登录邮箱地址',exact:true}).inputValue(),'example@example.invalid');
   await page.getByRole('button',{name:'外观',exact:true}).click();await settled(page);
   assert.equal(await page.locator('.nf-nav[aria-current="page"]').evaluate(n=>getComputedStyle(n).backgroundColor),'rgb(231, 238, 242)');
   assert.equal(await page.locator('.nf-nav[aria-current="page"]').evaluate(n=>getComputedStyle(n).color),'rgb(49, 95, 125)');
