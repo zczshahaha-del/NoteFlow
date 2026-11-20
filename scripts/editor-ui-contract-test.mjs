@@ -428,7 +428,7 @@ assert.match(overlayDialog, /aria-modal="true"/);
 assert.match(overlayDialog, /node\.inert = true/);
 assert.match(overlayDialog, /event\.isComposing/);
 assert.match(accountMenu, /登录邮箱/);
-assert.match(accountMenu, /登录设备/);
+assert.doesNotMatch(accountMenu, /登录设备|listUserSessions|revokeUserSession/);
 assert.match(accountMenu, /数据管理/);
 assert.match(accountMenu, /AI 与记忆/);
 assert.match(accountMenu, /settingsTab === "account"/);

@@ -17,7 +17,6 @@ import {
   FileJson,
   LogOut,
   MailCheck,
-  MonitorSmartphone,
   Pencil,
   Settings,
   Trash,
@@ -48,11 +47,8 @@ import {
 } from "../utils/exportKnowledgeZip";
 import {
   confirmEmailChange,
-  listUserSessions,
   requestEmailChange,
-  revokeUserSession,
   type AuthSession,
-  type UserSessionRecord,
 } from "../services/auth";
 import OverlayDialog, { useSurfacePresence } from "./OverlayDialog";
 import "./account-menu.css";
@@ -116,29 +112,6 @@ function groupMemories(memories: UserMemoryRecord[]) {
   return Array.from(groups.entries());
 }
 
-function sessionDeviceLabel(userAgent: string | null): string {
-  if (!userAgent) return "未知设备";
-  const browser = /Edg\//.test(userAgent)
-    ? "Edge"
-    : /Chrome\//.test(userAgent)
-      ? "Chrome"
-      : /Firefox\//.test(userAgent)
-        ? "Firefox"
-        : /Safari\//.test(userAgent)
-          ? "Safari"
-          : "浏览器";
-  const system = /Mac OS X/.test(userAgent)
-    ? "macOS"
-    : /Windows/.test(userAgent)
-      ? "Windows"
-      : /Android/.test(userAgent)
-        ? "Android"
-        : /iPhone|iPad/.test(userAgent)
-          ? "iOS"
-          : "设备";
-  return `${browser} · ${system}`;
-}
-
 export default function AccountMenu({
   themeMode,
   onThemeModeChange,
@@ -162,10 +135,6 @@ export default function AccountMenu({
   const [memories, setMemories] = useState<UserMemoryRecord[]>([]);
   const [memoryLoading, setMemoryLoading] = useState(false);
   const [memoryError, setMemoryError] = useState("");
-  const [sessionsOpen, setSessionsOpen] = useState(false);
-  const [sessions, setSessions] = useState<UserSessionRecord[]>([]);
-  const [sessionLoading, setSessionLoading] = useState(false);
-  const [sessionError, setSessionError] = useState("");
   const [emailOpen, setEmailOpen] = useState(false);
   const [emailDraft, setEmailDraft] = useState(userEmail);
   const [emailCode, setEmailCode] = useState("");
@@ -324,36 +293,6 @@ export default function AccountMenu({
       void reloadMemories();
     }
   }, [settingsOpen, settingsTab, memoryOpen]);
-
-  const reloadSessions = async () => {
-    setSessionLoading(true);
-    setSessionError("");
-    try {
-      setSessions(await listUserSessions());
-    } catch (error) {
-      setSessionError(error instanceof Error ? error.message : "登录设备加载失败");
-    } finally {
-      setSessionLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (settingsOpen && settingsTab === "account" && sessionsOpen) void reloadSessions();
-  }, [settingsOpen, settingsTab, sessionsOpen]);
-
-  const handleRevokeSession = async (session: UserSessionRecord) => {
-    setSessionError("");
-    try {
-      const currentRevoked = await revokeUserSession(session.id);
-      if (currentRevoked) {
-        await onSignOut();
-        return;
-      }
-      setSessions((items) => items.filter((item) => item.id !== session.id));
-    } catch (error) {
-      setSessionError(error instanceof Error ? error.message : "退出设备失败");
-    }
-  };
 
   const handleRequestEmailCode = async () => {
     setEmailError("");
@@ -530,19 +469,6 @@ export default function AccountMenu({
                   {emailError && <p className="nf-notice nf-error" role="alert">{emailError}</p>}
                   {emailMessage && <p className="nf-notice" role="status">{emailMessage}</p>}
                   <button type="button" className="nf-button nf-primary" disabled={emailLoading || !emailDraft.trim() || Boolean(emailCodeSent && emailCode.length !== 6)} onClick={() => void (emailCodeSent ? handleConfirmEmail() : handleRequestEmailCode())}>{emailLoading ? "处理中…" : emailCodeSent ? "确认并绑定" : "发送验证码"}</button>
-                </div>}
-                <button type="button" className="nf-row" aria-expanded={sessionsOpen} onClick={() => setSessionsOpen((open) => !open)}>
-                  <span className="nf-row-main"><MonitorSmartphone size={17} strokeWidth={1.6} />登录设备</span><span className="nf-row-end">{sessions.length ? sessions.length + " 个" : "管理"}<ChevronDown size={14} strokeWidth={1.6} /></span>
-                </button>
-                {sessionsOpen && <div className="nf-detail">
-                  <div className="nf-list-heading"><span>有效会话</span><button type="button" className="nf-button" onClick={() => void reloadSessions()}>刷新</button></div>
-                  {sessionError && <p className="nf-notice nf-error" role="alert">{sessionError}</p>}
-                  {sessionLoading ? <p className="nf-notice" role="status">正在加载设备…</p> : sessions.length === 0 ? <p className="nf-notice">暂无可管理的会话</p> : sessions.map((session) => (
-                    <div key={session.id} className="nf-record nf-device">
-                      <MonitorSmartphone size={17} strokeWidth={1.6} /><div className="nf-record-main"><p className="nf-record-title">{sessionDeviceLabel(session.userAgent)}{session.current ? " · 当前设备" : ""}</p><p className="nf-record-meta">{session.ipAddress || "未知地址"} · {new Date(session.lastSeenAt).toLocaleString()}</p></div>
-                      <button type="button" className="nf-button nf-danger" onClick={() => void handleRevokeSession(session)}>退出</button>
-                    </div>
-                  ))}
                 </div>}
               </>}
 
