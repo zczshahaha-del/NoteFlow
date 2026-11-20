@@ -234,6 +234,21 @@ button,
   color: var(--nf-ui-accent-text);
 }
 
+.directory-tree .directory-node-branch .directory-node-row[data-selected="true"]:not([data-folder]) {
+  background: transparent;
+}
+
+.directory-tree .directory-node-branch .directory-node-row[data-selected="true"]:not([data-folder])::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  /* The guide ends 17px into each child row, leaving a 4px gap before the fill. */
+  inset-inline: 21px 0;
+  border-radius: inherit;
+  background: var(--directory-row-selected);
+  pointer-events: none;
+}
+
 .directory-tree .directory-node-row[data-folder="true"],
 .directory-tree .directory-node-row[data-selected="true"] {
   font-weight: 500;
