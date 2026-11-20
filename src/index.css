@@ -349,14 +349,11 @@ button,
   width: 24px;
   height: 32px;
   border-radius: 6px;
+  background: transparent;
 }
 
-.directory-tree .directory-node-more:hover {
-  background: var(--directory-row-selected);
-}
-
+.directory-tree .directory-node-more:hover,
 .directory-tree .directory-node-more[aria-expanded="true"] {
-  background: var(--nf-ui-selected);
   color: var(--nf-ui-text);
 }
 
