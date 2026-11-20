@@ -751,7 +751,7 @@ try {
       onSignOut() {},
     }));
   });
-  const activeFileButton = directoryContainer.querySelector('button[aria-current="page"]');
+  const activeFileButton = directoryContainer.querySelector('.directory-node-row button[aria-current="page"]');
   assert.ok(activeFileButton);
   assert.ok(activeFileButton.classList.contains("directory-node-open"));
   assert.equal(activeFileButton.closest(".directory-node-row").dataset.selected, "true");
@@ -933,13 +933,13 @@ try {
   await act(async () => folderMenu.querySelector('button').dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   assert.equal(document.activeElement === rowFolderMore, true);
   await act(async () => folderArrow.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })));
-  assert.equal(rowContainer.querySelector('[aria-current="page"]'), null);
+  assert.equal(rowContainer.querySelector('.directory-node-row [aria-current="page"]'), null);
   assert.equal(useAppStore.getState().selectedFileId, nestedNote.id);
   assert.equal(fileOpenCalls, 0);
   const folderOpen = rowContainer.querySelector('.directory-node-row[data-folder] .directory-node-open');
   assert.equal(folderOpen.getAttribute("aria-expanded"), "false");
   await act(async () => folderOpen.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })));
-  await act(async () => rowContainer.querySelector('[aria-current="page"]')
+  await act(async () => rowContainer.querySelector('.directory-node-row [aria-current="page"]')
     .dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })));
   assert.equal(fileOpenCalls, 1);
   const rowMenu = rowContainer.querySelector('[data-selected] .file-node-menu-button');
@@ -954,7 +954,7 @@ try {
   await act(async () => renameInput.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   assert.equal(rowContainer.querySelector('.directory-node-open input'), null);
   assert.equal(useAppStore.getState().treeData[0].children[0].name, note.name);
-  const rootNote = { ...note, id: 'root-note' };
+  const rootNote = { ...note, id: 'root-note', favorite: false };
   const noteCreations = [];
   await act(async () => useAppStore.setState({
     treeData: [folder, rootNote], selectedFileId: rootNote.id,
@@ -967,7 +967,21 @@ try {
   assert.equal(noteCreations[0].node.type, 'file');
   assert.equal(useAppStore.getState().selectedFileId, noteCreations[0].node.id);
   assert.equal(fileOpenCalls, 2);
-  await act(async () => useAppStore.setState({ addNode: originalAddNode }));
+  await act(async () => useAppStore.setState({ addNode: originalAddNode, expandedFolderIds: new Set() }));
+  const favorites = rowContainer.querySelector('.directory-favorites');
+  assert.equal(favorites.open, true);
+  const favoriteLinks = favorites.querySelectorAll('button');
+  assert.equal(favoriteLinks.length, 1);
+  assert.equal(favoriteLinks[0].title, '全栈开发 / 组件测试笔记');
+  await act(async () => favorites.querySelector('summary').click());
+  assert.equal(favorites.open, false);
+  await act(async () => favorites.querySelector('summary').click());
+  await act(async () => favoriteLinks[0].click());
+  assert.equal(useAppStore.getState().selectedFileId, nestedNote.id);
+  assert.equal(favoriteLinks[0].getAttribute('aria-current'), 'page');
+  assert.equal(fileOpenCalls, 3);
+  await act(async () => useAppStore.setState({ treeData: [rootNote] }));
+  assert.equal(rowContainer.querySelector('.directory-favorites'), null);
   await act(async () => rowRoot.unmount());
   rowContainer.remove();
 
