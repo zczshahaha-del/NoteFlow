@@ -40,6 +40,21 @@ function sortPinnedFirst(nodes: FileNode[]): FileNode[] {
     );
 }
 
+type FavoriteNote = { id: string; title: string; path: string };
+
+function collectFavoriteNotes(nodes: FileNode[], parentPath = "", favorites: FavoriteNote[] = []): FavoriteNote[] {
+  for (const node of nodes) {
+    if (node.type === "folder") {
+      const path = parentPath ? `${parentPath} / ${node.name}` : node.name;
+      collectFavoriteNotes(node.children ?? [], path, favorites);
+    } else if (node.favorite) {
+      const title = node.name.replace(/\.md$/, "");
+      favorites.push({ id: node.id, title, path: parentPath ? `${parentPath} / ${title}` : title });
+    }
+  }
+  return favorites;
+}
+
 function normalizeNodeName(node: FileNode, name: string): string {
   const trimmed = name.trim();
   if (!trimmed) return node.name;
@@ -616,6 +631,7 @@ export default function DirectoryTree({
     () => sortPinnedFirst(treeData),
     [treeData]
   );
+  const favoriteNotes = useMemo(() => collectFavoriteNotes(treeData), [treeData]);
   const moveTargets = useMemo(() => {
     const excludeIds =
       movingNode?.type === "folder" ? collectFolderIds(movingNode) : new Set<string>();
@@ -1013,6 +1029,34 @@ export default function DirectoryTree({
 
       {/* Tree */}
       <div className={`flex-1 overflow-y-auto ${expanded ? "directory-node-list py-2" : "px-2 py-3"}`}>
+        {expanded && favoriteNotes.length > 0 && (
+          <details className="directory-favorites" open>
+            <summary className="directory-favorites-title">
+              <Star size={15} strokeWidth={1.65} aria-hidden="true" />
+              收藏
+              <ChevronDown className="directory-favorites-chevron" size={14} strokeWidth={1.8} aria-hidden="true" />
+            </summary>
+            <ul aria-label="收藏的笔记">
+              {favoriteNotes.map((note) => (
+                <li key={note.id}>
+                  <button
+                    type="button"
+                    className="directory-node-open directory-favorite-link"
+                    aria-current={selectedFileId === note.id ? "page" : undefined}
+                    title={note.path}
+                    onClick={() => {
+                      setSelectedFileId(note.id);
+                      onFileOpen?.();
+                    }}
+                  >
+                    <FileText size={16} className="directory-node-icon shrink-0" strokeWidth={1.6} aria-hidden="true" />
+                    <span className="min-w-0 truncate">{note.title}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
         {filteredTree.length === 0 ? (
           expanded ? (
             <div className="empty-state flex flex-col items-center justify-center px-4 py-9 text-center">
