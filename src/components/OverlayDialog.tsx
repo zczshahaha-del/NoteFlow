@@ -23,6 +23,7 @@ export function useSurfacePresence(open: boolean) {
 interface OverlayDialogProps {
   open: boolean;
   onClose: () => void;
+  onEscape?: () => void;
   label: string;
   themeMode: "light" | "dark";
   className?: string;
@@ -30,12 +31,12 @@ interface OverlayDialogProps {
   children: ReactNode;
 }
 
-export default function OverlayDialog({ open, onClose, label, themeMode, className = "", role = "dialog", children }: OverlayDialogProps) {
+export default function OverlayDialog({ open, onClose, onEscape, label, themeMode, className = "", role = "dialog", children }: OverlayDialogProps) {
   const present = useSurfacePresence(open);
   const overlayRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
-  const closeRef = useRef(onClose);
-  closeRef.current = onClose;
+  const escapeRef = useRef(onEscape ?? onClose);
+  escapeRef.current = onEscape ?? onClose;
 
   useEffect(() => {
     if (!open) return;
@@ -56,7 +57,7 @@ export default function OverlayDialog({ open, onClose, label, themeMode, classNa
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopImmediatePropagation();
-        closeRef.current();
+        escapeRef.current();
       } else if (event.key === "Tab") {
         const controls = focusable();
         const first = controls[0], last = controls[controls.length - 1];
