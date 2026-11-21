@@ -412,7 +412,7 @@ export default function AccountMenu({
             {settingsPage === "memory" && <button type="button" className="nf-settings-refresh" disabled={memoryLoading || memoryUpdating} onClick={() => void reloadMemories()}>刷新</button>}
             <button type="button" className="nf-icon-button nf-settings-close" data-dialog-initial-focus aria-label={settingsPage === "trash" ? "关闭回收站" : "关闭设置"} onClick={() => setSettingsOpen(false)}><X size={17} strokeWidth={1.6} /></button>
           </header>
-          <div ref={settingsScrollRef} className="nf-settings-scroll">
+          <div ref={settingsScrollRef} className="nf-settings-scroll" data-page={settingsPage}>
             <section key={settingsPage} className="nf-settings-page" aria-label={settingsLabel + "内容"}>
               {settingsPage === "home" && <>
                 <div className="nf-settings-group">
@@ -484,9 +484,11 @@ export default function AccountMenu({
                     const isEditing = editingMemoryId === memory.id;
                     const pending = memory.status === "pending";
                     const status = pending ? "待确认" : memory.status === "archived" ? "已停用" : null;
-                    return <div key={memory.id} className="nf-record">
-                      {status && <p className="nf-record-meta">{status}</p>}
-                      {isEditing ? <textarea value={editingContent} aria-label="记忆内容" disabled={memoryUpdating} onChange={(event) => setEditingContent(event.target.value)} className="nf-input" /> : <p className="nf-record-title">{memory.content}</p>}
+                    return <div key={memory.id} className="nf-record nf-memory-record" data-editing={isEditing}>
+                      <div className="nf-record-main">
+                        {status && <p className="nf-record-meta">{status}</p>}
+                        {isEditing ? <textarea value={editingContent} aria-label="记忆内容" disabled={memoryUpdating} onChange={(event) => setEditingContent(event.target.value)} className="nf-input" /> : <p className="nf-record-title">{memory.content}</p>}
+                      </div>
                       <div className="nf-record-actions">{isEditing ? <>
                         <button type="button" className={pending ? "nf-button" : "nf-icon-button"} disabled={memoryUpdating || !editingContent.trim()}
                           onClick={() => void saveEditMemory(memory)} aria-label={pending ? "保存并启用" : "保存记忆"}>

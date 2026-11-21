@@ -23,7 +23,10 @@ window.fetch=async(input,init={})=>{
     if(init.method==='PUT')memoryEnabled=JSON.parse(init.body).memoryEnabled;
     data={settings:{memoryEnabled,preferences:{}}};
   }else if(url.endsWith('/api/memories')){
-    data={memories:[{id:'browser-memory',content:'喜欢简洁的回答。',status:'active'}]};
+    data={memories:Array.from({length:8},(_,index)=>({
+      id:'browser-memory-'+index,content:index===0?'喜欢简洁的回答。':'测试长记忆内容。'.repeat(15),
+      status:index===1?'pending':'active',
+    }))};
   }
   return new Response(JSON.stringify(data),{headers:{'Content-Type':'application/json'}});
 };
@@ -81,23 +84,25 @@ try{
   assert.equal(await panel.locator('button').count(),3);assert.equal(await panel.getByText('13',{exact:true}).count(),1);
   assert.equal(await panel.locator('[title]').count(),0);
   if(width===1280)await page.screenshot({path:join(output,'menu.png')});
-  await panel.getByRole('button',{name:'设置',exact:true}).press('Escape');await settled(page);
-  assert.equal(await panel.count(),0);assert.equal(await page.locator('.nf-account-trigger').evaluate(n=>n===document.activeElement),true);
+  await panel.getByRole('button',{name:'设置',exact:true}).press('Escape');await panel.waitFor({state:'detached'});
+  assert.equal(await page.locator('.nf-account-trigger').evaluate(n=>n===document.activeElement),true);
   assert.equal(await page.locator('.nf-account-trigger').evaluate(n=>getComputedStyle(n).outlineStyle),'solid','Keyboard return retains a visible circular focus');
   await open(page);await page.locator('.nf-account-trigger').click();assert.equal(await panel.evaluate(n=>n.hasAttribute('inert')),true);
   await open(page);await page.waitForTimeout(210);assert.equal(await panel.count(),1);
   const settingsHome=page.getByRole('dialog',{name:'设置',exact:true});
+  const checkSettingsWidth=async dialog=>assert.equal((await dialog.boundingBox()).width,width===320?296:560);
   await panel.getByRole('button',{name:'设置',exact:true}).click();await settingsHome.waitFor();await settled(page);
   assert.deepEqual(await settingsHome.locator('.nf-settings-group .nf-row').evaluateAll(rows=>rows.map(row=>row.firstElementChild.textContent)),
     ['登录邮箱','显示模式','长期记忆','记忆列表','导入笔记','导出']);
   assert.equal(await settingsHome.getByRole('navigation').count(),0);
-  assert.equal(await settingsHome.evaluate(n=>n.getBoundingClientRect().width),width===320?296:382);
+  await checkSettingsWidth(settingsHome);
   assert.equal(await settingsHome.locator('.nf-segment button').count(),2);
   assert.equal(await settingsHome.locator('.nf-segment button[aria-pressed="true"]').evaluate(n=>getComputedStyle(n).backgroundColor),'rgb(251, 250, 248)');
   assert.equal(await settingsHome.getByRole('switch',{name:'长期记忆',exact:true}).count(),1);
   await settingsHome.screenshot({path:join(output,'settings-'+width+'.png')});
   await settingsHome.getByRole('button',{name:/^登录邮箱/}).click();
   const emailPage=page.getByRole('dialog',{name:'登录邮箱',exact:true});
+  await checkSettingsWidth(emailPage);
   assert.equal(await emailPage.getByText('example@example.invalid',{exact:true}).count(),1);
   await emailPage.getByRole('button',{name:'更换邮箱',exact:true}).click();
   assert.equal(await emailPage.getByRole('textbox',{name:'登录邮箱地址',exact:true}).inputValue(),'example@example.invalid');
@@ -109,11 +114,38 @@ try{
   await settingsHome.getByRole('button',{name:'记忆列表',exact:true}).click();
   const memoryPage=page.getByRole('dialog',{name:'记忆列表',exact:true});
   await memoryPage.getByText('喜欢简洁的回答。',{exact:true}).waitFor();
+  await settled(page);await checkSettingsWidth(memoryPage);
   assert.equal(await memoryPage.getByRole('button',{name:'刷新',exact:true}).count(),1);
+  const memoryLayout=await memoryPage.evaluate(dialog=>{
+    const header=dialog.querySelector('header');
+    const heading=header.querySelector('h2');
+    const back=header.querySelector('button');
+    const scroll=dialog.querySelector('.nf-settings-scroll');
+    const memory=dialog.querySelector('.nf-memory-record');
+    const text=memory.querySelector('.nf-record-main').getBoundingClientRect();
+    const actions=memory.querySelector('.nf-record-actions').getBoundingClientRect();
+    const before=heading.getBoundingClientRect().top;
+    scroll.scrollTop=scroll.scrollHeight;
+    const result={
+      actionsFit:actions.right<=dialog.getBoundingClientRect().right,
+      actionsBesideText:actions.left>text.right,
+      actionsBelowText:actions.top>=text.bottom,
+      headerFixed:scroll.scrollTop>0&&heading.getBoundingClientRect().top===before,
+      backGap:heading.getBoundingClientRect().left-back.getBoundingClientRect().right,
+      noHorizontalScroll:scroll.scrollWidth===scroll.clientWidth,
+    };
+    scroll.scrollTop=0;
+    return result;
+  });
+  assert(memoryLayout.actionsFit&&memoryLayout.headerFixed&&memoryLayout.noHorizontalScroll);
+  assert(width===320?memoryLayout.actionsBelowText:memoryLayout.actionsBesideText);
+  assert.equal(memoryLayout.backGap,width===320?6:10);
+  await memoryPage.screenshot({path:join(output,'memory-'+width+'.png')});
   await page.keyboard.press('Escape');await settingsHome.waitFor();
   assert.equal(await memorySwitch.getAttribute('aria-checked'),'false');
   await settingsHome.getByRole('button',{name:'导出',exact:true}).click();await settled(page);
   const exportPage=page.getByRole('dialog',{name:'导出',exact:true});
+  await checkSettingsWidth(exportPage);
   assert.equal(await page.getByRole('button',{name:'导出知识库备份',exact:true}).count(),1);
   assert.equal(await page.getByRole('button',{name:'导出 Markdown 文件',exact:true}).count(),1);
   assert.match(await exportPage.textContent(),/不含聊天与长期记忆/);
@@ -123,9 +155,11 @@ try{
   assert.equal(await settingsHome.getByRole('button',{name:'导出',exact:true}).evaluate(n=>n===document.activeElement),true);
   await settingsHome.getByRole('button',{name:'导入笔记',exact:true}).click();
   const importPage=page.getByRole('dialog',{name:'导入笔记',exact:true});
+  await checkSettingsWidth(importPage);
   assert.equal(await importPage.locator('input[type=file]').evaluate(n=>n.multiple),false);
   await importPage.getByRole('button',{name:'关闭设置',exact:true}).click();await settled(page);
   await open(page);await panel.getByRole('button',{name:/^回收站/}).click();await page.getByRole('dialog',{name:'回收站',exact:true}).waitFor();await settled(page);
+  await checkSettingsWidth(page.getByRole('dialog',{name:'回收站',exact:true}));
   assert.equal(await page.getByRole('heading',{name:'回收站',exact:true}).count(),1);
   await page.keyboard.press('Escape');await settled(page);
   await page.evaluate(()=>window.accountTest.update({userName:'很长的名字'.repeat(8),compact:false}));await open(page);
