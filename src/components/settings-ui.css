@@ -127,8 +127,22 @@
 .nf-settings-system [aria-expanded="true"] .nf-row-end svg { transform: rotate(180deg); }
 .nf-settings-system .nf-settings-detail { padding: 0 0 6px; }
 .nf-settings-system .nf-settings-detail .nf-row { padding-inline-start: 0; }
-.nf-settings-system .nf-detail { padding: 18px 0; border-bottom: 1px solid var(--nf-line); }
-.nf-settings-system .nf-detail label { display: block; font-size: var(--nf-font-caption, 12px); color: var(--nf-muted); margin-bottom: 8px; }
+.nf-settings-system .nf-settings-scroll[data-page="email"] .nf-settings-page { margin-inline-start: 0; }
+.nf-settings-system .nf-email-settings { --nf-email-label-width: 88px; max-width: 620px; }
+.nf-settings-system .nf-email-row { display: grid; grid-template-columns: var(--nf-email-label-width) minmax(0, 1fr) auto; align-items: center; column-gap: 14px; min-height: 71px; padding-block: 10px; border-block-end: 1px solid var(--nf-settings-line); }
+.nf-settings-system .nf-email-row h3 { margin: 0; font-size: 15px; font-weight: 600; }
+.nf-settings-system .nf-email-address { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 10px; min-width: 0; overflow-wrap: anywhere; }
+.nf-settings-system .nf-email-address small { color: var(--nf-muted); font-size: 12px; }
+.nf-settings-system .nf-email-action { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 5px 8px; border: 0; border-radius: 7px; background: transparent; color: var(--nf-muted); font-size: var(--nf-font-control, 13px); white-space: nowrap; }
+.nf-settings-system .nf-email-action:hover { background: var(--nf-settings-control); color: var(--nf-text); }
+.nf-settings-system .nf-email-form, .nf-settings-system .nf-email-message { margin-inline-start: calc(var(--nf-email-label-width) + 14px); }
+.nf-settings-system .nf-email-form { max-width: 408px; padding-block: 16px 8px; }
+.nf-settings-system .nf-email-form label { display: block; margin-bottom: 6px; color: var(--nf-muted); font-size: var(--nf-font-caption, 12px); }
+.nf-settings-system .nf-email-controls { display: flex; align-items: stretch; gap: 8px; }
+.nf-settings-system .nf-email-controls .nf-input { flex: 1; min-height: 38px; margin: 0; padding-block: 6px; }
+.nf-settings-system .nf-email-controls .nf-input:focus-visible { outline: 1px solid var(--nf-ui-focus) !important; outline-offset: -1px; }
+.nf-settings-system .nf-email-controls .nf-button { flex: none; white-space: nowrap; }
+.nf-settings-system .nf-email-verification { margin-top: 14px; }
 .nf-settings-system .nf-input { display: block; width: 100%; min-width: 0; margin-bottom: 12px; padding: 10px 12px; border: 1px solid var(--nf-line); border-radius: var(--nf-radius-control, 9px); color: var(--nf-text); background: var(--nf-surface); }
 .nf-settings-system textarea.nf-input { min-height: 90px; resize: vertical; }
 .nf-settings-system .nf-button { min-height: var(--nf-control-height, 36px); padding: 8px 13px; border: 0; border-radius: var(--nf-radius-control, 9px); background: var(--nf-soft); font-size: var(--nf-font-control, 13px); }
@@ -176,6 +190,10 @@
   .nf-settings-system .nf-content-heading { min-height: 52px; padding: 0 12px 0 16px; }
   .nf-settings-system .nf-content-heading h2 { font-size: 19px; }
   .nf-settings-system .nf-settings-scroll { padding-inline: 16px; }
+  .nf-settings-system .nf-email-row { grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; }
+  .nf-settings-system .nf-email-address { grid-column: 1; }
+  .nf-settings-system .nf-email-action { grid-area: 1 / 2 / span 2; }
+  .nf-settings-system .nf-email-form, .nf-settings-system .nf-email-message { margin-inline-start: 0; }
 }
 @media (pointer: coarse) {
   .nf-settings-system .nf-icon-button, .nf-settings-system .nf-content-heading .nf-icon-button { width: 44px; height: 44px; }
@@ -183,6 +201,7 @@
   .nf-settings-system .nf-segment button, .nf-settings-system .nf-switch { min-width: 44px; }
   .nf-settings-system .nf-input { font-size: 16px; }
   .nf-settings-system .nf-settings-sidebar button { min-height: 44px; }
+  .nf-settings-system .nf-email-action, .nf-settings-system .nf-email-controls .nf-input { min-height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .nf-settings-system *, .nf-settings-system *::before { animation: none !important; transition: none !important; }

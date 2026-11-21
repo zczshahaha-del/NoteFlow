@@ -1066,7 +1066,7 @@ try {
       if (method === "PUT" && failMemorySetting) { status = 500; data = { detail: "保存设置失败" }; }
       else data = { settings: { memoryEnabled: payload?.memoryEnabled ?? true, preferences: {} } };
     } else if (path.endsWith("/email-change/request")) data = { message: "验证码已发送", developmentCode: "123456" };
-    else if (path.endsWith("/email-change/confirm")) data = { user: { id: "test-user", email: "test@example.com", displayName: "test", emailVerified: true } };
+    else if (path.endsWith("/email-change/confirm")) data = { user: { id: "test-user", email: payload.email, displayName: "test", emailVerified: true } };
     else if (path === "/api/memory-console/impact/memory-ui-test") data = { sourceId: "source-ui-test", memories: [memoryFixture, siblingMemory] };
     else if (path === "/api/memories") data = { memories: [memoryFixture, siblingMemory, unrelatedMemory] };
     else if (path === "/api/memories/memory-ui-test") data = { memory: { ...memoryFixture, ...payload, status: method === "DELETE" ? "deleted" : payload?.status ?? "active" } };
@@ -1150,12 +1150,18 @@ try {
   assert.ok(document.activeElement === Array.from(activeSettings().querySelectorAll("button")).at(-1));
   assert.match(activeSettings().textContent, /登录邮箱test@example.com/);
   await clickAccount(settingAction("更换邮箱"));
-  assert.equal(activeSettings().querySelector('input[type="email"]').value, "test@example.com");
+  const newAddress = activeSettings().querySelector('input[type="email"]');
+  assert.equal(newAddress.value, "");
+  assert.equal(settingAction("发送验证码").disabled, true);
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, "value").set.call(newAddress, "new@example.com");
+    newAddress.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  });
   await clickAccount(settingAction("发送验证码"));
-  assert.equal(activeSettings().querySelector('input[aria-label="邮箱验证码"]').value, "123456");
-  await clickAccount(settingAction("确认并绑定"));
-  assert.equal(changedSession.user.email, "test@example.com");
-  assert.ok(apiCalls.some(call => call.path.endsWith("/email-change/confirm") && call.payload.code === "123456"));
+  assert.equal(activeSettings().querySelector('input[autocomplete="one-time-code"]').value, "123456");
+  await clickAccount(settingAction("确认更换"));
+  assert.equal(changedSession.user.email, "new@example.com");
+  assert.ok(apiCalls.some(call => call.path.endsWith("/email-change/confirm") && call.payload.code === "123456" && call.payload.email === 'new@example.com'));
   assert.equal(activeSettings().querySelector('input[type="email"]'), null);
   assert.doesNotMatch(activeSettings().textContent, /登录设备|有效会话/);
   assert.ok(!apiCalls.some(({ path }) => path.startsWith("/api/auth/sessions")));

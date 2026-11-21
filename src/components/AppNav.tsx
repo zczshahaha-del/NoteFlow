@@ -89,12 +89,15 @@ export default function AccountMenu({
   const [memorySettingLoading, setMemorySettingLoading] = useState(false);
   const [memorySettingError, setMemorySettingError] = useState("");
   const [emailOpen, setEmailOpen] = useState(false);
-  const [emailDraft, setEmailDraft] = useState(userEmail);
+  const [emailDraft, setEmailDraft] = useState("");
   const [emailCode, setEmailCode] = useState("");
   const [emailCodeSent, setEmailCodeSent] = useState(false);
   const [emailLoading, setEmailLoading] = useState(false);
   const [emailError, setEmailError] = useState("");
   const [emailMessage, setEmailMessage] = useState("");
+  const emailActionRef = useRef<HTMLButtonElement>(null);
+  const emailInputRef = useRef<HTMLInputElement>(null);
+  const emailCodeRef = useRef<HTMLInputElement>(null);
   const [importStatus, setImportStatus] = useState("");
   const [exportStatus, setExportStatus] = useState("");
   const [dataBusy, setDataBusy] = useState(false);
@@ -158,8 +161,10 @@ export default function AccountMenu({
   }, [accountOpen]);
 
   useEffect(() => {
-    if (!emailOpen) setEmailDraft(userEmail);
-  }, [emailOpen, userEmail]);
+    if (!emailOpen || emailLoading || settingsPage !== "email" || !settingsOpen) return;
+    if (emailCodeSent) emailCodeRef.current?.focus({ preventScroll: true });
+    else emailInputRef.current?.focus({ preventScroll: true });
+  }, [emailOpen, emailCodeSent, emailLoading, settingsPage, settingsOpen]);
 
   useEffect(() => {
     let cancelled = false;
@@ -249,6 +254,15 @@ export default function AccountMenu({
     }
   };
 
+  const toggleEmailForm = () => {
+    setEmailDraft("");
+    setEmailCode("");
+    setEmailCodeSent(false);
+    setEmailError("");
+    setEmailMessage("");
+    setEmailOpen(!emailOpen);
+  };
+
   const handleConfirmEmail = async () => {
     setEmailError("");
     setEmailMessage("");
@@ -258,7 +272,10 @@ export default function AccountMenu({
       onEmailChanged?.(nextSession);
       setEmailCodeSent(false);
       setEmailCode("");
+      setEmailDraft("");
       setEmailOpen(false);
+      setEmailMessage("登录邮箱已更新");
+      requestAnimationFrame(() => emailActionRef.current?.focus({ preventScroll: true }));
     } catch (error) {
       setEmailError(error instanceof Error ? error.message : "邮箱验证失败");
     } finally {
@@ -303,6 +320,7 @@ export default function AccountMenu({
     else setSettingsOpen(false);
   };
   const settingsLabel = settingsNav.find(item => item.page === settingsPage)?.label ?? "回收站";
+  const canSubmitEmail = Boolean(emailDraft.trim());
 
   return (
     <div ref={accountRef} data-compact={compact} data-theme={themeMode} className="nf-settings-system account-menu-root relative shrink-0 overflow-visible w-full">
@@ -368,21 +386,49 @@ export default function AccountMenu({
                   </div>
                 </>}
 
-                {settingsPage === "email" && <div className="nf-settings-detail">
-                  <div className="nf-settings-line">
-                    <div><h3>登录邮箱</h3><p>{userEmail} · {userEmailVerified ? "已验证" : "待验证"}</p></div>
-                    <button type="button" className="nf-button nf-settings-action" aria-expanded={emailOpen} onClick={() => { setEmailOpen((open) => !open); setEmailError(""); setEmailMessage(""); }}>
-                      <Pencil size={15} strokeWidth={1.65} aria-hidden="true" />更换邮箱
+                {settingsPage === "email" && <div className="nf-email-settings">
+                  <div className="nf-email-row">
+                    <h3>登录邮箱</h3>
+                    <div className="nf-email-address"><span>{userEmail}</span><small>{userEmailVerified ? "已验证" : "待验证"}</small></div>
+                    <button ref={emailActionRef} type="button" className="nf-email-action" aria-expanded={emailOpen}
+                      aria-controls={emailOpen ? accountPanelId + "-email-form" : undefined} disabled={emailLoading} onClick={toggleEmailForm}>
+                      {emailOpen ? "取消" : <><Pencil size={14} strokeWidth={1.65} aria-hidden="true" />更换邮箱</>}
                     </button>
                   </div>
-                  {emailOpen && <div className="nf-detail">
-                    <label htmlFor={accountPanelId + "-email"}>登录邮箱地址</label>
-                    <input id={accountPanelId + "-email"} type="email" aria-label="登录邮箱地址" value={emailDraft} onChange={(event) => { setEmailDraft(event.target.value); setEmailCodeSent(false); setEmailCode(""); }} className="nf-input" placeholder="name@example.com" />
-                    {emailCodeSent && <><label htmlFor={accountPanelId + "-code"}>邮箱验证码</label><input id={accountPanelId + "-code"} aria-label="邮箱验证码" value={emailCode} onChange={(event) => setEmailCode(event.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" autoComplete="one-time-code" maxLength={6} className="nf-input" placeholder="输入 6 位验证码" /></>}
+                  {emailOpen && <form className="nf-email-form" id={accountPanelId + "-email-form"} noValidate onSubmit={event => {
+                    event.preventDefault();
+                    if (!emailLoading && canSubmitEmail && (!emailCodeSent || emailCode.length === 6)) {
+                      void (emailCodeSent ? handleConfirmEmail() : handleRequestEmailCode());
+                    }
+                  }}>
+                    <label htmlFor={accountPanelId + "-email"}>新邮箱</label>
+                    <div className="nf-email-controls">
+                      <input ref={emailInputRef} id={accountPanelId + "-email"} type="email" autoComplete="email" required disabled={emailLoading}
+                        value={emailDraft} onChange={event => {
+                          setEmailDraft(event.target.value);
+                          setEmailCodeSent(false);
+                          setEmailCode("");
+                          setEmailError("");
+                          setEmailMessage("");
+                        }} className="nf-input" placeholder="name@example.com" />
+                      {!emailCodeSent && <button type="submit" className="nf-button nf-primary" disabled={emailLoading || !canSubmitEmail}>
+                        {emailLoading ? "发送中…" : "发送验证码"}
+                      </button>}
+                    </div>
+                    {emailCodeSent && <div className="nf-email-verification">
+                      <label htmlFor={accountPanelId + "-code"}>邮箱验证码</label>
+                      <div className="nf-email-controls">
+                        <input ref={emailCodeRef} id={accountPanelId + "-code"} value={emailCode} onChange={event => setEmailCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                          disabled={emailLoading} inputMode="numeric" autoComplete="one-time-code" maxLength={6} className="nf-input" placeholder="6 位验证码" />
+                        <button type="submit" className="nf-button nf-primary" disabled={emailLoading || emailCode.length !== 6}>
+                          {emailLoading ? "验证中…" : "确认更换"}
+                        </button>
+                      </div>
+                    </div>}
                     {emailError && <p className="nf-notice nf-error" role="alert">{emailError}</p>}
                     {emailMessage && <p className="nf-notice" role="status">{emailMessage}</p>}
-                    <button type="button" className="nf-button nf-primary" disabled={emailLoading || !emailDraft.trim() || Boolean(emailCodeSent && emailCode.length !== 6)} onClick={() => void (emailCodeSent ? handleConfirmEmail() : handleRequestEmailCode())}>{emailLoading ? "处理中…" : emailCodeSent ? "确认并绑定" : "发送验证码"}</button>
-                  </div>}
+                  </form>}
+                  {!emailOpen && emailMessage && <p className="nf-email-message nf-notice" role="status">{emailMessage}</p>}
                 </div>}
 
                 {settingsPage === "data" && <>
