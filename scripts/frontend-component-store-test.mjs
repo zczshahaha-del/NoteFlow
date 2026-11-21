@@ -1067,7 +1067,6 @@ try {
       else data = { settings: { memoryEnabled: payload?.memoryEnabled ?? true, preferences: {} } };
     } else if (path.endsWith("/email-change/request")) data = { message: "验证码已发送", developmentCode: "123456" };
     else if (path.endsWith("/email-change/confirm")) data = { user: { id: "test-user", email: "test@example.com", displayName: "test", emailVerified: true } };
-    else if (path === "/api/memory-console") data = { engine: "reference", capabilities: { rules: true, graph: true, sources: true, importLegacy: true }, mission: "用户偏好", ruleVersion: 1, history: [], jobs: [] };
     else if (path === "/api/memory-console/impact/memory-ui-test") data = { sourceId: "source-ui-test", memories: [memoryFixture, siblingMemory] };
     else if (path === "/api/memories") data = { memories: [memoryFixture, siblingMemory, unrelatedMemory] };
     else if (path === "/api/memories/memory-ui-test") data = { memory: { ...memoryFixture, ...payload, status: method === "DELETE" ? "deleted" : payload?.status ?? "active" } };
@@ -1162,6 +1161,9 @@ try {
   await clickAccount(settingAction("外观")); await clickAccount(settingAction("深色"));
   assert.deepEqual(themeCalls, ["dark"]);
   await clickAccount(settingAction("AI 与记忆"));
+  assert.match(activeSettings().textContent, /偏好简洁排版|记忆列表/);
+  assert.ok(apiCalls.some(call => call.path === "/api/memories"));
+  assert.doesNotMatch(activeSettings().textContent, /记忆管理|规则与来源|记忆关系|原有记忆|最近处理状态/);
   failMemorySetting = true;
   await clickAccount(activeSettings().querySelector('button[aria-label="长期记忆"]'));
   assert.equal(activeSettings().querySelector('button[aria-label="长期记忆"]').getAttribute("aria-pressed"), "true");
@@ -1169,26 +1171,34 @@ try {
   failMemorySetting = false;
   await clickAccount(activeSettings().querySelector('button[aria-label="长期记忆"]'));
   assert.equal(activeSettings().querySelector('button[aria-label="长期记忆"]').getAttribute("aria-pressed"), "false");
-  await clickAccount(Array.from(activeSettings().querySelectorAll("button")).find(b => b.textContent.includes("记忆管理")));
   assert.match(activeSettings().textContent, /偏好简洁排版/);
-  await clickAccount(settingAction("确认"));
-  assert.ok(apiCalls.some(call => call.payload?.reason === "profile_memory_approve"));
   await clickAccount(activeSettings().querySelector('button[aria-label="编辑记忆"]'));
-  assert.ok(activeSettings().querySelector('textarea[aria-label="记忆内容"]'));
-  await clickAccount(activeSettings().querySelector('button[aria-label="保存记忆"]'));
-  assert.ok(apiCalls.some(call => call.payload?.reason === "profile_memory_edit"));
+  const memoryInput = activeSettings().querySelector('textarea[aria-label="记忆内容"]');
+  assert.equal(memoryInput.value, "偏好简洁排版");
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, "value").set.call(memoryInput, "偏好简洁的编辑页面");
+    memoryInput.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  });
+  await clickAccount(settingAction("保存并启用"));
+  assert.ok(apiCalls.some(call => call.payload?.reason === "profile_memory_edit" && call.payload.status === "active" && call.payload.content === "偏好简洁的编辑页面"));
+  assert.match(activeSettings().textContent, /偏好简洁的编辑页面/);
+  assert.doesNotMatch(activeSettings().textContent, /待确认/);
   const originalMemoryConfirm = window.confirm;
   let confirmedMemoryImpact = "";
-  window.confirm = message => { confirmedMemoryImpact = message; return true; };
   try {
+    window.confirm = () => false;
+    await clickAccount(activeSettings().querySelector('button[aria-label="删除记忆"]'));
+    assert.ok(!apiCalls.some(call => call.method === "DELETE" && call.path.startsWith("/api/memories/")));
+    window.confirm = message => { confirmedMemoryImpact = message; return true; };
     await clickAccount(activeSettings().querySelector('button[aria-label="删除记忆"]'));
   } finally { window.confirm = originalMemoryConfirm; }
   assert.match(confirmedMemoryImpact, /关联的 2 条记忆/);
   assert.ok(apiCalls.some(call => call.path === "/api/memory-console/impact/memory-ui-test"));
   assert.ok(apiCalls.some(call => call.method === "DELETE" && call.search === "?confirmedSource=true"), "Source deletion confirmation is independent of provider name");
-  assert.doesNotMatch(activeSettings().textContent, /偏好简洁排版/);
+  assert.doesNotMatch(activeSettings().textContent, /偏好简洁的编辑页面/);
   assert.doesNotMatch(activeSettings().textContent, /偏好先看图示/);
   assert.match(activeSettings().textContent, /正在学习数据库/);
+  assert.ok(apiCalls.filter(call => call.path.startsWith("/api/memory-console")).every(call => call.path.startsWith("/api/memory-console/impact/")));
   await clickAccount(settingAction("数据管理"));
   assert.ok(settingAction("导出 Markdown 文件")); assert.ok(settingAction("导出知识库备份"));
   const downloads = [];

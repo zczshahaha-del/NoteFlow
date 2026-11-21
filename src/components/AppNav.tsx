@@ -1,6 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
 import "./menu-ui.css";
-import MemoryConsole, { MemorySourceView } from './MemoryConsole';
 import { memoryConsole } from '../services/memoryConsole';
 import {
   Check,
@@ -69,49 +68,6 @@ export interface AccountMenuProps {
   trashCount?: number;
 }
 
-function memoryTypeLabel(type: string): string {
-  const labels: Record<string, string> = {
-    episode: "历史事件",
-    identity: "身份称呼",
-    personal_info: "个人信息",
-    interest: "兴趣爱好",
-    preference: "偏好",
-    goal: "目标",
-    writing_style: "写作风格",
-    project: "项目背景",
-    skill: "技能方向",
-    constraint: "限制",
-    workflow: "工作流",
-  };
-  return labels[type] ?? "记忆";
-}
-
-function memoryLayerLabel(layer: string): string {
-  const labels: Record<string, string> = {
-    semantic: "用户画像",
-    episodic: "历史经历",
-    working: "任务状态",
-    short_term: "短期上下文",
-    instant: "当前上下文",
-  };
-  return labels[layer] ?? "记忆层";
-}
-
-function groupMemories(memories: UserMemoryRecord[]) {
-  const groups = new Map<string, UserMemoryRecord[]>();
-  const visible = memories.filter((memory) => memory.status !== "deleted");
-  const pending = visible.filter((memory) => memory.status === "pending");
-  const settled = visible.filter((memory) => memory.status !== "pending");
-  if (pending.length) {
-    groups.set("待确认候选", pending);
-  }
-  settled.forEach((memory) => {
-    const label = memoryTypeLabel(memory.memoryType);
-    groups.set(label, [...(groups.get(label) ?? []), memory]);
-  });
-  return Array.from(groups.entries());
-}
-
 export default function AccountMenu({
   themeMode,
   onThemeModeChange,
@@ -129,12 +85,13 @@ export default function AccountMenu({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<"account" | "appearance" | "memory" | "data" | "trash">("account");
   const accountPresent = useSurfacePresence(accountOpen);
-  const [memoryOpen, setMemoryOpen] = useState(false);
   const [memoryEnabledState, setMemoryEnabledState] = useState(isMemoryEnabled);
   const [memorySettingLoading, setMemorySettingLoading] = useState(false);
   const [memories, setMemories] = useState<UserMemoryRecord[]>([]);
   const [memoryLoading, setMemoryLoading] = useState(false);
+  const [memoryUpdating, setMemoryUpdating] = useState(false);
   const [memoryError, setMemoryError] = useState("");
+  const memoryLoadSequence = useRef(0);
   const [emailOpen, setEmailOpen] = useState(false);
   const [emailDraft, setEmailDraft] = useState(userEmail);
   const [emailCode, setEmailCode] = useState("");
@@ -277,22 +234,25 @@ export default function AccountMenu({
   };
 
   const reloadMemories = async () => {
+    if (memoryUpdating) return;
+    const request = ++memoryLoadSequence.current;
     setMemoryLoading(true);
     setMemoryError("");
     try {
-      setMemories(await listMemories(false));
+      const records = await listMemories(false);
+      if (request === memoryLoadSequence.current) setMemories(records.filter((memory) => memory.status !== "deleted"));
     } catch (error) {
-      setMemoryError(error instanceof Error ? error.message : "记忆加载失败");
+      if (request === memoryLoadSequence.current) setMemoryError(error instanceof Error ? error.message : "记忆加载失败");
     } finally {
-      setMemoryLoading(false);
+      if (request === memoryLoadSequence.current) setMemoryLoading(false);
     }
   };
 
   useEffect(() => {
-    if (settingsOpen && settingsTab === "memory" && memoryOpen) {
+    if (settingsOpen && settingsTab === "memory") {
       void reloadMemories();
     }
-  }, [settingsOpen, settingsTab, memoryOpen]);
+  }, [settingsOpen, settingsTab]);
 
   const handleRequestEmailCode = async () => {
     setEmailError("");
@@ -353,11 +313,13 @@ export default function AccountMenu({
 
   const saveEditMemory = async (memory: UserMemoryRecord) => {
     const content = editingContent.trim();
-    if (!content) return;
+    if (!content || memoryUpdating) return;
+    setMemoryUpdating(true);
     setMemoryError("");
     try {
       const updated = await updateMemory(memory.id, {
         content,
+        ...(memory.status === "pending" ? { status: "active" } : {}),
         reason: "profile_memory_edit",
       });
       setMemories((current) => current.map((item) => (item.id === memory.id ? updated : item)));
@@ -365,33 +327,18 @@ export default function AccountMenu({
       setEditingContent("");
     } catch (error) {
       setMemoryError(error instanceof Error ? error.message : "记忆保存失败");
-    }
-  };
-
-  const toggleMemoryStatus = async (memory: UserMemoryRecord) => {
-    const nextStatus = memory.status === "active" ? "archived" : "active";
-    setMemoryError("");
-    try {
-      const updated = await updateMemory(memory.id, {
-        status: nextStatus,
-        reason:
-          memory.status === "pending"
-            ? "profile_memory_approve"
-            : nextStatus === "active"
-              ? "profile_memory_restore"
-              : "profile_memory_archive",
-      });
-      setMemories((current) => current.map((item) => (item.id === memory.id ? updated : item)));
-    } catch (error) {
-      setMemoryError(error instanceof Error ? error.message : "记忆状态更新失败");
+    } finally {
+      setMemoryUpdating(false);
     }
   };
 
   const removeMemory = async (memory: UserMemoryRecord) => {
+    if (memoryUpdating) return;
+    setMemoryUpdating(true);
     setMemoryError("");
     try {
       if (Boolean(memory.sourceRef)) {
-        const impact = await memoryConsole('/impact/' + encodeURIComponent(memory.id));
+        const impact = await memoryConsole<{ memories: UserMemoryRecord[] }>('/impact/' + encodeURIComponent(memory.id));
         if (!window.confirm(`删除此来源及关联的 ${impact.memories.length} 条记忆？\n\n${impact.memories.map((m: UserMemoryRecord) => m.content).join('\n')}\n\n原聊天或笔记不会因此删除。`)) return;
       }
       await deleteMemory(memory.id, Boolean(memory.sourceRef));
@@ -404,11 +351,11 @@ export default function AccountMenu({
       }
     } catch (error) {
       setMemoryError(error instanceof Error ? error.message : "记忆删除失败");
+    } finally {
+      setMemoryUpdating(false);
     }
   };
 
-  const activeMemoryCount = memories.filter((memory) => memory.status === "active").length;
-  const pendingMemoryCount = memories.filter((memory) => memory.status === "pending").length;
   const openSettings = (tab: typeof settingsTab) => {
     // Capture a stable return target before the menu disappears.
     accountButtonRef.current?.focus({ preventScroll: true });
@@ -501,32 +448,32 @@ export default function AccountMenu({
 
               {settingsTab === "memory" && <>
                 <div className="nf-row"><span className="nf-row-main"><Sparkles size={17} strokeWidth={1.6} />长期记忆</span><button type="button" className="nf-switch" onClick={() => void handleMemoryEnabledChange()} disabled={memorySettingLoading} aria-pressed={memoryEnabledState} aria-label="长期记忆"><span /></button></div>
-                <button type="button" className="nf-row" aria-expanded={memoryOpen} onClick={() => setMemoryOpen((open) => !open)}><span>记忆管理</span><span className="nf-row-end">{pendingMemoryCount ? activeMemoryCount + " 条 · " + pendingMemoryCount + " 待确认" : activeMemoryCount + " 条"}<ChevronDown size={14} strokeWidth={1.6} /></span></button>
                 {memoryError && <p className="nf-notice nf-error" role="alert">{memoryError}</p>}
-                {memoryOpen && <div className="nf-detail">
-                  <MemoryConsole onChange={() => void reloadMemories()} />
-                  <div className="nf-list-heading"><span>记忆列表</span><button type="button" className="nf-button" onClick={() => void reloadMemories()}>刷新</button></div>
-                  {memoryLoading ? <p className="nf-notice" role="status">正在加载记忆…</p> : memories.filter((memory) => memory.status !== "deleted").length === 0 ? <p className="nf-notice">暂无长期记忆</p> : groupMemories(memories).map(([label, items]) => <div key={label}>
-                    <p className="nf-notice">{label}</p>
-                    {items.map((memory) => {
-                      const isEditing = editingMemoryId === memory.id;
-                      const archived = memory.status === "archived", pending = memory.status === "pending";
-                      return <div key={memory.id} className="nf-record">
-                        <div className="nf-record-meta"><span>{Boolean(memory.sourceRef) ? '用户事实 · 可追溯来源' : `${memoryLayerLabel(memory.layer)} · 重要度 ${memory.importance}`}</span><span>{pending ? "待确认" : archived ? "已停用" : "启用中"}</span></div>
-                        {isEditing ? <textarea value={editingContent} aria-label="记忆内容" onChange={(event) => setEditingContent(event.target.value)} className="nf-input" /> : <p className="nf-record-title">{memory.content}</p>}
-                        {memory.sourceRef && <MemorySourceView sourceId={memory.sourceRef} />}
-                        <div className="nf-record-actions">{isEditing ? <>
-                          <button type="button" className="nf-icon-button" onClick={() => void saveEditMemory(memory)} aria-label="保存记忆"><Check size={16} strokeWidth={1.6} /></button>
-                          <button type="button" className="nf-icon-button" onClick={() => { setEditingMemoryId(null); setEditingContent(""); }} aria-label="取消编辑"><X size={16} strokeWidth={1.6} /></button>
-                        </> : <>
-                          <button type="button" className="nf-button" onClick={() => void toggleMemoryStatus(memory)}>{pending ? "确认" : archived ? "启用" : "停用"}</button>
-                          <button type="button" className="nf-icon-button" onClick={() => startEditMemory(memory)} aria-label="编辑记忆"><Pencil size={16} strokeWidth={1.6} /></button>
-                          <button type="button" className="nf-icon-button" onClick={() => void removeMemory(memory)} aria-label="删除记忆"><Trash2 size={16} strokeWidth={1.6} /></button>
-                        </>}</div>
-                      </div>;
-                    })}
-                  </div>)}
-                </div>}
+                <section className="nf-detail" aria-label="记忆列表">
+                  <div className="nf-list-heading">
+                    <span>记忆列表</span>
+                    <button type="button" className="nf-button" disabled={memoryLoading || memoryUpdating} onClick={() => void reloadMemories()}>刷新</button>
+                  </div>
+                  {memoryLoading ? <p className="nf-notice" role="status">正在加载记忆…</p> : memories.length === 0 ? <p className="nf-notice">暂无长期记忆</p> : memories.map((memory) => {
+                    const isEditing = editingMemoryId === memory.id;
+                    const pending = memory.status === "pending";
+                    const status = pending ? "待确认" : memory.status === "archived" ? "已停用" : null;
+                    return <div key={memory.id} className="nf-record">
+                      {status && <p className="nf-record-meta">{status}</p>}
+                      {isEditing ? <textarea value={editingContent} aria-label="记忆内容" disabled={memoryUpdating} onChange={(event) => setEditingContent(event.target.value)} className="nf-input" /> : <p className="nf-record-title">{memory.content}</p>}
+                      <div className="nf-record-actions">{isEditing ? <>
+                        <button type="button" className={pending ? "nf-button" : "nf-icon-button"} disabled={memoryUpdating || !editingContent.trim()}
+                          onClick={() => void saveEditMemory(memory)} aria-label={pending ? "保存并启用" : "保存记忆"}>
+                          {pending ? "保存并启用" : <Check size={16} strokeWidth={1.6} />}
+                        </button>
+                        <button type="button" className="nf-icon-button" disabled={memoryUpdating} onClick={() => { setEditingMemoryId(null); setEditingContent(""); }} aria-label="取消编辑"><X size={16} strokeWidth={1.6} /></button>
+                      </> : <>
+                        <button type="button" className="nf-icon-button" disabled={memoryUpdating} onClick={() => startEditMemory(memory)} aria-label="编辑记忆"><Pencil size={16} strokeWidth={1.6} /></button>
+                        <button type="button" className="nf-icon-button" disabled={memoryUpdating} onClick={() => void removeMemory(memory)} aria-label="删除记忆"><Trash2 size={16} strokeWidth={1.6} /></button>
+                      </>}</div>
+                    </div>;
+                  })}
+                </section>
               </>}
             </section>
           </div>
