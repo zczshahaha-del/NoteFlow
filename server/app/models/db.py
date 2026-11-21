@@ -62,7 +62,7 @@ class UserSettings(Base):
 
 
 class MemorySource(Base):
-    """Control/provenance only. Formal facts live in the memory engine."""
+    """Source lifecycle, evidence and resolved dialogue claims. Legacy sources use engine facts."""
     __tablename__ = "memory_sources"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)

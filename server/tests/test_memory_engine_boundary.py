@@ -25,7 +25,7 @@ from app.memory.engine import (
 from app.memory.gateway import MemoryGateway
 from app.memory.portability import stage_hindsight_memories
 from app.memory.service import MemoryService, SourceDeletionConfirmationRequired
-from app.models.db import Base, IntegrationOutbox, MemorySource, User, UserMemory, UserMemoryEvent, UserSettings
+from app.models.db import ChatMessage, Base, IntegrationOutbox, MemorySource, User, UserMemory, UserMemoryEvent, UserSettings
 from app.providers.memory_registry import MEMORY_ENGINES, configured_engine
 from app.routers import memory_console
 from app.routers.memories import MemoryUpdatePayload
@@ -112,7 +112,7 @@ class MemoryEngineBoundaryTest(unittest.IsolatedAsyncioTestCase):
         async with self.database.begin() as connection:
             await connection.run_sync(lambda conn: Base.metadata.create_all(conn, tables=[
                 User.__table__, UserSettings.__table__, MemorySource.__table__, IntegrationOutbox.__table__,
-                UserMemory.__table__, UserMemoryEvent.__table__]))
+                UserMemory.__table__, UserMemoryEvent.__table__, ChatMessage.__table__]))
         async with self.sessions() as session:
             session.add_all([User(id=owner, email=owner + '@local.test', display_name='Synthetic') for owner in ('a', 'b')])
             await session.flush()
@@ -137,6 +137,88 @@ class MemoryEngineBoundaryTest(unittest.IsolatedAsyncioTestCase):
             await self.gateway.process(session, item)
             await session.commit()
         return source_id
+
+    async def test_contextual_revision_replay_and_owner_isolation(self):
+        from app.memory.resolution import Change
+
+        async def utterance(owner, chat, run, role, text):
+            async with self.sessions() as session:
+                session.add(ChatMessage(id=run, user_id=owner, session_id=chat, run_id=run,
+                                        role=role, text=text))
+                await session.commit()
+
+        async def turn(chat, run, question, changes, replay=False):
+            with patch("app.memory.resolution.resolve", AsyncMock(return_value=changes)) as resolver:
+                source = await self.publish("a", question, key=run + ("replay" if replay else ""),
+                    metadata={"dialogue": True, "runId": run, "sessionId": chat})
+            return source, resolver
+
+        await utterance("b", "private", "other", "user", "另一账号的内容")
+        await utterance("a", "one", "proposal", "assistant", "每周五写周报？")
+        await utterance("a", "one", "accept", "user", "以后都这样")
+        weekly = Change(content="每周五写周报。", key="workflow.report_day", type="workflow",
+            label="周报日", value="周五", cardinality="single", evidence="以后都这样", contextIds=["proposal"])
+        _, resolver = await turn("one", "accept", "以后都这样", [weekly])
+        self.assertEqual([r["id"] for r in resolver.await_args.args[1]], ["proposal"])
+        prior = (await self.gateway.read("a"))[0]
+        await utterance("a", "two", "correct", "user", "以后改到周三")
+        corrected = weekly.model_copy(update=dict(content="每周三写周报。", value="周三",
+            evidence="改到周三", contextIds=[], replaces=[prior.id], previous="historical"))
+        await turn("two", "correct", "以后改到周三", [corrected])
+        current = await self.gateway.read("a", query="周报")
+        self.assertEqual([r.content for r in current], ["每周三写周报。"])
+        past = await self.gateway.read("a", query="以前", historical=True)
+        self.assertTrue(any("曾经有效" in r.content and "周五" in r.content for r in past))
+        await self.gateway.delete("a", current[0].id)
+        self.assertEqual(await self.gateway.read("a", query="周报", historical=True), [])
+        _, resolver = await turn("one", "accept", "以后都这样", [weekly], replay=True)
+        resolver.assert_not_awaited()
+        self.assertEqual(await self.gateway.read("a"), [])
+
+    async def test_deletion_keeps_an_independent_fact_from_the_same_sentence(self):
+        from app.memory.resolution import Change
+
+        text = "我在苏州生活，也喜欢读推理小说。"
+        facts = [
+            Change(content="常住苏州", key="profile.city", type="personal_info", label="城市",
+                   value="苏州", evidence="在苏州生活"),
+            Change(content="喜欢推理小说", key="interest.books", type="interest", label="阅读",
+                   value="推理小说", evidence="喜欢读推理小说"),
+        ]
+        with patch("app.memory.resolution.resolve", AsyncMock(return_value=facts)):
+            await self.publish("a", text, key="independent", metadata={"dialogue": True})
+        records = await self.gateway.read("a")
+        city = next(r for r in records if r.value == "苏州")
+        impact = await self.gateway.delete_impact("a", city.id)
+        self.assertEqual([item["id"] for item in impact["memories"]], [city.id])
+        await self.gateway.delete("a", city.id)
+        self.assertEqual([r.value for r in await self.gateway.read("a")], ["推理小说"])
+
+    async def test_grouped_automatic_turns_use_only_their_own_evidence(self):
+        from app.memory.resolution import Change
+
+        async with self.sessions() as session:
+            for run in ("one", "two"):
+                session.add(ChatMessage(id=run, user_id="a", session_id="chat", run_id=run,
+                    role="user", text="发言" + run))
+            await session.commit()
+        origins = []
+        for run in ("one", "two"):
+            origins.append(await self.gateway.submit("a", "发言" + run, source_key=run,
+                metadata={"dialogue": True, "automatic": True, "runId": run, "sessionId": "chat"}))
+        valid = Change(anchorId=origins[1], content="每周游泳", key="hobbies.swimming", type="interest",
+                       value="游泳", label="兴趣", evidence="发言two")
+        wrong_anchor = valid.model_copy(update={"anchorId": origins[0]})
+        with patch("app.memory.resolution.resolve", AsyncMock(return_value=[wrong_anchor, valid])) as resolver:
+            for origin in origins:
+                async with self.sessions() as session:
+                    job = await session.scalar(select(IntegrationOutbox).where(IntegrationOutbox.aggregate_id == origin))
+                    await self.gateway.process(session, job)
+                    await session.commit()
+                    self.assertFalse(job.payload)
+        resolver.assert_awaited_once()
+        self.assertEqual(len(resolver.await_args.args[0]), 2)
+        self.assertEqual([r.content for r in await self.gateway.read("a")], ["每周游泳"])
 
     async def test_registry_and_application_consumers_use_the_same_normalized_contract(self):
         self.assertIs(configured_engine(), self.engine)

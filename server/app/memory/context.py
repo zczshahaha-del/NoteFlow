@@ -38,7 +38,7 @@ class MemoryContextService:
 
             return await MemoryGateway().read(
                 user_id, query=plan.query, scopes=plan.scopes, memory_types=plan.memory_types,
-                canonical_keys=plan.canonical_keys, layers=plan.layers, limit=plan.limit,
+                canonical_keys=plan.canonical_keys, layers=plan.layers, limit=plan.limit, historical=plan.historical, direct_read=plan.direct_read,
             )
 
         async with AsyncSessionLocal() as session:

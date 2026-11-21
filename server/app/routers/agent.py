@@ -678,7 +678,7 @@ async def chat(
             answer="已取消本次请求。",
             turn_plan=turn_plan,
         )
-    if "__interrupt__" in turn_state:
+    if "__interrupt__" in turn_state or turn_state.get("status") == "select_note":
         answer = (
             str(turn_state.get("clarification_question") or "").strip()
             or "还缺少一些必要信息，可以再具体说明一下吗？"
@@ -1193,7 +1193,9 @@ async def chat(
                     )
                 )
                 from app.memory.control import uses_engine
-                if action != "list_memories" and await uses_engine(user.id):
+                if action == "list_memories" and memory_action == "read" and not memories:
+                    tool_summary = "我还没有找到能回答这个问题的记忆。"
+                if (action != "list_memories" or (memory_action == "read" and not memories)) and await uses_engine(user.id):
                     # Management acknowledgements use actual operation results;
                     # queued/empty saves cannot be rewritten into success by an LLM.
                     yield _sse_format(_choice_delta(tool_summary))

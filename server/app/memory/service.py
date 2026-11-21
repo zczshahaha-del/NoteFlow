@@ -91,8 +91,9 @@ class MemoryService:
             from app.memory.gateway import MemoryGateway
             gateway = MemoryGateway()
             source_id = await gateway.submit(user_id, payload.content, metadata={
-                "memoryType": payload.memoryType, "scope": normalize_scope(payload.scope), "source": "user_explicit"})
-            records = await gateway.wait(user_id, source_id) if source_id else []
+                "dialogue": True, "manual": True, "memoryType": normalize_memory_type(payload.memoryType),
+                "scope": normalize_scope(payload.scope), "source": "user_explicit"})
+            records = await gateway.wait(user_id, source_id, seconds=45) if source_id else []
             if not records:
                 raise ValueError("尚未保存事实，请在记忆管理查看处理状态。")
             return records[0]

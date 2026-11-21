@@ -392,6 +392,25 @@ class TurnPlannerTest(unittest.TestCase):
         self.assertEqual(plan.intent_parameters.topic, "Go 语言")
         self.assertEqual(plan.result, PlanResult.EXECUTE)
 
+    def test_missing_note_does_not_capture_the_next_turn(self) -> None:
+        async def exercise():
+            dependencies = TurnGraphDependencies(plan_turn=AsyncMock(side_effect=[
+                TurnPlan(primary_intent=PrimaryIntent.NOTE_EDIT,
+                         intent_parameters=IntentParameters(instruction="修改标题")),
+                TurnPlan(primary_intent=PrimaryIntent.MEMORY,
+                         intent_parameters=IntentParameters(memory_action="write")),
+            ]))
+            options = dict(checkpointer=memory_saver(), thread_id="switch", dependencies=dependencies)
+            state = dict(user_id="u", session_id="switch", mode="chat")
+            first = await invoke_turn_graph(new_turn_state(**state, question="修改标题"), **options)
+            self.assertEqual(first["status"], "select_note")
+            self.assertFalse(await graph_waiting_for_clarification(**options))
+            second = await invoke_turn_graph(new_turn_state(**state, question="记住这个偏好"), **options)
+            self.assertEqual(second["status"], "ready")
+            self.assertEqual(second["turn_plan"]["primary_intent"], "memory")
+
+        asyncio.run(exercise())
+
     def test_langgraph_interrupt_resumes_original_note_intent(self) -> None:
         async def fake_plan(_state):
             return TurnPlan(

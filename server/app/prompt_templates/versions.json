@@ -9,6 +9,7 @@
   "drafts/review-system": "v1",
   "drafts/section-system": "v1",
   "memory/default-mission": "v1",
+  "memory/resolve": "v1",
   "memory/extract": "v1",
   "memory/extract-input": "v1",
   "memory/extract-mission": "v1",
@@ -39,8 +40,8 @@
   "notes/with-code": "v1",
   "notes/with-exercises": "v1",
   "planner/plan-input": "v2",
-  "planner/plan-system": "v2",
+  "planner/plan-system": "v3",
   "planner/repair": "v1",
   "planner/resume-input": "v1",
-  "planner/resume-system": "v1"
+  "planner/resume-system": "v2"
 }

@@ -20,6 +20,8 @@ class MemoryReadPlan:
     limit: int = 8
     confidence: float = 1.0
     reason: str = ""
+    historical: bool = False
+    direct_read: bool = False
 
 
 def memory_read_plan_from_turn_plan(
@@ -43,6 +45,8 @@ def memory_read_plan_from_turn_plan(
         scopes=[scope],
         limit=max(1, min(int(limit), 12)),
         confidence=plan.confidence,
+        direct_read=plan.primary_intent.value == "memory" and parameters.memory_action == "read",
+        historical=parameters.memory_time == "history",
         reason=f"turn_plan:{plan.reason or plan.primary_intent.value}",
     )
 

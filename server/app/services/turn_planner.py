@@ -85,6 +85,7 @@ class IntentParameters(BaseModel):
     memory_layers: list[MemoryLayer] = Field(default_factory=list, max_length=2)
     memory_types: list[MemoryType] = Field(default_factory=list, max_length=8)
     memory_key: str | None = Field(default=None, max_length=120)
+    memory_time: Literal["current", "history"] = "current"
     memory_query: str = Field(default="", max_length=300)
 
 

@@ -135,6 +135,7 @@ async def stage_hindsight_memories(
             ignored += 1
             continue
         item = record(fact, source, provider=engine.name)
+        item.source_ref = source.id
         item.id = _portable_id(user_id, source.id, fact.id)
         item.memory_type = normalize_memory_type(item.memory_type)
         if not item.canonical_key and item.memory_type == "personal_info" and _EXPLICIT_ZODIAC.match(item.content):

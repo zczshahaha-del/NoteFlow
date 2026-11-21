@@ -43,6 +43,7 @@ async def update_user_memory_enabled(session, user_id: str, enabled: bool) -> Us
     settings = await get_or_create_user_settings(session, user_id)
     if bool(settings.memory_enabled) != bool(enabled):
         state = dict((settings.preferences or {}).get("memoryControl") or {})
+        state["contextSince"] = datetime.utcnow().isoformat()
         state["generation"] = int(state.get("generation", 0)) + 1
         save_control(settings, state)
     settings.memory_enabled = bool(enabled)
