@@ -111,6 +111,10 @@ try{
     assert.equal(await historySearch.getAttribute('aria-label'),'搜索历史对话');
     const historySearchBox=await historySearch.boundingBox();
     assert.equal(await historyMenu.locator('.nf-history-row').count(),2);
+    const currentHistory=historyMenu.locator('.nf-history-row[data-selected="true"]');
+    assert.equal(await currentHistory.getByRole('button',{name:'当前对话',exact:true}).getAttribute('aria-current'),'true');
+    assert.equal(await currentHistory.locator('svg.lucide-check').count(),0);
+    assert.notEqual(await currentHistory.evaluate(node=>getComputedStyle(node).backgroundColor),'rgba(0, 0, 0, 0)');
     await historySearch.fill('资料');assert.equal(await historyMenu.locator('.nf-history-row').count(),1);
     assert.equal(await historyMenu.locator('.nf-history-name').textContent(),'资料整理');
     await historySearch.fill('不存在');await historyMenu.getByText('没有找到对话',{exact:true}).waitFor();

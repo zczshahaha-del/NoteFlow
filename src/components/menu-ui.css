@@ -116,7 +116,6 @@
 .nf-soft-menu .nf-history-row:focus-within,
 .nf-soft-menu .nf-history-row[data-selected="true"] { background: var(--nf-menu-hover); }
 .nf-soft-menu .nf-history-name { color: var(--nf-menu-text); font: inherit; }
-.nf-soft-menu .nf-history-check { color: var(--nf-menu-icon); }
 .nf-soft-menu .nf-history-rename { border-color: var(--nf-menu-icon); background: var(--nf-menu-surface); }
 .nf-soft-menu .nf-history-action {
   display: grid; place-items: center; flex-shrink: 0;

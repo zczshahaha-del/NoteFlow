@@ -1117,10 +1117,9 @@ export default function AIPanel({ onCollapse }: { onCollapse?: () => void }) {
                       </>
                     ) : (
                       <>
-                        <button type="button" onClick={() => void handleSwitchChat(session.id)} className="nf-history-name min-w-0 flex-1 truncate px-1 py-2 text-left" title={session.title}>
+                        <button type="button" onClick={() => void handleSwitchChat(session.id)} className="nf-history-name min-w-0 flex-1 truncate px-1 py-2 text-left" aria-current={session.id === agentSessionId || undefined} title={session.title}>
                           {session.title}
                         </button>
-                        {session.id === agentSessionId && <Check size={13} className="nf-history-check mr-1 shrink-0" />}
                         <button
                           type="button"
                           onClick={(event) => { renameRowRef.current = event.currentTarget.closest(".nf-history-row"); setEditingSessionId(session.id); setEditingSessionTitle(session.title); }}
