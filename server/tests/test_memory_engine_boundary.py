@@ -138,6 +138,48 @@ class MemoryEngineBoundaryTest(unittest.IsolatedAsyncioTestCase):
             await session.commit()
         return source_id
 
+    async def test_sparse_recall_includes_active_legacy_candidates_in_corrections(self):
+        from app.memory.resolution import prior_facts
+
+        await self.publish("a", "以前默认用海蓝标签", key="old-tag")
+        await self.publish("a", "不再使用的分类", key="inactive-tag")
+        first, inactive = await self.engine.list("a")
+        await self.engine.curate("a", inactive.id, MemoryChanges(status="archived"))
+        hits = [MemoryFact(f.id, f.content, f.source_id) for f in (first, inactive)]
+        with patch.object(self.engine, "recall", AsyncMock(return_value=hits)):
+            async with self.sessions() as db:
+                known, _ = await prior_facts(self.gateway, db, "a", "上次只是测试")
+        self.assertEqual(list(known), [first.id])
+
+    async def test_existing_correction_reconciles_old_facts_once_without_deleting(self):
+        from app.memory.resolution import Change
+
+        for i, text in enumerate(["默认标签是海蓝", "常住苏州", "喜欢读推理小说"]):
+            await self.publish("a", text, key="legacy-" + str(i))
+        await self.publish("b", "默认标签是海蓝", key="other")
+        change = Change(content="默认标签为松针", key="reading.default_tag", type="preference",
+                        label="默认标签", value="松针", scope="note_editing", evidence="海蓝只是测试")
+        with patch("app.memory.resolution.resolve", AsyncMock(return_value=[change])):
+            await self.publish("a", "海蓝只是测试，以后默认松针", key="confirmation",
+                               metadata={"dialogue": True})
+        # The correction already exists, with no recorded supersession links.
+        async def compare(confirmed, evidence, earlier):
+            self.assertEqual(confirmed, {"content": "默认标签为松针", "scope": "note_editing"})
+            self.assertIn("测试", evidence)
+            return ["mistaken" if "海蓝" in item else "keep" for item in earlier]
+        with patch("app.memory.legacy_review.compare_legacy", AsyncMock(side_effect=compare)) as model:
+            for query in ("标签", None, "标签"):
+                rows = await self.gateway.read("a", query=query)
+                self.assertEqual({r.content for r in rows}, {"默认标签为松针", "常住苏州", "喜欢读推理小说"})
+            options = dict(query="读书笔记用哪个标签", scopes=["note_generation"])
+            inspected = await self.gateway.read("a", direct_read=True, **options)
+            applied = await self.gateway.read("a", direct_read=False, **options)
+            self.assertIn(("默认标签为松针", "note_editing"), [(r.content, r.scope) for r in inspected])
+            self.assertNotIn("默认标签为松针", [r.content for r in applied])
+            model.assert_awaited_once()
+        self.assertIn("默认标签是海蓝", [f.content for f in await self.engine.list("a")])
+        self.assertEqual([r.content for r in await self.gateway.read("b")], ["默认标签是海蓝"])
+
     async def test_contextual_revision_replay_and_owner_isolation(self):
         from app.memory.resolution import Change
 

@@ -93,7 +93,13 @@ async def exercise(client, owner):
     remaining = await active()
     assert all("苏州" not in m["content"] and "宁波" not in m["content"] for m in remaining)
     assert any("青竹" in m["content"] for m in remaining)
-    await say(first, "请记住，我整理读书笔记的默认标签是海蓝。")
+    # Seed the same source format used by pre-dialogue versions, through the
+    # real worker. The correction must recognize a provider fact without a key.
+    old_label = await gateway.submit(owner, "我整理读书笔记的默认标签是海蓝。",
+                                     source_key="legacy-default-label",
+                                     metadata={"source": "user_explicit"})
+    old_records = await gateway.wait(owner, old_label, seconds=60)
+    assert any("海蓝" in r.content and not r.canonical_key for r in old_records), old_records
     await say(second, "纠正一下：海蓝只是之前的测试值。请记住，我整理读书笔记的正式默认标签是松针。")
     label = await say(fresh, "读书笔记用我定的默认标签，应该填什么？")
     assert "松针" in label and "海蓝" not in label, label

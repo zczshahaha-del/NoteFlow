@@ -9,6 +9,7 @@
   "drafts/review-system": "v1",
   "drafts/section-system": "v1",
   "memory/default-mission": "v1",
+  "memory/reconcile-legacy": "v1",
   "memory/resolve": "v1",
   "memory/extract": "v1",
   "memory/extract-input": "v1",

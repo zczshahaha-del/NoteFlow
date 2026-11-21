@@ -169,7 +169,7 @@ async def prior_facts(gateway, session, owner, query):
         for hit in await gateway.engine.recall(owner, query):
             if hit.derived:
                 continue
-            if hit.source_id not in sources:
+            if hit.source_id not in sources or hit.status == "unavailable":
                 try:
                     hit = await gateway.engine.get(owner, hit.id)
                 except LookupError:

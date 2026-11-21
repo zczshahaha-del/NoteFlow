@@ -11,6 +11,7 @@ from app.database import AsyncSessionLocal
 from app.memory.control import control, effective_mission, uses_engine, lock_owner, save_control
 from app.memory.engine import MemoryChanges, MemoryEngine, MemoryFact, MemoryRecord
 from app.providers.memory_registry import configured_engine
+from app.memory.legacy_review import outstanding_reviews, reconcile_legacy
 from app.memory.policy import classify_memory_content
 from app.models.db import MemorySource, IntegrationOutbox, UserSettings
 from app.observability.context import current_trace
@@ -93,6 +94,18 @@ class MemoryGateway:
             sources = await self.sources(session, user_id)
             if not sources:
                 return []
+            if settings.memory_enabled and outstanding_reviews(sources):
+                # Earlier releases saved corrections without comparing unclassified
+                # engine facts. Repair once on first use under the same lock as writes.
+                await lock_owner(session, user_id)
+                await session.refresh(settings)
+                sources = await self.sources(session, user_id)
+                pending = outstanding_reviews(sources)
+                if settings.memory_enabled and pending:
+                    await reconcile_legacy(self.engine, user_id, sources, pending)
+                await session.commit()
+                if not settings.memory_enabled and query is not None:
+                    return []
             # An index hit only nominates a source. Read governed facts from a
             # fresh SQL snapshot after the external calls (including concurrent deletion).
             has_legacy = any("claim" not in (s.metadata_json or {}) for s in sources.values())
@@ -159,7 +172,7 @@ class MemoryGateway:
                 # A request to inspect one's own preferences may span task scopes.
                 # Applying a preference to a task still enforces that task's scope.
                 inspecting = direct_read and query is not None and bool(meta.get("claim"))
-                if scopes and not (inspecting and set(scopes) == {"global"}) and item.scope not in {"global", *scopes}:
+                if scopes and not inspecting and item.scope not in {"global", *scopes}:
                     continue
                 if not inspecting and memory_types and (query is None or meta.get("memoryType")) and item.memory_type not in memory_types:
                     continue
@@ -297,6 +310,8 @@ class MemoryGateway:
                 meta["claim"] = {**claim, "value": content.strip() if content is not None else claim.get("value"),
                                  "content": content.strip() if content is not None else claim["content"],
                                  "active": status == "active" if status else claim.get("active", True)}
+                if content is not None:
+                    meta.update(manuallyEdited=True, legacyReviewed=False)
                 meta["effectiveAt"] = datetime.utcnow().isoformat()
                 source.metadata_json = meta
             if status is not None:
