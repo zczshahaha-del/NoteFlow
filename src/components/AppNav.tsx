@@ -3,8 +3,11 @@ import "./menu-ui.css";
 import MemorySettings from "./MemorySettings";
 import {
   ChevronRight,
-  ChevronDown,
   ChevronLeft,
+  CircleUserRound,
+  Pencil,
+  Smile,
+  Sun,
   Download,
   FileText,
   RotateCcw,
@@ -40,9 +43,13 @@ import "./account-menu.css";
 
 export type AppView = "knowledge";
 type ThemeMode = "light" | "dark";
-const settingsLabels = { home: "设置", email: "登录邮箱", memory: "记忆列表", import: "导入笔记", export: "导出", trash: "回收站" } as const;
-type SettingsPage = keyof typeof settingsLabels;
-type SettingsDetail = Exclude<SettingsPage, "home" | "trash">;
+const settingsNav = [
+  { page: "email", label: "账号", Icon: CircleUserRound },
+  { page: "appearance", label: "外观", Icon: Sun },
+  { page: "memory", label: "记忆", Icon: Smile },
+  { page: "data", label: "导入与导出", Icon: Download },
+] as const;
+type SettingsPage = (typeof settingsNav)[number]["page"] | "trash";
 
 export interface AccountMenuProps {
   themeMode: ThemeMode;
@@ -72,8 +79,10 @@ export default function AccountMenu({
   const [accountOpen, setAccountOpen] = useState(false);
   useEffect(() => { if (!active) setAccountOpen(false); }, [active]);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsPage, setSettingsPage] = useState<SettingsPage>("home");
-  const settingsReturnRow = useRef<SettingsDetail | null>(null);
+  const [settingsPage, setSettingsPage] = useState<SettingsPage>("email");
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const summaryButtonRef = useRef<HTMLButtonElement>(null);
+  const trashButtonRef = useRef<HTMLButtonElement>(null);
   const settingsBackRef = useRef<HTMLButtonElement>(null);
   const accountPresent = useSurfacePresence(accountOpen);
   const [memoryEnabledState, setMemoryEnabledState] = useState(isMemoryEnabled);
@@ -115,14 +124,7 @@ export default function AccountMenu({
 
   useEffect(() => {
     if (settingsScrollRef.current) settingsScrollRef.current.scrollTop = 0;
-    const row = settingsReturnRow.current;
-    if (!settingsOpen || !row) return;
-    if (settingsPage === "home") {
-      settingsScrollRef.current?.querySelector<HTMLButtonElement>(`[data-settings-detail="${row}"]`)?.focus();
-      settingsReturnRow.current = null;
-    } else {
-      settingsBackRef.current?.focus({ preventScroll: true });
-    }
+    if (settingsOpen && settingsPage === "trash") settingsBackRef.current?.focus({ preventScroll: true });
   }, [settingsPage, settingsOpen]);
 
   useEffect(() => {
@@ -284,17 +286,23 @@ export default function AccountMenu({
     // Capture a stable return target before the menu disappears.
     accountButtonRef.current?.focus({ preventScroll: true });
     setAccountOpen(false);
-    settingsReturnRow.current = null;
-    setSettingsPage("home");
+    setSettingsPage("email");
+    setSummaryOpen(false);
     setSettingsOpen(true);
   };
-  const openSettingsDetail = (page: SettingsDetail) => {
-    settingsReturnRow.current = page;
-    setSettingsPage(page);
+  const closeSummary = () => {
+    setSummaryOpen(false);
+    requestAnimationFrame(() => summaryButtonRef.current?.focus({ preventScroll: true }));
   };
-  const onSettingsDetail = settingsPage !== "home";
-  const returnFromDetail = () => setSettingsPage(settingsPage === "trash" ? "import" : "home");
-  const settingsLabel = settingsLabels[settingsPage];
+  const returnFromTrash = () => {
+    setSettingsPage("data");
+    requestAnimationFrame(() => trashButtonRef.current?.focus({ preventScroll: true }));
+  };
+  const closeSettings = () => {
+    if (summaryOpen) closeSummary();
+    else setSettingsOpen(false);
+  };
+  const settingsLabel = settingsNav.find(item => item.page === settingsPage)?.label ?? "回收站";
 
   return (
     <div ref={accountRef} data-compact={compact} data-theme={themeMode} className="nf-settings-system account-menu-root relative shrink-0 overflow-visible w-full">
@@ -317,86 +325,101 @@ export default function AccountMenu({
         </div>
       )}
 
-      <OverlayDialog open={settingsOpen} onClose={() => setSettingsOpen(false)}
-        onEscape={() => onSettingsDetail ? returnFromDetail() : setSettingsOpen(false)}
-        label={settingsLabel} themeMode={themeMode} className="nf-settings-dialog">
-        <div className="nf-settings-content">
-          <header className="nf-content-heading" data-detail={onSettingsDetail}>
-            {onSettingsDetail && <button ref={settingsBackRef} type="button" className="nf-icon-button" aria-label={settingsPage === "trash" ? "返回导入笔记" : "返回设置"} onClick={returnFromDetail}><ChevronLeft size={17} strokeWidth={1.6} /></button>}
-            <h2>{settingsLabel}</h2>
-            <button type="button" className="nf-icon-button nf-settings-close" data-dialog-initial-focus aria-label={settingsPage === "trash" ? "关闭回收站" : "关闭设置"} onClick={() => setSettingsOpen(false)}><X size={17} strokeWidth={1.6} /></button>
-          </header>
-          <div ref={settingsScrollRef} className="nf-settings-scroll" data-page={settingsPage}>
-            <section key={settingsPage} className="nf-settings-page" aria-label={settingsLabel + "内容"}>
-              {settingsPage === "home" && <>
-                <div className="nf-settings-group">
-                  <button type="button" className="nf-row" data-settings-detail="email" onClick={() => openSettingsDetail("email")}>
-                    <span>登录邮箱</span><span className="nf-row-end">{userEmailVerified ? "已验证" : "待验证"}<ChevronRight size={15} strokeWidth={1.6} aria-hidden="true" /></span>
-                  </button>
-                  <div className="nf-row">
-                    <span>显示模式</span>
-                    <div className="nf-segment" role="group" aria-label="显示模式"><button type="button" aria-pressed={!isDark} onClick={() => onThemeModeChange("light")}>浅色</button><button type="button" aria-pressed={isDark} onClick={() => onThemeModeChange("dark")}>深色</button></div>
+      <OverlayDialog open={settingsOpen} onClose={closeSettings}
+        onEscape={settingsPage === "trash" ? returnFromTrash : closeSettings}
+        label={summaryOpen ? "记忆摘要" : "设置"} themeMode={themeMode} className="nf-settings-dialog">
+        <div className="nf-settings-layout" inert={summaryOpen} aria-hidden={summaryOpen || undefined}>
+          <aside className="nf-settings-sidebar">
+            <h2>设置</h2>
+            <nav aria-label="设置分类">
+              {settingsNav.map(({ page, label, Icon }) => (
+                <button key={page} type="button" aria-current={(settingsPage === page || (settingsPage === "trash" && page === "data")) ? "page" : undefined}
+                  onClick={() => setSettingsPage(page)}>
+                  <Icon size={16} strokeWidth={1.65} aria-hidden="true" /><span>{label}</span>
+                </button>
+              ))}
+            </nav>
+          </aside>
+          <div className="nf-settings-content">
+            <header className="nf-content-heading" data-detail={settingsPage === "trash"}>
+              {settingsPage === "trash" && <button ref={settingsBackRef} type="button" className="nf-icon-button" aria-label="返回导入与导出" onClick={returnFromTrash}><ChevronLeft size={17} strokeWidth={1.6} /></button>}
+              <h2>{settingsLabel}</h2>
+              <button type="button" className="nf-icon-button nf-settings-close" data-dialog-initial-focus aria-label="关闭设置" onClick={closeSettings}><X size={17} strokeWidth={1.6} /></button>
+            </header>
+            <div ref={settingsScrollRef} className="nf-settings-scroll" data-page={settingsPage}>
+              <section key={settingsPage} className="nf-settings-page" aria-label={settingsLabel + "内容"}>
+                {settingsPage === "appearance" && <div className="nf-settings-line">
+                  <h3>显示模式</h3>
+                  <div className="nf-segment" role="group" aria-label="显示模式">
+                    <button type="button" aria-pressed={!isDark} onClick={() => onThemeModeChange("light")}>浅色</button>
+                    <button type="button" aria-pressed={isDark} onClick={() => onThemeModeChange("dark")}>深色</button>
                   </div>
-                </div>
-                <div className="nf-settings-group">
-                  <div className="nf-row"><span>长期记忆</span><button type="button" role="switch" className="nf-switch" onClick={() => void handleMemoryEnabledChange()} disabled={memorySettingLoading} aria-checked={memoryEnabledState} aria-label="长期记忆"><span /></button></div>
-                  <button type="button" className="nf-row" data-settings-detail="memory" onClick={() => openSettingsDetail("memory")}><span>记忆列表</span><span className="nf-row-end"><ChevronRight size={15} strokeWidth={1.6} aria-hidden="true" /></span></button>
-                </div>
-                <div className="nf-settings-group">
-                  <button type="button" className="nf-row" data-settings-detail="import" onClick={() => openSettingsDetail("import")}><span>导入笔记</span><span className="nf-row-end"><ChevronRight size={15} strokeWidth={1.6} aria-hidden="true" /></span></button>
-                  <button type="button" className="nf-row" data-settings-detail="export" onClick={() => openSettingsDetail("export")}><span>导出</span><span className="nf-row-end"><ChevronRight size={15} strokeWidth={1.6} aria-hidden="true" /></span></button>
-                </div>
-                {memorySettingError && <p className="nf-notice nf-error" role="alert">{memorySettingError}</p>}
-              </>}
-
-              {settingsPage === "email" && <div className="nf-settings-detail">
-                <div className="nf-settings-current-email"><span>当前邮箱</span><span className="nf-settings-muted">{userEmail}</span></div>
-                <button type="button" className="nf-row" aria-expanded={emailOpen} onClick={() => { setEmailOpen((open) => !open); setEmailError(""); setEmailMessage(""); }}>
-                  <span>更换邮箱</span><span className="nf-row-end"><ChevronDown size={15} strokeWidth={1.6} aria-hidden="true" /></span>
-                </button>
-                {emailOpen && <div className="nf-detail">
-                  <label htmlFor={accountPanelId + "-email"}>登录邮箱地址</label>
-                  <input id={accountPanelId + "-email"} type="email" aria-label="登录邮箱地址" value={emailDraft} onChange={(event) => { setEmailDraft(event.target.value); setEmailCodeSent(false); setEmailCode(""); }} className="nf-input" placeholder="name@example.com" />
-                  {emailCodeSent && <><label htmlFor={accountPanelId + "-code"}>邮箱验证码</label><input id={accountPanelId + "-code"} aria-label="邮箱验证码" value={emailCode} onChange={(event) => setEmailCode(event.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" autoComplete="one-time-code" maxLength={6} className="nf-input" placeholder="输入 6 位验证码" /></>}
-                  {emailError && <p className="nf-notice nf-error" role="alert">{emailError}</p>}
-                  {emailMessage && <p className="nf-notice" role="status">{emailMessage}</p>}
-                  <button type="button" className="nf-button nf-primary" disabled={emailLoading || !emailDraft.trim() || Boolean(emailCodeSent && emailCode.length !== 6)} onClick={() => void (emailCodeSent ? handleConfirmEmail() : handleRequestEmailCode())}>{emailLoading ? "处理中…" : emailCodeSent ? "确认并绑定" : "发送验证码"}</button>
                 </div>}
-              </div>}
-
-              {settingsPage === "import" && <div className="nf-settings-detail">
-                <p className="nf-notice">支持 Markdown、ZIP 和知识库备份。</p>
-                <button type="button" className="nf-button" disabled={dataBusy || !!pendingImport.current} onClick={() => importInputRef.current?.click()}>选择文件</button>
-                <input ref={importInputRef} type="file" accept=".md,.markdown,.zip,.json,text/markdown,application/zip,application/json" hidden onChange={(event) => void handleImportKnowledge(event.target.files)} />
-                <button type="button" className="nf-row" onClick={() => setSettingsPage("trash")}><span>从回收站恢复</span><span className="nf-row-end">{trashCount || ""}<ChevronRight size={15} /></span></button>
-                {importStatus && <p className="nf-notice" role="status">{importStatus}</p>}
-                {pendingImport.current && !dataBusy && <div className="flex gap-2"><button type="button" className="nf-button" onClick={() => void retryImport()}>重试导入</button><button type="button" className="nf-button" onClick={() => {pendingImport.current=null;setImportStatus("已停止重试，请刷新确认服务端结果");}}>停止重试</button></div>}
-              </div>}
-
-              {settingsPage === "export" && <>
-                <button type="button" className="nf-row nf-settings-format" aria-label="导出 Markdown 文件" aria-describedby={accountPanelId + "-export-markdown"} disabled={dataBusy} onClick={() => void handleExport("zip")}>
-                  <span>Markdown<small id={accountPanelId + "-export-markdown"}>导出笔记正文，便于在其他软件里阅读</small></span><Download size={16} strokeWidth={1.6} aria-hidden="true" />
-                </button>
-                <button type="button" className="nf-row nf-settings-format" aria-label="导出知识库备份" aria-describedby={accountPanelId + "-export-backup"} disabled={dataBusy} onClick={() => void handleExport("json")}>
-                  <span>知识库备份<small id={accountPanelId + "-export-backup"}>用于恢复目录、笔记、历史版本和附件。不含聊天与长期记忆。</small></span><Download size={16} strokeWidth={1.6} aria-hidden="true" />
-                </button>
-                {exportStatus && <p className="nf-notice" role="status">{exportStatus}</p>}
-              </>}
-
-              {settingsPage === "trash" && <div className="nf-settings-detail">
-                {deletedNotes.length === 0 ? <div className="nf-empty"><Trash size={24} strokeWidth={1.6} /><span>回收站是空的</span></div> : <>
-                  <p className="nf-notice">{deletedNotes.length} 篇已删除笔记</p>
-                  {deletedNotes.map((note) => <div key={note.id} className="nf-record nf-trash-record">
-                    <FileText size={17} strokeWidth={1.6} /><div className="nf-record-main"><p className="nf-record-title">{note.title}</p><p className="nf-record-meta">已移至回收站</p></div>
-                    <button type="button" className="nf-button" aria-label={"恢复 " + note.title} onClick={() => restoreDeletedNote(note.id)}><RotateCcw size={14} strokeWidth={1.6} className="inline mr-1" />恢复</button>
-                  </div>)}
+                {settingsPage === "memory" && <>
+                  <div className="nf-settings-line">
+                    <div><h3>长期记忆</h3><p>让 AI 在之后的对话中参考记住的内容。</p></div>
+                    <button type="button" role="switch" className="nf-switch" onClick={() => void handleMemoryEnabledChange()}
+                      disabled={memorySettingLoading} aria-checked={memoryEnabledState} aria-label="长期记忆"><span /></button>
+                  </div>
+                  {memorySettingError && <p className="nf-notice nf-error" role="alert">{memorySettingError}</p>}
+                  <div className="nf-settings-line">
+                    <div><h3>记忆摘要</h3><p>查看和管理 AI 记住的内容。</p></div>
+                    <button ref={summaryButtonRef} type="button" className="nf-button nf-settings-action" aria-haspopup="dialog" onClick={() => setSummaryOpen(true)}>查看摘要</button>
+                  </div>
                 </>}
-              </div>}
 
-              {settingsPage === "memory" && <MemorySettings key={userEmail} />}
-            </section>
+                {settingsPage === "email" && <div className="nf-settings-detail">
+                  <div className="nf-settings-line">
+                    <div><h3>登录邮箱</h3><p>{userEmail} · {userEmailVerified ? "已验证" : "待验证"}</p></div>
+                    <button type="button" className="nf-button nf-settings-action" aria-expanded={emailOpen} onClick={() => { setEmailOpen((open) => !open); setEmailError(""); setEmailMessage(""); }}>
+                      <Pencil size={15} strokeWidth={1.65} aria-hidden="true" />更换邮箱
+                    </button>
+                  </div>
+                  {emailOpen && <div className="nf-detail">
+                    <label htmlFor={accountPanelId + "-email"}>登录邮箱地址</label>
+                    <input id={accountPanelId + "-email"} type="email" aria-label="登录邮箱地址" value={emailDraft} onChange={(event) => { setEmailDraft(event.target.value); setEmailCodeSent(false); setEmailCode(""); }} className="nf-input" placeholder="name@example.com" />
+                    {emailCodeSent && <><label htmlFor={accountPanelId + "-code"}>邮箱验证码</label><input id={accountPanelId + "-code"} aria-label="邮箱验证码" value={emailCode} onChange={(event) => setEmailCode(event.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" autoComplete="one-time-code" maxLength={6} className="nf-input" placeholder="输入 6 位验证码" /></>}
+                    {emailError && <p className="nf-notice nf-error" role="alert">{emailError}</p>}
+                    {emailMessage && <p className="nf-notice" role="status">{emailMessage}</p>}
+                    <button type="button" className="nf-button nf-primary" disabled={emailLoading || !emailDraft.trim() || Boolean(emailCodeSent && emailCode.length !== 6)} onClick={() => void (emailCodeSent ? handleConfirmEmail() : handleRequestEmailCode())}>{emailLoading ? "处理中…" : emailCodeSent ? "确认并绑定" : "发送验证码"}</button>
+                  </div>}
+                </div>}
+
+                {settingsPage === "data" && <>
+                  <div className="nf-settings-line">
+                    <div><h3>导入笔记</h3><p>支持 Markdown、ZIP 和知识库备份。</p></div>
+                    <button type="button" className="nf-button nf-settings-action" disabled={dataBusy || !!pendingImport.current} onClick={() => importInputRef.current?.click()}>选择文件</button>
+                    <input ref={importInputRef} type="file" accept=".md,.markdown,.zip,.json,text/markdown,application/zip,application/json" hidden onChange={(event) => void handleImportKnowledge(event.target.files)} />
+                  </div>
+                  {importStatus && <p className="nf-notice" role="status">{importStatus}</p>}
+                  {pendingImport.current && !dataBusy && <div className="flex gap-2"><button type="button" className="nf-button" onClick={() => void retryImport()}>重试导入</button><button type="button" className="nf-button" onClick={() => {pendingImport.current=null;setImportStatus("已停止重试，请刷新确认服务端结果");}}>停止重试</button></div>}
+                  <div className="nf-settings-line">
+                    <div><h3>导出 Markdown 文件</h3><p id={accountPanelId + "-export-markdown"}>导出笔记正文，便于在其他软件里阅读。</p></div>
+                    <button type="button" className="nf-button nf-settings-action" aria-label="导出 Markdown 文件" aria-describedby={accountPanelId + "-export-markdown"} disabled={dataBusy} onClick={() => void handleExport("zip")}>导出</button>
+                  </div>
+                  <div className="nf-settings-line">
+                    <div><h3>导出知识库备份</h3><p id={accountPanelId + "-export-backup"}>用于恢复目录、笔记、历史版本和附件。不含聊天与长期记忆。</p></div>
+                    <button type="button" className="nf-button nf-settings-action" aria-label="导出知识库备份" aria-describedby={accountPanelId + "-export-backup"} disabled={dataBusy} onClick={() => void handleExport("json")}>导出</button>
+                  </div>
+                  {exportStatus && <p className="nf-notice" role="status">{exportStatus}</p>}
+                  <button type="button" ref={trashButtonRef} className="nf-row nf-settings-trash-entry" onClick={() => setSettingsPage("trash")}><span>从回收站恢复</span><span className="nf-row-end">{trashCount || ""}<ChevronRight size={15} aria-hidden="true" /></span></button>
+                </>}
+
+                {settingsPage === "trash" && <div className="nf-settings-detail">
+                  {deletedNotes.length === 0 ? <div className="nf-empty"><Trash size={24} strokeWidth={1.6} /><span>回收站是空的</span></div> : <>
+                    <p className="nf-notice">{deletedNotes.length} 篇已删除笔记</p>
+                    {deletedNotes.map((note) => <div key={note.id} className="nf-record nf-trash-record">
+                      <FileText size={17} strokeWidth={1.6} /><div className="nf-record-main"><p className="nf-record-title">{note.title}</p><p className="nf-record-meta">已移至回收站</p></div>
+                      <button type="button" className="nf-button" aria-label={"恢复 " + note.title} onClick={() => restoreDeletedNote(note.id)}><RotateCcw size={14} strokeWidth={1.6} className="inline mr-1" />恢复</button>
+                    </div>)}
+                  </>}
+                </div>}
+
+              </section>
+            </div>
           </div>
         </div>
+        {summaryOpen && <MemorySettings key={userEmail} onClose={closeSummary} />}
       </OverlayDialog>
     </div>
   );
