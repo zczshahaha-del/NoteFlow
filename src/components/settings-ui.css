@@ -74,19 +74,14 @@
 .nf-settings-system .nf-dialog { position: relative; width: min(696px, 100%); max-height: calc(100dvh - 32px); overflow: hidden; border: 1px solid var(--nf-line); border-radius: var(--nf-radius-dialog, 20px); background: var(--nf-surface); box-shadow: 0 12px 44px var(--nf-shadow); }
 .nf-overlay[data-open="true"] .nf-dialog { animation: nf-rise-in var(--nf-motion-dialog, 180ms) ease both; }
 .nf-overlay[data-open="false"] .nf-dialog { animation: nf-rise-out var(--nf-motion-dialog, 180ms) ease both; }
-/* The settings shell shares a header and a single scrolling content pane. */
 .nf-settings-system .nf-settings-dialog {
   --nf-settings-paper: #faf9f7;
   --nf-settings-line: #e8e5df;
   --nf-settings-control: #eeece8;
   --nf-settings-current: #fbfaf8;
   --nf-settings-accent: #5f879a;
-  display: grid;
-  grid-template: auto minmax(0, 1fr) / 172px minmax(0, 1fr);
-  width: min(776px, 100%);
-  height: 586px;
-  border-color: var(--nf-settings-line);
-  background: var(--nf-settings-paper);
+  display: flex; width: min(560px, 100%); border-radius: 16px;
+  border-color: var(--nf-settings-line); background: var(--nf-settings-paper);
 }
 .nf-settings-system[data-theme="dark"] .nf-settings-dialog {
   --nf-settings-paper: #252b33;
@@ -95,107 +90,35 @@
   --nf-settings-current: #4b5867;
   --nf-settings-accent: #83b3c8;
 }
+.nf-settings-system .nf-settings-content { width: 100%; min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 12px 20px 16px; }
+.nf-settings-system .nf-content-heading { display: flex; align-items: center; gap: 10px; flex-shrink: 0; min-height: 54px; padding-inline-start: 10px; }
+.nf-settings-system .nf-content-heading[data-detail="true"] { padding-inline-start: 0; }
+.nf-settings-system .nf-content-heading h2 { font-size: 18px; font-weight: 600; }
+.nf-settings-system .nf-content-heading .nf-icon-button { width: 38px; height: 38px; }
+.nf-settings-system .nf-settings-close { margin-inline-start: auto; }
+.nf-settings-system .nf-settings-dialog .nf-icon-button:focus-visible {
+  outline: 1px solid var(--nf-muted) !important; outline-offset: -1px;
+}
 .nf-settings-system h2 { margin: 0; font-family: inherit; font-size: 19px; font-weight: 500; line-height: 1.4; }
 .nf-settings-system .nf-icon-button { display: grid; place-items: center; width: 32px; height: 32px; flex-shrink: 0; padding: 0; border: 0; border-radius: var(--nf-radius-icon, 8px); background: transparent; }
 .nf-settings-system .nf-icon-button:hover { background: var(--nf-soft); }
+.nf-settings-system .nf-settings-scroll { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.nf-settings-system .nf-settings-scroll[data-page="memory"] { max-height: 394px; }
+.nf-settings-system .nf-settings-page { animation: nf-content-in var(--nf-motion-dialog, 180ms) ease both; }
+.nf-settings-system .nf-settings-group { padding-block: 3px; }
+.nf-settings-system .nf-settings-group + .nf-settings-group { border-block-start: 1px solid var(--nf-settings-line); }
+.nf-settings-system .nf-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-height: 44px; padding: 2px 9px 2px 10px; border: 0; border-radius: 7px; background: transparent; text-align: start; }
+.nf-settings-system .nf-settings-group .nf-row { min-height: 48px; }
+.nf-settings-system button.nf-row:hover { background: var(--nf-settings-control); }
 .nf-settings-system .nf-row-end { display: flex; align-items: center; gap: 9px; color: var(--nf-muted); font-size: var(--nf-font-caption, 12px); flex-shrink: 0; }
-.nf-settings-dialog .nf-settings-header {
-  grid-column: 1 / -1;
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  min-height: 62px; padding: 8px 20px 8px 24px;
-  border-bottom: 1px solid var(--nf-settings-line);
-}
-.nf-settings-dialog .nf-settings-header h2 { font-size: 17px; font-weight: 650; }
-.nf-settings-dialog .nf-settings-nav {
-  display: flex; flex-direction: column; gap: 4px;
-  padding: 16px 10px; overflow-y: auto;
-  background: var(--nf-soft); border-inline-end: 1px solid var(--nf-settings-line);
-}
-.nf-settings-dialog .nf-settings-nav-item {
-  display: flex; align-items: center; gap: 10px;
-  min-height: 42px; padding: 6px 12px; border: 0; border-radius: 8px;
-  background: transparent; color: var(--nf-muted); text-align: start;
-}
-.nf-settings-dialog .nf-settings-nav-item:hover { background: var(--nf-settings-control); }
-.nf-settings-dialog .nf-settings-nav-item[aria-current] { background: var(--nf-selected); color: var(--nf-text); font-weight: 600; }
-.nf-settings-dialog .nf-settings-nav-item[aria-current] svg { color: var(--nf-ui-accent-text, var(--nf-text)); }
-.nf-settings-dialog :is(.nf-icon-button, .nf-settings-nav-item, .nf-memory-group button, .nf-setting-back):focus-visible {
-  outline: 2px solid var(--nf-muted) !important;
-  outline-offset: -2px;
-}
-.nf-settings-dialog .nf-settings-scroll { min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
-.nf-settings-dialog .nf-settings-page { padding: 24px 28px 32px; animation: nf-content-in var(--nf-motion-dialog, 180ms) ease both; }
-.nf-settings-dialog .nf-setting-title { margin: 0 0 15px; font-size: 22px; font-weight: 650; line-height: 1.4; letter-spacing: -.02em; }
-.nf-settings-dialog .nf-setting-row {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  min-height: 68px; padding-block: 15px; border-bottom: 1px solid var(--nf-settings-line);
-  overflow-wrap: anywhere;
-}
-.nf-settings-dialog .nf-setting-row > div:first-child, .nf-settings-dialog .nf-settings-trash strong { min-width: 0; flex: 1; }
-.nf-settings-dialog .nf-setting-row strong { font-size: 14px; font-weight: 600; }
-.nf-settings-dialog .nf-setting-row p { color: var(--nf-muted); margin: 4px 0 0; font-size: 13px; }
-.nf-settings-dialog .nf-setting-email { color: var(--nf-text); }
-.nf-settings-dialog .nf-setting-email-form { padding-inline: 4px; }
-.nf-settings-dialog .nf-setting-download { display: inline-flex; align-items: center; gap: 6px; }
-.nf-settings-dialog .nf-setting-row .nf-button { flex-shrink: 0; white-space: nowrap; }
-.nf-settings-dialog .nf-settings-trash { padding: 0; margin: 0; list-style: none; }
-.nf-settings-dialog .nf-setting-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 12px; }
-
-.nf-settings-dialog .nf-memory-control {
-  min-height: 0; padding: 14px 16px;
-  border: 1px solid var(--nf-settings-line); border-radius: 10px; background: var(--nf-soft);
-}
-.nf-settings-dialog .nf-memory-list-heading {
-  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px;
-  margin: 24px 0 12px;
-}
-.nf-settings-dialog .nf-memory-list-heading h3, .nf-settings-dialog .nf-memory-detail h3 { margin: 0; font-size: 16px; font-weight: 650; }
-.nf-settings-dialog .nf-memory-search {
-  display: flex; align-items: center; gap: 8px; width: min(100%, 174px);
-  padding: 0 10px; min-height: 36px; border: 1px solid var(--nf-settings-line); border-radius: 8px;
-}
-.nf-settings-dialog .nf-memory-search input {
-  min-width: 0; width: 100%; height: 34px; background: transparent; border: 0; color: inherit;
-}
-.nf-settings-dialog .nf-memory-search:focus-within { border-color: var(--nf-settings-accent); }
-.nf-settings-dialog .nf-memory-search input:focus-visible { outline-offset: 0; }
-.nf-settings-dialog .nf-memory-group { margin-top: 20px; }
-.nf-settings-dialog .nf-memory-group h4 { margin: 0 0 7px; font-size: 13px; font-weight: 600; color: var(--nf-muted); }
-.nf-settings-dialog .nf-memory-group > p { margin: 0 0 8px; font-size: 13px; color: var(--nf-muted); }
-.nf-settings-dialog .nf-memory-group[data-group="review"] h4 { color: var(--nf-text); }
-.nf-settings-dialog .nf-memory-group ul { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--nf-settings-line); }
-.nf-settings-dialog .nf-memory-group li { border-bottom: 1px solid var(--nf-settings-line); }
-.nf-settings-dialog .nf-memory-group button {
-  display: flex; align-items: center; gap: 10px; min-height: 46px; width: 100%;
-  padding: 10px 8px; text-align: start; border: 0; background: transparent;
-}
-.nf-settings-dialog .nf-memory-group button:hover { background: var(--nf-soft); }
-.nf-settings-dialog .nf-memory-group button span {
-  flex: 1; min-width: 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-  overflow: hidden; overflow-wrap: anywhere;
-}
-.nf-settings-dialog .nf-memory-group button small { flex-shrink: 0; color: var(--nf-muted); font-size: 12px; }
-.nf-settings-dialog .nf-setting-empty { margin: 0; padding: 28px 0; text-align: center; color: var(--nf-muted); }
-.nf-settings-dialog .nf-setting-back {
-  display: flex; align-items: center; gap: 4px;
-  min-height: 36px; padding: 4px 8px 4px 3px; border: 0; border-radius: 8px;
-  background: transparent; color: var(--nf-muted); margin-bottom: 12px;
-}
-.nf-settings-dialog .nf-setting-back:hover { background: var(--nf-soft); }
-.nf-settings-dialog .nf-memory-source { display: block; margin-top: 14px; color: var(--nf-muted); }
-.nf-settings-dialog .nf-memory-source .nf-input { margin-top: 6px; }
-.nf-settings-dialog .nf-memory-paper, .nf-settings-dialog .nf-memory-confirm {
-  margin-top: 16px; padding: 16px; border: 1px solid var(--nf-settings-line);
-  border-radius: 10px; background: var(--nf-soft); overflow-wrap: anywhere;
-}
-.nf-settings-dialog .nf-memory-paper p { margin: 0; white-space: pre-wrap; }
-.nf-settings-dialog .nf-memory-paper details { margin-top: 12px; color: var(--nf-muted); font-size: 13px; }
-.nf-settings-dialog .nf-memory-paper details p { margin-top: 8px; }
-.nf-settings-dialog .nf-memory-paper summary { cursor: pointer; }
-.nf-settings-dialog .nf-memory-confirm { border-color: var(--nf-danger); background: var(--nf-settings-paper); }
-.nf-settings-dialog .nf-memory-confirm h4 { margin: 0; font-size: 14px; }
-.nf-settings-dialog .nf-memory-confirm p { color: var(--nf-muted); margin: 6px 0 0; }
-.nf-settings-dialog .nf-memory-confirm ul { margin: 8px 0; padding-inline-start: 20px; }
+.nf-settings-system .nf-row-end svg { transition: transform 180ms ease; }
+.nf-settings-system [aria-expanded="true"] .nf-row-end svg { transform: rotate(180deg); }
+.nf-settings-system .nf-settings-detail { padding: 4px 10px 6px; }
+.nf-settings-system .nf-settings-detail .nf-row { padding-inline-start: 0; }
+.nf-settings-system .nf-settings-current-email { min-height: 42px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 8px; overflow-wrap: anywhere; }
+.nf-settings-system .nf-settings-muted, .nf-settings-system .nf-settings-format small { color: var(--nf-muted); font-size: var(--nf-font-caption, 12px); }
+.nf-settings-system .nf-settings-format { min-height: 58px; }
+.nf-settings-system .nf-settings-format small { display: block; margin-block-start: 2px; }
 .nf-settings-system .nf-detail { padding: 18px 0; border-bottom: 1px solid var(--nf-line); }
 .nf-settings-system .nf-detail label { display: block; font-size: var(--nf-font-caption, 12px); color: var(--nf-muted); margin-bottom: 8px; }
 .nf-settings-system .nf-input { display: block; width: 100%; min-width: 0; margin-bottom: 12px; padding: 10px 12px; border: 1px solid var(--nf-line); border-radius: var(--nf-radius-control, 9px); color: var(--nf-text); background: var(--nf-surface); }
@@ -217,6 +140,12 @@
 .nf-settings-system .nf-switch span { position: absolute; right: 17px; top: calc(50% - 7px); width: 14px; height: 14px; border-radius: 50%; background: var(--nf-settings-paper); transition: transform 180ms ease; }
 .nf-settings-system .nf-switch[aria-checked="true"] span { transform: translateX(14px); }
 .nf-settings-system .nf-list-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; font-size: var(--nf-font-caption, 12px); color: var(--nf-muted); }
+.nf-settings-system .nf-record { padding: 14px 0; border-bottom: 1px solid var(--nf-line); min-width: 0; overflow-wrap: anywhere; }
+.nf-settings-system .nf-trash-record { display: flex; align-items: center; gap: 12px; }
+.nf-settings-system .nf-record-main { min-width: 0; flex: 1; }
+.nf-settings-system .nf-record-title { margin: 0; font-size: var(--nf-font-control, 13px); font-weight: 500; overflow-wrap: anywhere; }
+.nf-settings-system .nf-record-meta { display: flex; flex-wrap: wrap; gap: 6px 12px; color: var(--nf-muted); font-size: var(--nf-font-caption, 12px); margin: 4px 0; }
+.nf-settings-system .nf-record p { overflow-wrap: anywhere; }
 .nf-settings-system .nf-record-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-top: 10px; }
 .nf-settings-system .nf-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; min-height: 200px; color: var(--nf-muted); font-size: var(--nf-font-control, 13px); text-align: center; }
 .nf-settings-system .nf-confirm-dialog { width: min(400px, 100%); padding: 24px; }
@@ -232,24 +161,29 @@
 @media (max-width: 620px) {
   .nf-overlay { padding: 12px; }
   .nf-settings-system .nf-dialog { max-height: calc(100dvh - 24px); }
-  .nf-settings-system .nf-settings-dialog { grid-template: auto auto minmax(0, 1fr) / minmax(0, 1fr); }
-  .nf-settings-dialog .nf-settings-header { min-height: 50px; padding: 4px 12px 4px 16px; }
-  .nf-settings-dialog .nf-settings-nav {
-    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2px;
-    padding: 6px; border-inline-end: 0; border-bottom: 1px solid var(--nf-settings-line);
-  }
-  .nf-settings-dialog .nf-settings-nav-item { justify-content: center; padding: 4px 2px; min-height: 40px; font-size: 13px; }
-  .nf-settings-dialog .nf-settings-nav-item svg { display: none; }
-  .nf-settings-dialog .nf-settings-page { padding: 18px 16px 22px; }
-  .nf-settings-dialog .nf-setting-title { font-size: 20px; }
-  .nf-settings-dialog .nf-memory-control { padding: 12px; }
+}
+@media (max-width: 480px) {
+  .nf-settings-system .nf-settings-content { padding-inline: 13px; }
+  .nf-settings-system .nf-content-heading { gap: 6px; }
+  .nf-settings-system .nf-settings-scroll[data-page="memory"] { max-height: 322px; }
+
 }
 @media (pointer: coarse) {
-  .nf-settings-system .nf-icon-button { width: 44px; height: 44px; }
-  .nf-settings-system :is(.nf-button, .nf-segment button, .nf-menu-item, .nf-switch, .nf-settings-nav-item, .nf-setting-back) { min-height: 44px; }
+  .nf-settings-system .nf-icon-button, .nf-settings-system .nf-content-heading .nf-icon-button { width: 44px; height: 44px; }
+  .nf-settings-system .nf-button, .nf-settings-system .nf-segment button, .nf-settings-system .nf-menu-item, .nf-settings-system .nf-switch { min-height: 44px; }
   .nf-settings-system .nf-segment button, .nf-settings-system .nf-switch { min-width: 44px; }
-  .nf-settings-system .nf-input, .nf-settings-dialog .nf-memory-search input { font-size: 16px; }
+  .nf-settings-system .nf-input { font-size: 16px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .nf-settings-system *, .nf-settings-system *::before { animation: none !important; transition: none !important; }
 }
+
+.nf-settings-dialog:has([data-page="home"]) { width: min(382px, 100%); }
+.nf-settings-system .nf-summary { padding: 4px 10px 16px; overflow-wrap: anywhere; }
+.nf-summary section + section { margin-top: 20px; }
+.nf-summary h3 { margin: 0 0 6px; font-size: 15px; font-weight: 600; }
+.nf-summary p { margin: 0 0 8px; white-space: pre-wrap; line-height: 1.85; }
+.nf-summary .nf-summary-edit { display: block; margin: 0 0 10px auto; padding: 4px 8px; border: 0; background: transparent; color: var(--nf-muted); }
+.nf-summary .nf-paragraph { width: 100%; text-align: start; border: 0; border-radius: 5px; padding: 4px; background: var(--nf-soft); line-height: 1.85; white-space: pre-wrap; }
+.nf-summary .nf-paragraph + .nf-paragraph { margin-top: 6px; }
+.nf-summary .nf-summary-field { display: block; margin-block: 10px; }
