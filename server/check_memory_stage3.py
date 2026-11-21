@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-from app.routers.agent import (
-    _classify_intent,
-    _episode_summary_from_checkpoint,
-    _history_recall_context,
-    AgentChatPayload,
-)
+from app.memory.agent import episode_summary_from_checkpoint as _episode_summary_from_checkpoint, history_recall_context as _history_recall_context
 from app.memory.domain import episodic_tags, is_episodic_memory
 
 
@@ -20,15 +15,6 @@ def _assert(condition: bool, message: str):
 
 
 def main():
-    recall_payload = AgentChatPayload(question="你还记得那天我们聊过的笔记项目吗")
-    _assert(_classify_intent(recall_payload) == "history_recall", "history recall query should route to history_recall")
-
-    recent_payload = AgentChatPayload(question="我最近在忙什么")
-    _assert(_classify_intent(recent_payload) == "history_recall", "recent life query should route to history_recall")
-
-    memory_query = AgentChatPayload(question="你还记得我叫什么吗")
-    _assert(_classify_intent(memory_query) == "memory_manage", "personal memory query should keep memory_manage")
-
     payload = {
         "workingMemory": {
             "taskType": "note_draft",

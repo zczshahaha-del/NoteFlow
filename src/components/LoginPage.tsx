@@ -193,13 +193,13 @@ export default function LoginPage({ onSignIn, onEmailCodeSignIn, onSignUp }: Log
 
   return <main ref={loginRoot} id="cloth-character-login" className="login-page auth-page" data-renderer={renderer} data-entered={entranceReady || renderer === "fallback"}>
     <header className="site-header">
-      <a className="site-brand" href="/" aria-label="NoteFlow 首页">NoteFlow<span>.</span></a>
+      <a className="site-brand" href="/" aria-label="知流首页">知流<span>.</span></a>
     </header>
     <div className="page-main">
       <form className="auth-form" data-mode={mode} data-step={step} onSubmit={submit} aria-busy={busy || sending} aria-label={title} aria-describedby={feedback.text ? `${id}-feedback` : undefined}
         onKeyDown={event => { if (event.key === "Enter" && (event.nativeEvent.isComposing || event.keyCode === 229)) event.preventDefault(); }}>
         <h1 className="sr-only">{title}</h1>
-        <section className="cl-scene" aria-label="NoteFlow 账号登录">
+        <section className="cl-scene" aria-label="知流账号登录">
           <canvas className="cl-shadow" aria-hidden="true" />
           <canvas className="cl-cloth" aria-hidden="true" />
           <div className="cl-drag-surface" aria-hidden="true" />

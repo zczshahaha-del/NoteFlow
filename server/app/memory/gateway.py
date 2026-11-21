@@ -131,7 +131,8 @@ class MemoryGateway:
                     UserSettings.user_id == user_id))).first()
                 if current is None or not current[0] or (current[1] or {}).get("memoryControl", {}).get("generation", 0) != initial_state.get("generation", 0):
                     return []
-            return [r for r in result if r.source_ref in live_sources][:max(1, min(limit, 500))]
+            visible = [r for r in result if r.source_ref in live_sources]
+            return visible if limit is None else visible[:max(1, min(limit, 500))]
 
     async def submit(self, user_id, content, *, source_key=None, metadata=None):
         text = content.strip()

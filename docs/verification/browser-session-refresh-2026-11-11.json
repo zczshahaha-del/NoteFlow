@@ -1,0 +1,28 @@
+{
+  "realFrontend": true,
+  "initialAccessExpired": true,
+  "events": [
+    {
+      "path": "/api/auth/me",
+      "status": 401
+    },
+    {
+      "path": "/api/auth/refresh",
+      "status": 200
+    },
+    {
+      "path": "/api/auth/me",
+      "status": 200
+    }
+  ],
+  "authenticatedMe": 200,
+  "expectedSyntheticIdentity": true,
+  "httpOnly": true,
+  "logout": 200,
+  "deniedAfterLogout": 401,
+  "pageErrors": [],
+  "passed": true,
+  "usesIsolatedSyntheticAccount": true,
+  "syntheticAccountCleaned": true,
+  "tokensRecorded": false
+}

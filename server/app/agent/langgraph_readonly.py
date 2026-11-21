@@ -11,6 +11,7 @@ from app.agent.contracts import RuntimeEvent
 from app.config import cfg
 from app.providers.contracts import ChatProviderRequest, ProviderChatMessage
 from app.rag.pipeline.context import validate_citation_indexes
+from app.services.selection_context import has_selection_scope, selection_context_text, whole_note_id
 
 
 class ReadonlyAgentState(TypedDict, total=False):
@@ -75,6 +76,26 @@ async def _default_memory_recall(state: ReadonlyAgentState) -> str:
 async def _default_rag_search(state: ReadonlyAgentState) -> dict[str, Any]:
     from app.rag.service import RagRequest, configured_rag_service
     page_state = state.get("page_state") or {}
+    if page_state.get("contextScope") == "none" and state.get("mode") != "ask_notes":
+        return {"context_mode": "general", "context_text": "", "sources": [], "rag_called": False}
+    selection_scope = has_selection_scope(page_state)
+    selection = selection_context_text(page_state) if selection_scope else ""
+    note_id = whole_note_id(page_state, state["question"])
+    if note_id:
+        result = await configured_rag_service().retrieve(RagRequest(
+            user_id=state["user_id"],
+            question=state["question"],
+            note_id=note_id,
+            limit_note_excerpts=True,
+        ))
+        related = result.context_text if result.sources else "没有找到这篇笔记中可引用的段落。"
+        return {
+            "context_mode": "note_excerpt",
+            "context_text": f"{selection}\n\n同一篇笔记的检索结果：\n{related}".strip(),
+            "sources": result.sources,
+        }
+    if selection_scope:
+        return {"context_mode": "selection", "context_text": selection, "sources": [], "rag_called": False}
     plan = state.get("turn_plan") or {}
     context_sources = set(plan.get("context_sources") or [])
     library_scope = "knowledge_base" in context_sources
@@ -220,7 +241,11 @@ def build_readonly_graph(
     async def planner(state: ReadonlyAgentState) -> dict[str, Any]:
         plan = state.get("turn_plan") or {}
         context_sources = set(plan.get("context_sources") or [])
-        use_note_context = bool(
+        page_state = state.get("page_state") or {}
+        if page_state.get("contextScope") == "none" and state.get("mode") != "ask_notes":
+            context_sources &= {"user_memory"}
+        bounded_note_scope = has_selection_scope(page_state) or bool(whole_note_id(page_state, state["question"]))
+        use_note_context = bounded_note_scope or bool(
             context_sources.intersection({"knowledge_base", "current_note", "selected_text"})
         )
         intent = "note_qa" if use_note_context else "general_chat"
@@ -240,7 +265,7 @@ def build_readonly_graph(
         return {
             "intent": intent,
             "route": route,
-            "requires_sources": "knowledge_base" in context_sources,
+            "requires_sources": not bounded_note_scope and "knowledge_base" in context_sources,
         }
 
     async def memory_recall(state: ReadonlyAgentState) -> dict[str, Any]:
@@ -276,15 +301,16 @@ def build_readonly_graph(
         try:
             result = await deps.rag_search(state)
             sources = list(result.get("sources") or [])
+            rag_called = bool(result.get("rag_called", True))
             await deps.emit(RuntimeEvent(
                 type="context", status="success", sessionId=state.get("session_id"), runId=state.get("run_id"),
                 contextMode=str(result.get("context_mode") or "library"),
-                payload={"sources": sources, "ragCalled": True, "readOnly": True},
+                payload={"sources": sources, "ragCalled": rag_called, "readOnly": True},
             ))
             return {
                 "context_mode": str(result.get("context_mode") or "library"),
                 "context_text": str(result.get("context_text") or ""),
-                "sources": sources, "rag_called": True,
+                "sources": sources, "rag_called": rag_called,
             }
         except Exception as exc:
             return {"error_code": "rag_read_failed", "error_message": str(exc), "status": "failed", "rag_called": True}
@@ -306,7 +332,7 @@ def build_readonly_graph(
                 parts.append(_chunk_text(chunk))
                 await deps.emit(RuntimeEvent.from_wire(chunk))
             answer_text = "".join(parts)
-            if state.get("requires_sources"):
+            if state.get("requires_sources") or state.get("context_mode") == "note_excerpt":
                 cleaned, validation = validate_citation_indexes(
                     answer_text,
                     set(range(1, len(state.get("sources") or []) + 1)),

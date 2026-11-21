@@ -645,7 +645,7 @@ async def find_memories(
     layers: Iterable[str] | None = None,
     scopes: Iterable[str] | None = None,
     include_deleted: bool = False,
-    limit: int = 20,
+    limit: int | None = 20,
     refresh: bool = False,
 ) -> list[UserMemory]:
     conditions = [UserMemory.user_id == user_id]
@@ -690,7 +690,7 @@ async def find_memories(
         memories.sort(key=lambda memory: (key_rank(memory), -score_memory(memory, query), memory.created_at))
     else:
         memories.sort(key=lambda memory: (-score_memory(memory, query), memory.created_at), reverse=False)
-    return memories[: max(1, min(limit, 50))]
+    return memories if limit is None else memories[: max(1, min(limit, 50))]
 
 
 async def mark_memories_used(

@@ -1,6 +1,6 @@
 import type { NoteCategoryRecord } from "../services/categories";
 import type { KnowledgeBaseSnapshot } from "../services/knowledgeBase";
-import type { NoteRecord } from "../services/notes";
+import type { NoteListRecord, NoteRecord } from "../services/notes";
 import type { FileNode } from "../types";
 
 export function collectFolderIds(nodes: FileNode[]): string[] {
@@ -133,7 +133,7 @@ export function togglePinned(nodes: FileNode[], id: string): FileNode[] {
 export function updateFileMetadata(
   nodes: FileNode[],
   id: string,
-  metadata: Partial<Pick<FileNode, "tags" | "favorite" | "lastOpenedAt">>
+  metadata: Partial<Pick<FileNode, "tags" | "favorite" | "lastOpenedAt" | "updatedAt" | "contentHash">>
 ): FileNode[] {
   return nodes.map((node) => {
     if (node.id === id && node.type === "file") {
@@ -188,7 +188,7 @@ function findFirstFileId(nodes: FileNode[]): string | null {
 
 export function buildTreeFromRecords(
   categories: NoteCategoryRecord[],
-  notes: NoteRecord[]
+  notes: NoteListRecord[]
 ): KnowledgeBaseSnapshot {
   const categoryNodes = new Map<string, FileNode>();
   const sortedCategories = [...categories].sort((a, b) => {
@@ -242,7 +242,7 @@ export function buildTreeFromRecords(
       favorite: note.isFavorite,
       indexStatus: note.indexStatus,
     };
-    fileContents[note.id] = note.content ?? "";
+    if (note.content !== undefined) fileContents[note.id] = note.content;
     const parent = note.categoryId
       ? categoryNodes.get(note.categoryId)
       : null;

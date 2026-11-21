@@ -379,6 +379,7 @@ export default function AIDraftWorkspace() {
   const [busyMode, setBusyMode] = useState<BusyMode>("idle");
   const [statusText, setStatusText] = useState("");
   const [errorText, setErrorText] = useState("");
+  const [progressConnectionLost, setProgressConnectionLost] = useState(false);
   const [outlineInstruction, setOutlineInstruction] = useState("");
   const [sectionInstruction, setSectionInstruction] = useState("");
   const [newSectionTitle, setNewSectionTitle] = useState("");
@@ -416,14 +417,15 @@ export default function AIDraftWorkspace() {
         .sort((a, b) => a.sortOrder - b.sortOrder),
     [draft]
   );
-  const selectedSection =
+  const revisedBody = draft?.status === "assembled" && draft.draftConfig?.assembledRevision === true
+    ? draft.assembledContent : "";
+  const selectedSection = revisedBody ? null : (
     draft?.sections.find((section) => section.id === selectedSectionId && section.status !== "deleted") ??
     activeSections[0] ??
-    null;
-  const renderedSection = useMemo(
-    () => renderChatMarkdown(selectedSection?.content || ""),
-    [selectedSection?.content]
+    null
   );
+  const visibleMarkdown = revisedBody || selectedSection?.content || "";
+  const renderedMarkdown = useMemo(() => renderChatMarkdown(visibleMarkdown), [visibleMarkdown]);
   const canGenerateSections = Boolean(draft && activeSections.length > 0);
   const canSave = Boolean(draft?.status === "assembled" && draft.assembledContent.trim());
   const writingStage = draftWritingStage(draft?.status, busyMode, errorText, activeSections.some(section => Boolean(section.content.trim())));
@@ -598,7 +600,7 @@ export default function AIDraftWorkspace() {
         errorText: errorText || (draft?.status === "failed" ? jobError : ""),
         completedSections,
         totalSections: sections.length,
-        hasBody: sections.some(section => Boolean(section.content.trim())),
+        hasBody: Boolean(draft?.assembledContent.trim()) || sections.some(section => Boolean(section.content.trim())),
       }
     );
   }, [draft, errorText, isBusy, setActiveDraftContext, statusText, topic, writingStage]);
@@ -661,7 +663,7 @@ export default function AIDraftWorkspace() {
     }
   }, [draft]);
 
-  const createOutline = useCallback(async (feedbackText = "", topicOverride = "", submittedBrief?: DraftBrief, messageId?: string) => {
+  const createOutline = useCallback(async (feedbackText = "", topicOverride = "", submittedBrief?: DraftBrief, messageId?: string, expectedUpdatedAt?: string) => {
     const isFeedback = Boolean(feedbackText.trim());
     const currentDraftTopic = draft ? (draft.topic || draft.title || topic) : "";
     const cleanTopicValue = cleanTitle(
@@ -731,6 +733,7 @@ export default function AIDraftWorkspace() {
 
       const created = draft
         ? await updateNoteDraft(draft.id, {
+            expectedUpdatedAt,
             title: cleanTopicValue,
             outline,
             status: "outline_ready",
@@ -800,6 +803,48 @@ export default function AIDraftWorkspace() {
     editDraftBrief,
   ]);
 
+  const reviseDraftBody = useCallback(async (base: NoteDraftRecord, instruction: string, expectedUpdatedAt: string) => {
+    if (activeRequestRef.current) return;
+    if (base.status !== "assembled" || !base.assembledContent.trim() || base.assembledContent.length > 32000) {
+      setErrorText("这篇草稿暂时无法整篇改写，请保存为笔记后分段修改。");
+      return;
+    }
+    const controller = new AbortController();
+    activeRequestRef.current = controller;
+    setBusyMode("revise");
+    setErrorText("");
+    setStatusText("正在修改草稿正文…");
+    let content = "";
+    let finishReason = "";
+    try {
+      await generateNoteStream({
+        mode: "revise", topic: base.title, markdown: base.assembledContent,
+        noteType: base.noteType, writingTone: base.writingTone, noteFormat: base.noteFormat,
+        headingLevel: base.headingLevel, includeCode: base.includeCode, includeExercises: base.includeExercises,
+        extraRequest: instruction, memoryEnabled: isMemoryEnabled(), maxTokens: getMaxTokens(instruction),
+        signal: controller.signal,
+        onDelta: delta => { content += delta; },
+        onFinishReason: reason => { finishReason = reason; },
+      });
+      if (controller.signal.aborted || activeRequestRef.current !== controller) return;
+      if (!content.trim() || finishReason !== "stop") throw new Error("这次修改没有生成完整正文，原草稿已保留。");
+      const updated = await assembleNoteDraft(base.id, content, expectedUpdatedAt);
+      if (controller.signal.aborted || activeRequestRef.current !== controller) return;
+      replaceDraft(updated);
+      setStatusText("草稿正文已更新，请确认后再保存为笔记。");
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        setStatusText("");
+        setErrorText(error instanceof Error ? error.message : "修改草稿正文失败。");
+      }
+    } finally {
+      if (activeRequestRef.current === controller) {
+        activeRequestRef.current = null;
+        setBusyMode("idle");
+      }
+    }
+  }, [replaceDraft]);
+
   useEffect(() => {
     const restoredDraftId = checkpointMatchesCurrentSeed && pendingCheckpoint?.checkpointType === "draft_workspace"
       ? pendingCheckpoint.payload?.draftId
@@ -827,7 +872,8 @@ export default function AIDraftWorkspace() {
   useEffect(() => {
     if (
       !draftCommand ||
-      !["generate_outline", "regenerate_outline"].includes(draftCommand.action) ||
+      !["generate_outline", "regenerate_outline", "revise_body"].includes(draftCommand.action) ||
+      (draftCommand.draftId && !draft) ||
       isBusy
     ) return;
     let canceled = false;
@@ -835,16 +881,29 @@ export default function AIDraftWorkspace() {
       if (canceled) return;
       autoOutlineStartedRef.current = true;
       consumeDraftCommand(draftCommand.id);
+      if (draftCommand.draftId && (draft?.id !== draftCommand.draftId || draft.updatedAt !== draftCommand.expectedUpdatedAt)) {
+        setErrorText("草稿已变化，请重新打开后再修改。");
+        return;
+      }
+      if (draftCommand.action === "revise_body") {
+        if (draft && draftCommand.expectedUpdatedAt) void reviseDraftBody(draft, draftCommand.feedback, draftCommand.expectedUpdatedAt);
+        return;
+      }
+      if (draftCommand.draftId && draft?.sections.some(section => section.status !== "deleted" && section.content.trim())) {
+        setErrorText("这篇草稿已有部分正文，请在工作台选择要修改的章节。");
+        return;
+      }
       const currentDraftTopic = draft ? draft.topic || draft.title || topic : "";
       void createOutline(
         draftCommand.action === "regenerate_outline" ? draftCommand.feedback : "",
         draftCommand.brief?.title || currentDraftTopic || draftCommand.seed,
         draftCommand.brief,
         draftCommand.messageId,
+        draftCommand.expectedUpdatedAt,
       );
     });
     return () => { canceled = true; };
-  }, [consumeDraftCommand, createOutline, draft, draftCommand, isBusy, topic]);
+  }, [consumeDraftCommand, createOutline, draft, draftCommand, isBusy, reviseDraftBody, topic]);
 
   const runSectionGeneration = useCallback(
     async (
@@ -1015,10 +1074,14 @@ export default function AIDraftWorkspace() {
   useEffect(() => {
     if (!draft || draft.status !== "generating") return;
     let alive = true;
+    let pending = false;
     const sync = async () => {
+      if (pending) return;
+      pending = true;
       try {
         const latest = await getNoteDraft(draft.id);
         if (!alive) return;
+        setProgressConnectionLost(false);
         replaceDraft(latest);
         if (latest.status === "saved" && latest.savedNoteId && completedNoteRef.current !== latest.savedNoteId) {
           completedNoteRef.current = latest.savedNoteId;
@@ -1031,8 +1094,10 @@ export default function AIDraftWorkspace() {
           }
           closeDraft({ status: "resolved", draftId: latest.id });
         }
-      } catch (error) {
-        if (alive) setErrorText(error instanceof Error ? error.message : "读取生成进度失败");
+      } catch {
+        if (alive) setProgressConnectionLost(true);
+      } finally {
+        pending = false;
       }
     };
     void sync();
@@ -1362,7 +1427,7 @@ export default function AIDraftWorkspace() {
               <div className="nf-draft-stage">
                 <AIWritingStatus compact label={busyMode === "cancel" ? "正在放弃草稿" : writingStatus.label}
                   step={writingStatus.step} />
-                {activeSections.length > 0 && <span className="nf-draft-progress" role="progressbar"
+                {!revisedBody && activeSections.length > 0 && <span className="nf-draft-progress" role="progressbar"
                   aria-label="草稿正文生成进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}
                   aria-valuetext={`已生成 ${completedSections} / ${activeSections.length} 章`}>
                   {completedSections} / {activeSections.length} 章
@@ -1371,7 +1436,7 @@ export default function AIDraftWorkspace() {
             </div>
 
             <div className="nf-draft-toolbar flex items-center gap-2">
-              <div ref={bodyInstructionRef} className="relative">
+              {!revisedBody && <div ref={bodyInstructionRef} className="relative">
                 <button
                   type="button"
                   onClick={() => {
@@ -1446,7 +1511,7 @@ export default function AIDraftWorkspace() {
                     </div>
                   </div>
                 )}
-              </div>
+              </div>}
 
               {draft?.status === "generating" ? (
                 <button
@@ -1518,7 +1583,7 @@ export default function AIDraftWorkspace() {
           </header>
 
           <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-            <aside className="nf-draft-outline flex h-[168px] shrink-0 flex-col md:h-auto md:w-[282px]">
+            {!revisedBody && <aside className="nf-draft-outline flex h-[168px] shrink-0 flex-col md:h-auto md:w-[282px]">
               <div className="flex shrink-0 items-center justify-between px-5 pb-3 pt-5">
                 <p className="nf-draft-section-title">大纲目录</p>
                 <button type="button" className="nf-draft-action nf-draft-icon grid place-items-center"
@@ -1560,14 +1625,14 @@ export default function AIDraftWorkspace() {
                   </div>
                 )}
               </nav>
-            </aside>
+            </aside>}
 
             <section className="nf-draft-main flex min-h-0 min-w-0 flex-1 flex-col">
               <div className="nf-draft-section-bar shrink-0">
                 <div className="nf-draft-reading flex min-h-[58px] items-center justify-between gap-3">
                   <div className="min-w-0">
                     <h2 className="nf-draft-section-title truncate">
-                      {selectedSection?.title || (busyMode === "outline" ? "正在准备章节" : "选择一个章节")}
+                      {revisedBody ? "修改后的正文" : selectedSection?.title || (busyMode === "outline" ? "正在准备章节" : "选择一个章节")}
                     </h2>
                   </div>
                   {selectedSection?.status === "generating" && (
@@ -1594,6 +1659,9 @@ export default function AIDraftWorkspace() {
 
               <div className="min-h-0 flex-1 overflow-y-auto">
                 <div className="nf-draft-reading py-7 sm:py-10">
+                  {draft?.status === "generating" && progressConnectionLost && (
+                    <p role="status" className="mb-5 text-[12px] text-jelly-text-muted">暂时连不上服务，正在重新获取进度。已写完的章节会保留。</p>
+                  )}
                   {errorText && (
                     <div role="alert" className="mb-5 rounded-lg border border-jelly-red/25 bg-jelly-red-bg px-3 py-2 text-[12px] leading-relaxed text-jelly-red">
                       {errorText}
@@ -1610,11 +1678,11 @@ export default function AIDraftWorkspace() {
                         AI 正在规划一级章节。准备完成后，点击左侧章节即可生成和查看正文。
                       </p>
                     </div>
-                  ) : selectedSection?.content ? (
+                  ) : visibleMarkdown ? (
                     <div
                       className="note-content nf-reading-prose draft-note-content"
                       onClick={(event) => void handleRenderedCodeBlockAction(event.target, event.currentTarget)}
-                      dangerouslySetInnerHTML={{ __html: renderedSection }}
+                      dangerouslySetInnerHTML={{ __html: renderedMarkdown }}
                     />
                   ) : selectedSection ? (
                     <div className="flex min-h-[360px] flex-col items-center justify-center text-center">

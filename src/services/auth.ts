@@ -19,16 +19,6 @@ export interface AuthSession {
   sessionExpiresAt?: string;
 }
 
-export interface UserSessionRecord {
-  id: string;
-  current: boolean;
-  userAgent: string | null;
-  ipAddress: string | null;
-  createdAt: string;
-  lastSeenAt: string;
-  expiresAt: string;
-}
-
 export class EmailCodeRequestError extends Error {
   constructor(message: string, readonly status: number) {
     super(message);
@@ -182,21 +172,6 @@ export async function logout(): Promise<void> {
   clearLegacyToken();
   clearCachedAuthSession();
   await publicApiFetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
-}
-
-export async function listUserSessions(): Promise<UserSessionRecord[]> {
-  const response = await apiFetch("/api/auth/sessions");
-  if (!response.ok) throw new Error(await readApiError(response));
-  return readApiJson<UserSessionRecord[]>(response);
-}
-
-export async function revokeUserSession(sessionId: string): Promise<boolean> {
-  const response = await apiFetch(`/api/auth/sessions/${encodeURIComponent(sessionId)}`, {
-    method: "DELETE",
-  });
-  if (!response.ok) throw new Error(await readApiError(response));
-  const result = await readApiJson<{ currentSessionRevoked: boolean }>(response);
-  return result.currentSessionRevoked;
 }
 
 export async function requestPasswordReset(email: string, signal?: AbortSignal): Promise<{

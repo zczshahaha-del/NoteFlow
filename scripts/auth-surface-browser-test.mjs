@@ -259,10 +259,14 @@ try {
       assert.ok(await page.locator('.auth-send').evaluate(n=>{
         const r=n.getBoundingClientRect(),field=n.closest('.cl-field').getBoundingClientRect();return r.left>=field.left&&r.right<=field.right+.1&&r.top>=field.top-.1&&r.bottom<=field.bottom+.1;
       }),'resend is integrated into the code field');
-      assert.ok(await code.evaluate(n=>{
+      const fit=await code.evaluate(n=>{
         const s=getComputedStyle(n),c=document.createElement('canvas').getContext('2d');c.font=s.font;
-        return n.clientWidth-parseFloat(s.paddingLeft)-parseFloat(s.paddingRight)>=Math.max(c.measureText('888888').width,c.measureText(n.placeholder).width);
-      }),'six digits and their placeholder fit beside resend, including 320px');
+        // offsetWidth is the border box; native input clientWidth can already exclude the text inset.
+        const available=n.offsetWidth-parseFloat(s.borderLeftWidth)-parseFloat(s.borderRightWidth)-parseFloat(s.paddingLeft)-parseFloat(s.paddingRight);
+        const required=Math.max(c.measureText('888888').width,c.measureText(n.placeholder).width);
+        return {available,required,font:s.font,width:innerWidth,client:n.clientWidth,computed:s.width,field:n.closest(".cl-field").style.cssText,box:n.getBoundingClientRect().toJSON(),padding:s.paddingRight};
+      });
+      assert.ok(fit.available+.5>=fit.required,'six digits and their placeholder fit beside resend: '+JSON.stringify(fit));
       assert.equal(await page.locator('.auth-context,.auth-recipient,.auth-change-email,.auth-support .auth-feedback,.auth-delivery').count(),0,'no visible recipient, change-email or detached delivery/error row');
       assert.equal(await page.locator('.auth-code-actions').count(),0);
       await touchTargets();

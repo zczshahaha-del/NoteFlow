@@ -1,0 +1,25 @@
+.nf-note-conflict { flex-wrap: wrap; }
+.nf-note-conflict-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.nf-note-conflict-dialog {
+  margin: auto;
+  padding: 16px;
+  width: min(720px, calc(100% - 24px));
+  max-height: 85dvh;
+  overflow: auto;
+  color: var(--color-jelly-text);
+  font-size: 13px;
+}
+.nf-note-conflict-dialog::backdrop { background: rgb(20 29 38 / 30%); }
+.nf-note-conflict-dialog header {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-bottom: 10px;
+}
+.nf-note-conflict-dialog h2 { font-size: 15px; font-weight: 600; }
+.nf-note-conflict-legend { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.nf-note-conflict-legend span { padding: 2px 6px; border-radius: 4px; }
+.nf-note-conflict-diff { border: 1px solid var(--color-jelly-border); border-radius: 7px; overflow: auto; }
+.nf-note-conflict-diff > div { display: grid; grid-template-columns: 54px minmax(0, 1fr); gap: 8px; padding: 4px 8px; }
+.nf-note-conflict-dialog [data-kind="add"] { background: var(--color-jelly-green-bg); }
+.nf-note-conflict-dialog [data-kind="remove"] { background: var(--color-jelly-red-bg); }
+.nf-note-conflict-diff > div > span:last-child { white-space: pre-wrap; overflow-wrap: anywhere; }
+.nf-note-conflict-line { user-select: none; color: var(--color-jelly-text-muted); }

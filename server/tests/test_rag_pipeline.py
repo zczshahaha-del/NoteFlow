@@ -162,6 +162,16 @@ class RagRerankerContextTest(unittest.TestCase):
             "https://api.jina.ai/v1/rerank",
         )
 
+    def test_qwen37_reranker_uses_plural_path_and_preserves_explicit_endpoint(self) -> None:
+        base = "https://dashscope.aliyuncs.com/compatible-api/v1"
+        self.assertEqual(
+            _reranker_endpoint(base + "/", "qwen3.7-text-rerank"),
+            base + "/reranks",
+        )
+        for endpoint in (base + "/reranks", base + "/rerank"):
+            with self.subTest(endpoint=endpoint):
+                self.assertEqual(_reranker_endpoint(endpoint, "qwen3.7-text-rerank"), endpoint)
+
     def test_reranker_success_and_failure_fallback(self) -> None:
         candidates = [_candidate("one"), _candidate("two", section_key="section-2")]
         ranked, success = asyncio.run(

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from app.routers.agent import _classify_intent
-from app.routers.agent import AgentChatPayload, AgentChatPageState
+import unittest
 from app.memory.domain import extract_memory_candidates
 
 
@@ -29,20 +28,12 @@ def main():
     _assert(_keys("你还记得我多大了吗") == [], "memory query must not become memory write")
     _assert(_keys("今天我有点累") == [], "temporary state must not become semantic memory")
 
-    with_note = AgentChatPayload(
-        question="你好",
-        pageState=AgentChatPageState(currentNoteId="note_1"),
-    )
-    _assert(_classify_intent(with_note) == "general_chat", "smalltalk must not use current note")
-
-    personal = AgentChatPayload(
-        question="我今年24岁了",
-        pageState=AgentChatPageState(currentNoteId="note_1"),
-    )
-    _assert(_classify_intent(personal) == "general_chat", "personal statement must not use current note")
-
-    memory_query = AgentChatPayload(question="你还记得我叫什么吗")
-    _assert(_classify_intent(memory_query) == "memory_manage", "memory query should use memory_manage")
+    suite = unittest.defaultTestLoader.loadTestsFromNames([
+        "tests.test_turn_planner.TurnPlannerTest.test_implicit_memory_gate_is_separate_from_primary_intent",
+        "tests.test_turn_planner.TurnPlannerTest.test_memory_query_is_typed",
+        "tests.test_turn_planner.TurnPlannerTest.test_current_note_summary_is_general_chat_with_context",
+    ])
+    _assert(unittest.TextTestRunner().run(suite).wasSuccessful(), "current typed planner contracts")
 
     print("memory stage1 checks passed")
 

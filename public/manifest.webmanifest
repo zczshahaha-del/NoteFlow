@@ -1,6 +1,6 @@
 {
   "name": "知流 NoteFlow",
-  "short_name": "NoteFlow",
+  "short_name": "知流",
   "description": "支持 AI、离线草稿与个人知识库的笔记工作台",
   "start_url": "/",
   "scope": "/",

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import and_, func, select, update
+from sqlalchemy.orm import load_only
 
 from app.models.db import Note, NoteCategory, NoteEmbedding, NoteSection, NoteVersion
 from app.repositories.base import Repository, require_user_id
@@ -45,9 +46,15 @@ class NoteRepository(Repository):
             statement = statement.with_for_update(key_share=True).execution_options(populate_existing=True)
         return await self.session.scalar(statement)
 
-    async def list(self, user_id: str, *, include_deleted: bool = False) -> list[Note]:
+    async def list(self, user_id: str, *, include_deleted: bool = False, include_content: bool = True) -> list[Note]:
         user_id = require_user_id(user_id)
         stmt = select(Note).where(Note.user_id == user_id)
+        if not include_content:
+            stmt = stmt.options(load_only(
+                Note.id, Note.title, Note.category_id, Note.summary, Note.tags, Note.is_pinned, Note.is_favorite,
+                Note.index_status, Note.created_at, Note.updated_at, Note.deleted_at,
+                raiseload=True,
+            ))
         if not include_deleted:
             stmt = stmt.where(Note.deleted_at.is_(None))
         result = await self.session.execute(

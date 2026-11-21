@@ -20,6 +20,11 @@ try {
     contentHash: 'synthetic-' + content, isPinned: false, isFavorite: false, indexStatus: 'indexed',
     createdAt: null, updatedAt: null, deletedAt: null });
   const reset = () => {
+    // Independent scenarios start with empty browser storage. Hydration can
+    // recover an earlier, unacknowledged edit if it is still on disk.
+    localStorage.clear();
+    store.setState({ refreshChatSessions: async () => {} });
+    store.getState().hydrate('synthetic-one');
     requests.length = 0;
     store.setState({ hydratedUserId: 'synthetic-one', selectedFileId: 'a', serverSyncReady: false,
       treeData: ['a', 'b'].map(id => ({ id, name: id + '.md', type: 'file', content: '缓存-' + id })),

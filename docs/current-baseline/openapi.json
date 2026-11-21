@@ -106,6 +106,16 @@
             "title": "Selectedtext",
             "type": "string"
           },
+          "selectionContext": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SelectionSurroundings"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "unsavedContent": {
             "default": "",
             "title": "Unsavedcontent",
@@ -438,6 +448,17 @@
               }
             ],
             "title": "Content"
+          },
+          "expectedUpdatedAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expectedupdatedat"
           }
         },
         "title": "DraftAssemblePayload",
@@ -749,6 +770,17 @@
               }
             ],
             "title": "Categoryid"
+          },
+          "expectedUpdatedAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expectedupdatedat"
           },
           "outline": {
             "anyOf": [
@@ -1790,6 +1822,30 @@
           }
         },
         "title": "RunCancelPayload",
+        "type": "object"
+      },
+      "SelectionSurroundings": {
+        "properties": {
+          "after": {
+            "default": "",
+            "maxLength": 400,
+            "title": "After",
+            "type": "string"
+          },
+          "before": {
+            "default": "",
+            "maxLength": 400,
+            "title": "Before",
+            "type": "string"
+          },
+          "heading": {
+            "default": "",
+            "maxLength": 120,
+            "title": "Heading",
+            "type": "string"
+          }
+        },
+        "title": "SelectionSurroundings",
         "type": "object"
       },
       "SessionOut": {
@@ -6132,125 +6188,6 @@
         ]
       }
     },
-    "/api/diagnostics": {
-      "get": {
-        "operationId": "diagnostics_api_diagnostics_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorEnvelope"
-                }
-              }
-            },
-            "description": "Bad request"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorEnvelope"
-                }
-              }
-            },
-            "description": "Authentication required"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorEnvelope"
-                }
-              }
-            },
-            "description": "Forbidden"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorEnvelope"
-                }
-              }
-            },
-            "description": "Resource not found"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorEnvelope"
-                }
-              }
-            },
-            "description": "State or version conflict"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorEnvelope"
-                }
-              }
-            },
-            "description": "Request validation failed"
-          },
-          "429": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorEnvelope"
-                }
-              }
-            },
-            "description": "Rate limit exceeded"
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorEnvelope"
-                }
-              }
-            },
-            "description": "Internal server error"
-          },
-          "502": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorEnvelope"
-                }
-              }
-            },
-            "description": "Upstream service error"
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorEnvelope"
-                }
-              }
-            },
-            "description": "Service unavailable"
-          }
-        },
-        "summary": "Diagnostics",
-        "tags": [
-          "health"
-        ]
-      }
-    },
     "/api/health": {
       "get": {
         "operationId": "health_api_health_get",
@@ -6258,7 +6195,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Health Api Health Get",
+                  "type": "object"
+                }
               }
             },
             "description": "Successful Response"
@@ -8111,130 +8054,6 @@
         "summary": "Update Memory",
         "tags": [
           "memories"
-        ]
-      }
-    },
-    "/api/metrics": {
-      "get": {
-        "operationId": "metrics_api_metrics_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorEnvelope"
-                }
-              }
-            },
-            "description": "Bad request"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorEnvelope"
-                }
-              }
-            },
-            "description": "Authentication required"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorEnvelope"
-                }
-              }
-            },
-            "description": "Forbidden"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorEnvelope"
-                }
-              }
-            },
-            "description": "Resource not found"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorEnvelope"
-                }
-              }
-            },
-            "description": "State or version conflict"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorEnvelope"
-                }
-              }
-            },
-            "description": "Request validation failed"
-          },
-          "429": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorEnvelope"
-                }
-              }
-            },
-            "description": "Rate limit exceeded"
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorEnvelope"
-                }
-              }
-            },
-            "description": "Internal server error"
-          },
-          "502": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorEnvelope"
-                }
-              }
-            },
-            "description": "Upstream service error"
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorEnvelope"
-                }
-              }
-            },
-            "description": "Service unavailable"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Metrics",
-        "tags": [
-          "health"
         ]
       }
     },
@@ -11215,6 +11034,16 @@
             "schema": {
               "default": false,
               "title": "Includedeleted",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "includeContent",
+            "required": false,
+            "schema": {
+              "default": true,
+              "title": "Includecontent",
               "type": "boolean"
             }
           }

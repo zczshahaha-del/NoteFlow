@@ -27,6 +27,7 @@ class GateCommand:
 
 
 FRONTEND_COMMANDS = [
+    GateCommand("frontend", "content-safety", ["npm", "run", "test:content-safety"]),
     GateCommand("frontend", "tiptap-codec", ["npm", "run", "test:tiptap-codec"]),
     GateCommand("frontend", "tiptap-selection", ["npm", "run", "test:tiptap-selection"]),
     GateCommand("frontend", "editor-ui-contract", ["npm", "run", "test:editor-ui"]),
@@ -144,6 +145,7 @@ def main() -> int:
         commands.extend(DATABASE_AND_EVAL_COMMANDS)
         commands.append(GateCommand("build", "production-build", ["npm", "run", "build"]))
     if args.include_live_ai:
+        commands.append(GateCommand("chat-live-regression", "chat-live", ["npm", "run", "test:chat-live"]))
         commands.append(GateCommand("e2e-live", "runtime-e2e", [sys.executable, "server/tests/runtime_e2e.py"]))
 
     results: list[dict] = []

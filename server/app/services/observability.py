@@ -96,13 +96,18 @@ def _error_code(status_code: int) -> str:
     }.get(status_code, f"HTTP_{status_code}")
 
 
-def _error_response(request: Request, status_code: int, message: str, code: str | None = None) -> JSONResponse:
+def _error_response(request: Request, status_code: int, message: str, code: str | None = None, *,
+                    headers: dict[str, str] | None = None, details: dict[str, str] | None = None) -> JSONResponse:
     request_id = getattr(request.state, "request_id", "")
     trace_id = getattr(request.state, "trace_id", "")
+    info = {"code": code or _error_code(status_code), "message": message}
+    if details:
+        info["details"] = details
     return JSONResponse(
         status_code=status_code,
+        headers=headers,
         content={
-            "error": {"code": code or _error_code(status_code), "message": message},
+            "error": info,
             "requestId": request_id,
             "traceId": trace_id,
         },
@@ -175,13 +180,22 @@ def install_observability(app: FastAPI) -> None:
 
     @app.exception_handler(HTTPException)
     async def handle_http_exception(request: Request, error: HTTPException):
+        details = None
+        headers = {}
         if isinstance(error.detail, dict):
             message = str(error.detail.get("message") or error.detail.get("detail") or "request failed")
             code = str(error.detail.get("code") or _error_code(error.status_code))
+            if error.status_code == 409 and code == "NOTE_VERSION_CONFLICT":
+                details = {key: value for key in ("currentUpdatedAt", "currentContentHash")
+                           if isinstance(value := error.detail.get(key), str) and len(value) <= 64}
         else:
             message = str(error.detail)
             code = _error_code(error.status_code)
-        return _error_response(request, error.status_code, message, code)
+        if error.status_code == 429:
+            for name, value in (error.headers or {}).items():
+                if name.lower() == "retry-after" and value.isascii() and value.isdecimal() and len(value) <= 8:
+                    headers["Retry-After"] = value
+        return _error_response(request, error.status_code, message, code, headers=headers, details=details)
 
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(request: Request, error: RequestValidationError):

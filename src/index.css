@@ -198,6 +198,9 @@ button,
   --directory-row-icon: var(--nf-ui-icon);
   --directory-row-hover: var(--nf-ui-soft);
   --directory-row-selected: var(--nf-ui-accent-soft);
+  --directory-guide-color: #d5d2cd;
+  --directory-arrow-width: 18px;
+  --directory-arrow-shift: 3px;
 }
 
 .theme-dark .directory-tree .directory-node-list {
@@ -206,6 +209,7 @@ button,
   --directory-row-icon: #99a8b7;
   --directory-row-hover: #313a44;
   --directory-row-selected: var(--nf-ui-accent-soft);
+  --directory-guide-color: var(--nf-ui-line);
 }
 
 .directory-tree .directory-node-row {
@@ -230,6 +234,21 @@ button,
   color: var(--nf-ui-accent-text);
 }
 
+.directory-tree .directory-node-branch .directory-node-row[data-selected="true"]:not([data-folder]) {
+  background: transparent;
+}
+
+.directory-tree .directory-node-branch .directory-node-row[data-selected="true"]:not([data-folder])::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  /* The guide ends 17px into each child row, leaving a 4px gap before the fill. */
+  inset-inline: 21px 0;
+  border-radius: inherit;
+  background: var(--directory-row-selected);
+  pointer-events: none;
+}
+
 .directory-tree .directory-node-row[data-folder="true"],
 .directory-tree .directory-node-row[data-selected="true"] {
   font-weight: 500;
@@ -246,11 +265,75 @@ button,
   background: transparent;
 }
 
-.directory-tree .directory-node-arrow,
-.directory-tree .directory-node-slot {
+.directory-tree .directory-favorites {
+  margin-block-end: 7px;
+  padding-block-end: 6px;
+  border-block-end: 1px solid var(--nf-ui-line);
+}
+
+.directory-tree .directory-favorites-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding-inline: 10px;
+  border-radius: 6px;
+  list-style: none;
+  color: var(--directory-row-muted);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.directory-tree .directory-favorites-title::-webkit-details-marker { display: none; }
+.directory-tree .directory-favorites-chevron { margin-inline-start: auto; rotate: -90deg; }
+.directory-tree .directory-favorites[open] .directory-favorites-chevron { rotate: 0deg; }
+
+.directory-tree .directory-favorite-link {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding-inline: 28px 8px;
+  color: var(--directory-row-text);
+  font-size: 13.5px;
+  text-align: start;
+}
+
+.directory-tree .directory-favorites-title:hover,
+.directory-tree .directory-favorite-link:hover { background: var(--directory-row-hover); }
+
+.directory-tree .directory-favorite-link[aria-current="page"] {
+  color: var(--nf-ui-accent-text);
+  font-weight: 500;
+}
+
+.directory-tree .directory-node-arrow, .directory-tree .directory-node-slot {
   width: 18px;
   height: 32px;
   color: var(--directory-row-muted);
+}
+
+.directory-tree .directory-node-arrow {
+  width: var(--directory-arrow-width);
+}
+
+.directory-tree .directory-node-arrow svg {
+  translate: var(--directory-arrow-shift) 0;
+}
+
+.directory-tree .directory-node-branch {
+  position: relative;
+  padding-inline-start: 8px;
+}
+
+.directory-tree .directory-node-branch::before {
+  content: "";
+  position: absolute;
+  inset-block: 6px 6px;
+  /* Align to the desktop folder icon without crossing child icons on touch layouts. */
+  inset-inline-start: calc(var(--directory-branch-indent) + 36px);
+  border-inline-start: 1px solid var(--directory-guide-color);
+  pointer-events: none;
 }
 
 .directory-tree .directory-node-icon,
@@ -266,19 +349,36 @@ button,
   width: 24px;
   height: 32px;
   border-radius: 6px;
+  background: transparent;
 }
 
-.directory-tree .directory-node-more:hover {
-  background: var(--directory-row-selected);
+.directory-tree .directory-node-more:hover,
+.directory-tree .directory-node-more[aria-expanded="true"] {
+  color: var(--nf-ui-text);
+}
+
+.directory-tree .directory-node-more:focus,
+.directory-tree .nf-directory-context-menu button:focus {
+  box-shadow: none !important;
+}
+
+.directory-tree .directory-node-more:focus-visible,
+.directory-tree .nf-directory-context-menu button:focus-visible {
+  outline: 2px solid var(--nf-ui-focus) !important;
+  outline-offset: -2px;
 }
 
 @media (pointer: coarse) {
+  .directory-tree .directory-node-list { --directory-arrow-width: 44px; }
+
+  .directory-tree .directory-favorites-title,
   .directory-tree .directory-node-row,
   .directory-tree .directory-node-open {
     min-height: 44px;
   }
 
-  .directory-tree .directory-node-arrow,
+  .directory-tree .directory-node-arrow { height: 44px; }
+
   .directory-tree .directory-node-more {
     width: 44px;
     height: 44px;

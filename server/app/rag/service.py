@@ -13,6 +13,7 @@ class RagRequest:
     selected_text: str = ""
     current_section_id: str | None = None
     unsaved_content: str = ""
+    limit_note_excerpts: bool = False
 
 
 @dataclass(frozen=True)

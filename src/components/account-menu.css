@@ -23,6 +23,7 @@
 }
 .nf-settings-system.account-menu-root[data-compact] .nf-account-popover {
   padding: 6px;
+  border: 1px solid var(--nf-line);
   border-radius: var(--nf-radius-compact-surface, 12px);
   box-shadow: 0 6px 20px rgb(36 44 55 / 8%);
 }

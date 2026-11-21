@@ -18,6 +18,7 @@ export interface FileNode {
 export interface ChatPageState {
   currentNoteId?: string | null;
   selectedText?: string;
+  selectionContext?: SelectionSurroundings;
   currentSectionId?: string | null;
   dirty?: boolean;
   unsavedContent?: string;
@@ -27,7 +28,19 @@ export interface ChatPageState {
   activeDraftId?: string | null;
   activeDraftTitle?: string;
   activeDraftTopic?: string;
-  contextScope?: "auto" | "current_note" | "knowledge_base" | "selection";
+  contextScope?: "auto" | "none" | "current_note" | "knowledge_base" | "selection";
+}
+
+export interface NoteSaveConflict {
+  copyId: string;
+  remoteContent: string;
+  localContent: string;
+}
+
+export interface SelectionSurroundings {
+  heading: string;
+  before: string;
+  after: string;
 }
 
 export interface ChatReplyRequest {

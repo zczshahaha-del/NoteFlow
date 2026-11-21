@@ -89,6 +89,7 @@ export interface DraftCreatePayload {
 }
 
 export interface DraftUpdatePayload {
+  expectedUpdatedAt?: string;
   title?: string;
   categoryId?: string | null;
   outline?: string;
@@ -236,12 +237,13 @@ export async function restoreDraftSection(
 
 export async function assembleNoteDraft(
   draftId: string,
-  content?: string
+  content?: string,
+  expectedUpdatedAt?: string
 ): Promise<NoteDraftRecord> {
   const response = await apiFetch(`/api/note-drafts/${encodeURIComponent(draftId)}/assemble`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({ content, expectedUpdatedAt }),
   });
   if (!response.ok) throw new Error(await readApiError(response));
   const data = await readApiJson<{ draft: NoteDraftRecord }>(response);

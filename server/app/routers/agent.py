@@ -6,7 +6,7 @@ import time
 from datetime import datetime
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from app.config import cfg
 from app.database import AsyncSessionLocal
@@ -14,6 +14,7 @@ from app.deps import CurrentUser, get_current_user, redis_rate_limit
 from app.memory.context import MemoryContextService
 from app.rag.service import RagRequest, configured_rag_service
 from app.repositories.runs import RunRepository
+from app.repositories.drafts import DraftRepository
 from app.services.ai import ChatMessage, ChatRequest, stream_chat
 from app.services.context_planner import ContextPlan
 from app.memory.planning import broad_memory_read_plan, memory_read_plan_from_turn_plan
@@ -67,6 +68,7 @@ from app.schemas.agent import (
     RunCancelPayload,
 )
 from app.services.turn_planner import ContextSource, PrimaryIntent, TurnPlan
+from app.services.selection_context import SELECTION_LIMIT, has_selection_scope, whole_note_id
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 logger = logging.getLogger(__name__)
@@ -176,6 +178,7 @@ def _context_plan_from_turn_plan(plan: TurnPlan) -> ContextPlan:
         PrimaryIntent.GENERAL_CHAT: "general_chat",
         PrimaryIntent.NOTE_CREATE: "note_draft_create",
         PrimaryIntent.NOTE_EDIT: "note_edit_create",
+        PrimaryIntent.DRAFT_REVISE: "note_draft_continue",
         PrimaryIntent.MEMORY: "memory_manage",
         PrimaryIntent.UNKNOWN: "general_chat",
     }
@@ -290,6 +293,21 @@ def _terminal_turn_response(
 
 def _page_state_dict(page_state: AgentChatPageState | None) -> dict[str, Any] | None:
     return page_state.model_dump() if page_state else None
+
+
+async def _bound_draft(user_id: str, session_id: str, requested_id: str | None):
+    checkpoint = await _latest_waiting_checkpoint(user_id, session_id)
+    draft_id = (checkpoint or {}).get("payload", {}).get("draftId")
+    if (
+        not draft_id or (checkpoint or {}).get("checkpointType") != "draft_workspace"
+        or (requested_id and draft_id != requested_id)
+    ):
+        return None, None
+    async with AsyncSessionLocal() as session:
+        draft = await DraftRepository(session).get(user_id, draft_id)
+    if not draft or draft.status in {"saved", "canceled"}:
+        return None, None
+    return checkpoint, draft
 
 
 def _note_sources_fallback(sources: list[dict]) -> str:
@@ -573,13 +591,39 @@ async def chat(
     payload: AgentChatPayload,
     user: CurrentUser = Depends(redis_rate_limit("agent-chat", cfg.AI_RATE_LIMIT)),
 ):
+    page_state_dict = _page_state_dict(payload.pageState) or {}
+    if payload.pageState and payload.pageState.contextScope == "none" and payload.mode != "ask_notes":
+        payload = payload.model_copy(update={
+            "documentTitle": "", "documentContent": "",
+            "pageState": payload.pageState.model_copy(update={
+                "currentNoteId": None, "currentSectionId": None, "selectedText": "",
+                "selectionContext": None, "unsavedContent": "", "dirty": False,
+            }),
+        })
+        page_state_dict = _page_state_dict(payload.pageState) or {}
+    selection_scope = has_selection_scope(page_state_dict)
+    if payload.pageState and (selection_scope or whole_note_id(page_state_dict, payload.question)):
+        if selection_scope and len(payload.pageState.selectedText.strip()) > SELECTION_LIMIT:
+            raise HTTPException(422, detail="选中文字超过 4000 字，请缩小选区后再发送。")
+        # Strip any editor document before planning or checkpointing a request
+        # that will use a selection or retrieve limited saved excerpts.
+        payload = payload.model_copy(update={
+            "mode": "chat",
+            "documentContent": "",
+            "pageState": payload.pageState.model_copy(update={"unsavedContent": ""}),
+        })
+        page_state_dict = _page_state_dict(payload.pageState) or {}
     run_state = await _start_agent_run(payload, user.id, "planning")
     session_id = run_state["session_id"]
     run_id = run_state["run_id"]
     route_step_id = run_state["route_step_id"]
-    page_state_dict = _page_state_dict(payload.pageState) or {}
+    requested_draft_id = payload.pageState.activeDraftId if payload.pageState else None
 
     try:
+        if payload.mode == "chat" and payload.sessionId == session_id and not payload.retryAnswerOnly:
+            _, bound_draft = await _bound_draft(user.id, session_id, requested_draft_id)
+            if bound_draft:
+                page_state_dict.update(boundDraftId=bound_draft.id, boundDraftTitle=bound_draft.title)
         async with postgres_checkpointer() as saver:
             waiting = bool(payload.sessionId) and await graph_waiting_for_clarification(
                 checkpointer=saver,
@@ -1230,12 +1274,13 @@ async def chat(
                 return
 
             if intent == "note_draft_continue":
-                checkpoint = active_checkpoint
-                page_state = payload.pageState
-                draft_seed = _draft_seed_for_continue(context_plan, checkpoint, page_state, payload.question)
-                checkpoint_id = (checkpoint or {}).get("id")
-                if not checkpoint_id and not draft_seed:
-                    answer = "我没有找到当前草稿任务。你可以先告诉我要写什么主题，我再重新生成大纲。"
+                checkpoint, draft = await _bound_draft(user.id, session_id, page_state_dict.get("boundDraftId"))
+                if not draft or draft.id != page_state_dict.get("boundDraftId") or draft.status not in {"outline_ready", "assembled"}:
+                    answer = (
+                        "这篇草稿当前不能继续修改。请打开对应草稿，等正在进行的操作结束后再试。"
+                        if page_state_dict.get("boundDraftId")
+                        else "这段对话里没有可接着修改的草稿。请回到那篇草稿的对话再试。"
+                    )
                     yield _sse_format(_choice_delta(answer))
                     await _finish_agent_run(
                         user_id=user.id,
@@ -1248,12 +1293,14 @@ async def chat(
                     yield "data: [DONE]\n\n"
                     return
 
-                answer = "收到，我按你的反馈重新调整大纲。"
+                action = "revise_body" if draft.status == "assembled" else "regenerate_outline"
+                answer = "我会按你的要求修改这篇草稿正文。" if action == "revise_body" else "我会按你的要求调整这篇草稿的大纲。"
                 metadata = {
-                    "seed": draft_seed,
-                    "feedback": payload.question,
-                    "checkpointId": checkpoint_id,
-                    "draftRequest": context_plan.draft_request,
+                    "seed": checkpoint["payload"].get("seed") or draft.topic,
+                    "feedback": turn_plan.intent_parameters.instruction,
+                    "checkpointId": checkpoint["id"],
+                    "draftId": draft.id,
+                    "expectedUpdatedAt": draft.updated_at.isoformat(),
                 }
                 trace = await _complete_tool_only_run(
                     user_id=user.id,
@@ -1261,10 +1308,10 @@ async def chat(
                     run_id=run_id,
                     route_step_id=route_step_id,
                     tool_name="note_draft_tool",
-                    action="regenerate_outline",
+                    action=action,
                     answer=answer,
                     input_summary=payload.question,
-                    output_summary="重新生成 AI 草稿大纲",
+                    output_summary="续改当前草稿",
                     metadata=metadata,
                 )
                 yield _sse_format(trace)
@@ -1273,8 +1320,8 @@ async def chat(
                 yield _sse_format(
                     _tool_action(
                         "note_draft_tool",
-                        "regenerate_outline",
-                        metadata,
+                        action,
+                        {**metadata, "checkpoint": checkpoint},
                         answer,
                     )
                 )

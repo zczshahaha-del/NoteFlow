@@ -112,10 +112,11 @@ def _candidate_out(candidate) -> dict:
 @router.get("/memories")
 async def list_memories(
     includeDeleted: bool = Query(False),
+    allRecords: bool = Query(False),
     memoryTypes: list[str] = Query(default=[]),
     user: CurrentUser = Depends(memory_user),
 ):
-    memories = await MemoryService().list(user.id, memory_types=memoryTypes, include_deleted=includeDeleted)
+    memories = await MemoryService().list(user.id, memory_types=memoryTypes, include_deleted=includeDeleted, all_records=allRecords)
     return {"memories": [_memory_out(memory) for memory in memories]}
 
 
