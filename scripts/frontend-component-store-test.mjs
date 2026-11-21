@@ -1143,18 +1143,16 @@ try {
   assert.equal(accountPanel(), null);
   assert.equal(accountContainer.inert, true);
   assert.equal(document.activeElement.getAttribute("aria-label"), "关闭设置");
-  assert.deepEqual([...activeSettings().querySelectorAll('.nf-settings-group .nf-row')].map(row => row.firstElementChild.textContent),
-    ["登录邮箱", "显示模式", "长期记忆", "记忆列表", "导入笔记", "导出"]);
-  assert.equal(activeSettings().querySelector('nav'), null);
+  assert.deepEqual([...activeSettings().querySelectorAll('nav button')].map(button => button.textContent),
+    ["通用", "AI 记忆", "笔记数据", "回收站"]);
+  assert.equal(activeSettings().querySelector('[aria-current="page"]').textContent, "通用");
   await act(async () => document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true })));
   assert.ok(document.activeElement === Array.from(activeSettings().querySelectorAll("button")).at(-1));
-  await clickAccount(activeSettings().querySelector('[data-settings-detail="email"]'));
-  assert.equal(document.activeElement, settingAction("返回设置"));
-  assert.match(activeSettings().textContent, /当前邮箱test@example.com/);
+  assert.match(activeSettings().textContent, /登录邮箱test@example.com/);
   await clickAccount(settingAction("更换邮箱"));
   assert.equal(activeSettings().querySelector('input[type="email"]').value, "test@example.com");
   await clickAccount(settingAction("发送验证码"));
-  assert.equal(activeSettings().querySelector('input[aria-label="邮箱验证码"]').value, "123456");
+  assert.equal(activeSettings().querySelector('input[autocomplete="one-time-code"]').value, "123456");
   await clickAccount(settingAction("确认并绑定"));
   assert.equal(changedSession.user.email, "test@example.com");
   assert.ok(apiCalls.some(call => call.path.endsWith("/email-change/confirm") && call.payload.code === "123456"));
@@ -1162,10 +1160,9 @@ try {
   assert.doesNotMatch(activeSettings().textContent, /登录设备|有效会话/);
   assert.ok(!apiCalls.some(({ path }) => path.startsWith("/api/auth/sessions")));
 
-  await clickAccount(settingAction("返回设置"));
-  assert.equal(document.activeElement, activeSettings().querySelector('[data-settings-detail="email"]'));
   await clickAccount(settingAction("深色"));
   assert.deepEqual(themeCalls, ["dark"]);
+  await clickAccount(settingAction("AI 记忆"));
   failMemorySetting = true;
   await clickAccount(activeSettings().querySelector('button[aria-label="长期记忆"]'));
   assert.equal(settingAction("长期记忆").getAttribute("aria-checked"), "true");
@@ -1173,12 +1170,14 @@ try {
   failMemorySetting = false;
   await clickAccount(activeSettings().querySelector('button[aria-label="长期记忆"]'));
   assert.equal(settingAction("长期记忆").getAttribute("aria-checked"), "false");
-  await clickAccount(settingAction("记忆列表"));
   assert.ok(apiCalls.some(call => call.path === "/api/memories"));
   assert.doesNotMatch(activeSettings().textContent, /记忆管理|规则与来源|记忆关系|原有记忆|最近处理状态/);
   assert.match(activeSettings().textContent, /偏好简洁排版/);
-  await clickAccount(activeSettings().querySelector('button[aria-label="编辑记忆"]'));
-  const memoryInput = activeSettings().querySelector('textarea[aria-label="记忆内容"]');
+  assert.equal(settingAction("编辑记忆"), undefined);
+  assert.equal(settingAction("删除记忆"), undefined);
+  await clickAccount(activeSettings().querySelector('[data-memory-id="memory-ui-test"]'));
+  await clickAccount(settingAction("编辑记忆"));
+  const memoryInput = activeSettings().querySelector("textarea");
   assert.equal(memoryInput.value, "偏好简洁排版");
   await act(async () => {
     Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, "value").set.call(memoryInput, "偏好简洁的编辑页面");
@@ -1188,24 +1187,19 @@ try {
   assert.ok(apiCalls.some(call => call.payload?.reason === "profile_memory_edit" && call.payload.status === "active" && call.payload.content === "偏好简洁的编辑页面"));
   assert.match(activeSettings().textContent, /偏好简洁的编辑页面/);
   assert.doesNotMatch(activeSettings().textContent, /待确认/);
-  const originalMemoryConfirm = window.confirm;
-  let confirmedMemoryImpact = "";
-  try {
-    window.confirm = () => false;
-    await clickAccount(activeSettings().querySelector('button[aria-label="删除记忆"]'));
-    assert.ok(!apiCalls.some(call => call.method === "DELETE" && call.path.startsWith("/api/memories/")));
-    window.confirm = message => { confirmedMemoryImpact = message; return true; };
-    await clickAccount(activeSettings().querySelector('button[aria-label="删除记忆"]'));
-  } finally { window.confirm = originalMemoryConfirm; }
-  assert.match(confirmedMemoryImpact, /关联的 2 条记忆/);
+  await clickAccount(settingAction("删除记忆"));
+  assert.match(activeSettings().textContent, /删除同一来源的 2 条记忆/);
+  await clickAccount(settingAction("取消"));
+  assert.ok(!apiCalls.some(call => call.method === "DELETE" && call.path.startsWith("/api/memories/")));
+  await clickAccount(settingAction("删除记忆"));
+  await clickAccount(settingAction("确认删除"));
   assert.ok(apiCalls.some(call => call.path === "/api/memory-console/impact/memory-ui-test"));
   assert.ok(apiCalls.some(call => call.method === "DELETE" && call.search === "?confirmedSource=true"), "Source deletion confirmation is independent of provider name");
   assert.doesNotMatch(activeSettings().textContent, /偏好简洁的编辑页面/);
   assert.doesNotMatch(activeSettings().textContent, /偏好先看图示/);
   assert.match(activeSettings().textContent, /正在学习数据库/);
   assert.ok(apiCalls.filter(call => call.path.startsWith("/api/memory-console")).every(call => call.path.startsWith("/api/memory-console/impact/")));
-  await clickAccount(settingAction("返回设置"));
-  await clickAccount(settingAction("导出"));
+  await clickAccount(settingAction("笔记数据"));
   assert.ok(settingAction("导出 Markdown 文件")); assert.ok(settingAction("导出知识库备份"));
   const downloads = [];
   const originalCreateUrl = URL.createObjectURL, originalRevokeUrl = URL.revokeObjectURL;
@@ -1224,8 +1218,6 @@ try {
   assert.match(downloads[1].name, /\.json$/); assert.ok(downloads[1].size > 0);
   URL.createObjectURL = originalCreateUrl; URL.revokeObjectURL = originalRevokeUrl;
   dom.window.HTMLAnchorElement.prototype.click = originalLinkClick;
-  await clickAccount(settingAction("返回设置"));
-  await clickAccount(settingAction("导入笔记"));
   assert.ok(settingAction("选择文件"));
   const importInput = activeSettings().querySelector('input[type="file"]');
   assert.ok(!importInput.multiple && importInput.accept.includes(".zip"));
@@ -1246,10 +1238,6 @@ try {
   await act(async () => document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", isComposing: true, bubbles: true })));
   assert.ok(activeSettings());
   await act(async () => document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-  assert.equal(activeSettings().querySelector("h2").textContent, "设置");
-  assert.equal(document.activeElement, settingAction("导入笔记"));
-  assert.equal(settingAction("回收站"), undefined);
-  await act(async () => document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   assert.equal(activeSettings(), null);
   assert.equal(document.activeElement, accountTrigger);
   assert.equal(accountContainer.inert, undefined);
@@ -1257,11 +1245,11 @@ try {
   assert.equal(document.querySelector(".nf-overlay"), null);
   await clickAccount(accountTrigger);
   await clickAccount(Array.from(accountPanel().querySelectorAll("button")).find(b => b.textContent.startsWith("回收站")));
-  assert.equal(activeSettings().querySelector("h2").textContent, "回收站");
+  assert.equal(activeSettings().querySelector(".nf-setting-title").textContent, "回收站");
   assert.match(activeSettings().textContent, /待恢复笔记/);
   await clickAccount(activeSettings().querySelector('button[aria-label="恢复 待恢复笔记"]'));
   assert.equal(restoredId, "trash-test");
-  await clickAccount(settingAction("关闭回收站"));
+  await clickAccount(settingAction("关闭设置"));
   await waitExit();
   await clickAccount(accountTrigger);
   await clickAccount(action(accountPanel(), "退出登录"));
