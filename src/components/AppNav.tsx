@@ -392,7 +392,7 @@ export default function AccountMenu({
                     <div className="nf-email-address"><span>{userEmail}</span><small>{userEmailVerified ? "已验证" : "待验证"}</small></div>
                     <button ref={emailActionRef} type="button" className="nf-email-action" aria-expanded={emailOpen}
                       aria-controls={emailOpen ? accountPanelId + "-email-form" : undefined} disabled={emailLoading} onClick={toggleEmailForm}>
-                      {emailOpen ? "取消" : <><Pencil size={14} strokeWidth={1.65} aria-hidden="true" />更换邮箱</>}
+                      <Pencil size={14} strokeWidth={1.65} aria-hidden="true" />更换邮箱
                     </button>
                   </div>
                   {emailOpen && <form className="nf-email-form" id={accountPanelId + "-email-form"} noValidate onSubmit={event => {

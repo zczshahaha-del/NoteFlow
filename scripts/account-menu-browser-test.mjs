@@ -123,6 +123,8 @@ try{
   const sendCode = settingsHome.getByRole('button',{name:'发送验证码',exact:true});
   assert.equal(await newEmail.count(),0);
   await changeEmail.click();
+  assert.equal(await changeEmail.getAttribute('aria-expanded'),'true');
+  assert.equal(await settingsHome.getByRole('button',{name:'取消',exact:true}).count(),0);
   assert.equal(await newEmail.inputValue(),'');
   assert.equal(await newEmail.evaluate(input=>input===document.activeElement),true);
   assert.equal(await newEmail.evaluate(input=>getComputedStyle(input).outlineWidth),'1px');
@@ -132,12 +134,13 @@ try{
   assert.equal(inputBox.y,sendBox.y);
   assert.equal(inputBox.height,sendBox.height);
   await newEmail.fill('new@example.invalid');
-  await settingsHome.getByRole('button',{name:'取消',exact:true}).click();
+  await changeEmail.click();
+  assert.equal(await changeEmail.getAttribute('aria-expanded'),'false');
   assert.equal(await newEmail.count(),0);
   assert.equal(await changeEmail.evaluate(button=>button===document.activeElement),true);
   await changeEmail.click();
   assert.equal(await newEmail.inputValue(),'');
-  await settingsHome.getByRole('button',{name:'取消',exact:true}).click();
+  await changeEmail.click();
   await checkSettingsFrame(settingsHome);
   await nav.getByRole('button',{name:'外观',exact:true}).click();
   assert.equal(await settingsHome.locator('.nf-segment button').count(),2);
