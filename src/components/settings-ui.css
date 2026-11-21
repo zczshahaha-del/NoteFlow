@@ -74,13 +74,15 @@
 .nf-settings-system .nf-dialog { position: relative; width: min(696px, 100%); max-height: calc(100dvh - 32px); overflow: hidden; border: 1px solid var(--nf-line); border-radius: var(--nf-radius-dialog, 20px); background: var(--nf-surface); box-shadow: 0 12px 44px var(--nf-shadow); }
 .nf-overlay[data-open="true"] .nf-dialog { animation: nf-rise-in var(--nf-motion-dialog, 180ms) ease both; }
 .nf-overlay[data-open="false"] .nf-dialog { animation: nf-rise-out var(--nf-motion-dialog, 180ms) ease both; }
+/* Only the backdrop fades; navigating inside settings keeps the frame still. */
+.nf-overlay[data-open] .nf-settings-dialog { animation: none; }
 .nf-settings-system .nf-settings-dialog {
   --nf-settings-paper: #faf9f7;
   --nf-settings-line: #e8e5df;
   --nf-settings-control: #eeece8;
   --nf-settings-current: #fbfaf8;
   --nf-settings-accent: #5f879a;
-  display: flex; width: min(560px, 100%); border-radius: 16px;
+  display: flex; width: min(480px, 100%); height: 416px; border-radius: 16px;
   border-color: var(--nf-settings-line); background: var(--nf-settings-paper);
 }
 .nf-settings-system[data-theme="dark"] .nf-settings-dialog {
@@ -102,9 +104,7 @@
 .nf-settings-system h2 { margin: 0; font-family: inherit; font-size: 19px; font-weight: 500; line-height: 1.4; }
 .nf-settings-system .nf-icon-button { display: grid; place-items: center; width: 32px; height: 32px; flex-shrink: 0; padding: 0; border: 0; border-radius: var(--nf-radius-icon, 8px); background: transparent; }
 .nf-settings-system .nf-icon-button:hover { background: var(--nf-soft); }
-.nf-settings-system .nf-settings-scroll { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
-.nf-settings-system .nf-settings-scroll[data-page="memory"] { max-height: 394px; }
-.nf-settings-system .nf-settings-page { animation: nf-content-in var(--nf-motion-dialog, 180ms) ease both; }
+.nf-settings-system .nf-settings-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .nf-settings-system .nf-settings-group { padding-block: 3px; }
 .nf-settings-system .nf-settings-group + .nf-settings-group { border-block-start: 1px solid var(--nf-settings-line); }
 .nf-settings-system .nf-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-height: 44px; padding: 2px 9px 2px 10px; border: 0; border-radius: 7px; background: transparent; text-align: start; }
@@ -157,7 +157,6 @@
 @keyframes nf-fade-out { from { opacity: 1; } to { opacity: 0; } }
 @keyframes nf-rise-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes nf-rise-out { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(6px); } }
-@keyframes nf-content-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 @media (max-width: 620px) {
   .nf-overlay { padding: 12px; }
   .nf-settings-system .nf-dialog { max-height: calc(100dvh - 24px); }
@@ -165,7 +164,6 @@
 @media (max-width: 480px) {
   .nf-settings-system .nf-settings-content { padding-inline: 13px; }
   .nf-settings-system .nf-content-heading { gap: 6px; }
-  .nf-settings-system .nf-settings-scroll[data-page="memory"] { max-height: 322px; }
 
 }
 @media (pointer: coarse) {
@@ -178,7 +176,7 @@
   .nf-settings-system *, .nf-settings-system *::before { animation: none !important; transition: none !important; }
 }
 
-.nf-settings-dialog:has([data-page="home"]) { width: min(382px, 100%); }
+
 .nf-settings-system .nf-summary { padding: 4px 10px 16px; overflow-wrap: anywhere; }
 .nf-summary section + section { margin-top: 20px; }
 .nf-summary h3 { margin: 0 0 6px; font-size: 15px; font-weight: 600; }

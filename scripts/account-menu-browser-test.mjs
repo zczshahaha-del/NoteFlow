@@ -103,19 +103,28 @@ try{
   await open(page);await page.locator('.nf-account-trigger').click();assert.equal(await panel.evaluate(n=>n.hasAttribute('inert')),true);
   await open(page);await page.waitForTimeout(210);assert.equal(await panel.count(),1);
   const settingsHome=page.getByRole('dialog',{name:'设置',exact:true});
-  const checkSettingsWidth=async dialog=>assert.equal((await dialog.boundingBox()).width,width===320?296:(await dialog.getAttribute('aria-label')==='设置'?382:560));
+  let settingsBounds;
+  const checkSettingsFrame=async dialog=>{
+    const bounds=await dialog.boundingBox();
+    assert.equal(bounds.width,width===320?296:480);
+    assert.equal(bounds.height,416);
+    if(settingsBounds)assert.deepEqual(bounds,settingsBounds,'Navigating must keep the settings frame anchored');
+    settingsBounds=bounds;
+    assert.equal(await dialog.evaluate(n=>getComputedStyle(n).animationName),'none');
+    assert.equal(await dialog.locator('.nf-settings-page').evaluate(n=>getComputedStyle(n).animationName),'none');
+  };
   await panel.getByRole('button',{name:'设置',exact:true}).click();await settingsHome.waitFor();await settled(page);
   assert.deepEqual(await settingsHome.locator('.nf-settings-group .nf-row').evaluateAll(rows=>rows.map(row=>row.firstElementChild.textContent)),
     ['登录邮箱','显示模式','长期记忆','记忆列表','导入笔记','导出']);
   assert.equal(await settingsHome.getByRole('navigation').count(),0);
-  await checkSettingsWidth(settingsHome);
+  await checkSettingsFrame(settingsHome);
   assert.equal(await settingsHome.locator('.nf-segment button').count(),2);
   assert.equal(await settingsHome.locator('.nf-segment button[aria-pressed="true"]').evaluate(n=>getComputedStyle(n).backgroundColor),'rgb(251, 250, 248)');
   assert.equal(await settingsHome.getByRole('switch',{name:'长期记忆',exact:true}).count(),1);
   await settingsHome.screenshot({path:join(output,'settings-'+width+'.png')});
   await settingsHome.getByRole('button',{name:/^登录邮箱/}).click();
   const emailPage=page.getByRole('dialog',{name:'登录邮箱',exact:true});
-  await checkSettingsWidth(emailPage);
+  await checkSettingsFrame(emailPage);
   assert.equal(await emailPage.getByText('example@example.invalid',{exact:true}).count(),1);
   await emailPage.getByRole('button',{name:'更换邮箱',exact:true}).click();
   assert.equal(await emailPage.getByRole('textbox',{name:'登录邮箱地址',exact:true}).inputValue(),'example@example.invalid');
@@ -127,7 +136,7 @@ try{
   await settingsHome.getByRole('button',{name:'记忆列表',exact:true}).click();
   const memoryPage=page.getByRole('dialog',{name:'记忆列表',exact:true});
   const article=memoryPage.getByRole('article',{name:'记忆摘要'});
-  await article.waitFor();await settled(page);await checkSettingsWidth(memoryPage);
+  await article.waitFor();await settled(page);await checkSettingsFrame(memoryPage);
   assert.match(await article.textContent(),/喜欢简洁的回答/);
   assert.equal(await article.getByRole('button').count(),0);
   assert.equal(await article.getByRole('heading',{name:'待核对的称呼'}).count(),1);
@@ -147,7 +156,7 @@ try{
   assert.equal(await memorySwitch.getAttribute('aria-checked'),'false');
   await settingsHome.getByRole('button',{name:'导出',exact:true}).click();await settled(page);
   const exportPage=page.getByRole('dialog',{name:'导出',exact:true});
-  await checkSettingsWidth(exportPage);
+  await checkSettingsFrame(exportPage);
   assert.equal(await page.getByRole('button',{name:'导出知识库备份',exact:true}).count(),1);
   assert.equal(await page.getByRole('button',{name:'导出 Markdown 文件',exact:true}).count(),1);
   assert.match(await exportPage.textContent(),/不含聊天与长期记忆/);
@@ -157,10 +166,10 @@ try{
   assert.equal(await settingsHome.getByRole('button',{name:'导出',exact:true}).evaluate(n=>n===document.activeElement),true);
   await settingsHome.getByRole('button',{name:'导入笔记',exact:true}).click();
   const importPage=page.getByRole('dialog',{name:'导入笔记',exact:true});
-  await checkSettingsWidth(importPage);
+  await checkSettingsFrame(importPage);
   assert.equal(await importPage.locator('input[type=file]').evaluate(n=>n.multiple),false);
   await importPage.getByRole('button',{name:/从回收站恢复/}).click();
-  await checkSettingsWidth(page.getByRole('dialog',{name:'回收站',exact:true}));
+  await checkSettingsFrame(page.getByRole('dialog',{name:'回收站',exact:true}));
   await page.getByRole('button',{name:'返回导入笔记'}).click();
   await importPage.getByRole('button',{name:'关闭设置'}).click();await settled(page);
   await page.evaluate(()=>window.accountTest.update({userName:'很长的名字'.repeat(8),compact:false}));await open(page);
