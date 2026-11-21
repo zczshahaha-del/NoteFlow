@@ -78,7 +78,7 @@ export default function MemorySettings() {
     let active = true;
     setLoading(true);
     setError("");
-    listMemories().then(result => { if (active) setRecords(result.filter(m => m.status !== "deleted")); })
+    listMemories(false, { allRecords: true }).then(result => { if (active) setRecords(result.filter(m => m.status !== "deleted")); })
       .catch(e => { if (active) setError(e instanceof Error ? e.message : "记忆加载失败"); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
@@ -163,8 +163,11 @@ export default function MemorySettings() {
         </div>
       </>}
     </> : !loading && records.length > 0 && <>
-      <button ref={manageRef} className="nf-summary-edit" type="button" aria-pressed={manage}
-        onClick={() => {setManage(!manage);setNotice("");}}>{manage ? "取消选择" : "编辑"}</button>
+      <div className="nf-summary-toolbar">
+        <span>共 {records.length} 条记忆</span>
+        <button ref={manageRef} className="nf-summary-edit" type="button" aria-pressed={manage}
+          onClick={() => {setManage(!manage);setNotice("");}}>{manage ? "取消选择" : "编辑"}</button>
+      </div>
       {manage && <p className="nf-notice">选择要编辑或删除的段落</p>}
       <article aria-label="记忆摘要">{Array.from(sections, ([title, paragraphs]) =>
         <section key={title}><h3>{title}</h3>

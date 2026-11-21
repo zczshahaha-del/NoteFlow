@@ -181,7 +181,8 @@
 .nf-summary section + section { margin-top: 20px; }
 .nf-summary h3 { margin: 0 0 6px; font-size: 15px; font-weight: 600; }
 .nf-summary p { margin: 0 0 8px; white-space: pre-wrap; line-height: 1.85; }
-.nf-summary .nf-summary-edit { display: block; margin: 0 0 10px auto; padding: 4px 8px; border: 0; background: transparent; color: var(--nf-muted); }
+.nf-summary-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; color: var(--nf-muted); font-size: 13px; }
+.nf-summary .nf-summary-edit { display: block; padding: 4px 8px; border: 0; background: transparent; color: var(--nf-muted); }
 .nf-summary .nf-paragraph { width: 100%; text-align: start; border: 0; border-radius: 5px; padding: 4px; background: var(--nf-soft); line-height: 1.85; white-space: pre-wrap; }
 .nf-summary .nf-paragraph + .nf-paragraph { margin-top: 6px; }
 .nf-summary .nf-summary-field { display: block; margin-block: 10px; }

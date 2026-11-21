@@ -22,7 +22,7 @@ window.fetch=async(input,init={})=>{
   if(url.endsWith('/api/settings')){
     if(init.method==='PUT')memoryEnabled=JSON.parse(init.body).memoryEnabled;
     data={settings:{memoryEnabled,preferences:{}}};
-  }else if(url.endsWith('/api/memories')){
+  }else if(url.endsWith('/api/memories?allRecords=true')){
     const examples=[
       '用户表示“小林”是准确的 | Involving: user',
       '用户的名字是小林，用户更正了自己的称呼。 | Involving: 小林 | 旧记录',
@@ -137,6 +137,7 @@ try{
   const memoryPage=page.getByRole('dialog',{name:'记忆列表',exact:true});
   const article=memoryPage.getByRole('article',{name:'记忆摘要'});
   await article.waitFor();await settled(page);await checkSettingsFrame(memoryPage);
+  assert.equal(await memoryPage.getByText('共 11 条记忆',{exact:true}).count(),1);
   assert.match(await article.textContent(),/喜欢简洁的回答/);
   assert.equal(await article.getByRole('button').count(),0);
   assert.equal(await article.getByRole('heading',{name:'待核对的称呼'}).count(),1);

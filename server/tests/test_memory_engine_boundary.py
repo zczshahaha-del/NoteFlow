@@ -148,6 +148,18 @@ class MemoryEngineBoundaryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(get_type_hints(MemoryEngine.list)['return'], list[MemoryFact])
         self.assertEqual({field.name for field in fields(MemoryChanges)}, {'content', 'status', 'reason'})
 
+    async def test_management_lists_every_visible_fact_without_expanding_default_reads(self):
+        source = await self.publish('a', '我喜欢整理笔记。')
+        for index in range(60):
+            await self.engine.retain('a', content=f'阅读习惯 {index}', source_id=source, metadata={})
+        await self.publish('b', '其他账号的记录。')
+        service = MemoryService()
+        ordinary = await service.list('a', memory_types=[], include_deleted=False)
+        complete = await service.list('a', memory_types=[], include_deleted=False, all_records=True)
+        self.assertEqual(len(ordinary), 50)
+        self.assertEqual(len(complete), 61)
+        self.assertEqual({row.source_ref for row in complete}, {source})
+
     async def test_transfer_preview_is_read_only_and_keeps_published_lifecycle(self):
         source_id = await self.publish("a", "用户偏好小例子。")
         await self.publish("b", "用户正在学习法语。")
