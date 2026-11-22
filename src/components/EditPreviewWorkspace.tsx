@@ -279,8 +279,9 @@ export default function EditPreviewWorkspace() {
     );
   }
 
+  const { targetType } = activeEditPreview;
   const splitComparison = viewMode === "compare" &&
-    (activeEditPreview.targetType === "section" || activeEditPreview.targetType === "note");
+    (targetType === "selection" || targetType === "section" || targetType === "note");
   const operationLabel = operation === "apply" ? "正在应用" : operation === "cancel" ? "正在放弃"
     : operation === "revise" ? "正在改写" : operation === "restore" ? "正在恢复" : "AI 正在处理";
   const feedback = busy ? operationLabel

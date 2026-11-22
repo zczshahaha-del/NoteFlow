@@ -250,7 +250,27 @@ try {
     assert.match(await page.evaluate(()=>window.previewTest.state().fileContents['synthetic-note']),/最终确认的人工稿/);
     await page.evaluate(()=>{window.previewTest.applied=0;window.previewTest.holdApply=true;});
 
-    await page.evaluate(()=>window.previewTest.replaceContent('review-block-kinds','# 标题\n\n旧开场。\n\n## 删除小节\n\n仅旧稿有这段。\n\n## 保留小节\n\n完全相同。\n\n## 改写小节\n\n旧句。\n\n## 结尾\n\n共同结尾。','# 标题\n\n新开场。\n\n## 保留小节\n\n完全相同。\n\n## 改写小节\n\n新句。\n\n## 新增小节\n\n只有新稿有这段。\n\n## 结尾\n\n共同结尾。','selection'));
+    await page.evaluate(()=>window.previewTest.replaceContent(
+      'selected-paragraph', 'Docker 可以用来运行应用。',
+      'Docker 可以把应用和它需要的环境一起打包，换台电脑也能用同样的方式运行。',
+      'selection'
+    ));
+    await page.getByRole('button',{name:'对照原文',exact:true}).click();
+    assert.equal(await review.count(),1,'Selected text must use the same original/draft comparison as a chapter');
+    const selectionOriginal=review.getByRole('region',{name:'原文',exact:true});
+    const selectionDraft=review.getByRole('region',{name:'修改稿',exact:true});
+    await selectionOriginal.getByText('Docker 可以用来运行应用。',{exact:true}).waitFor();
+    await selectionDraft.getByRole('textbox',{name:'修改稿正文',exact:true}).getByText(/需要的环境一起打包/).waitFor();
+    assert.equal(await selectionOriginal.locator('[contenteditable="true"]').count(),0);
+    assert.equal(await page.getByRole('button',{name:/查看第 .*处改动的原文/}).count(),0);
+    const [selectedOriginalBox,selectedDraftBox]=await Promise.all([selectionOriginal.boundingBox(),selectionDraft.boundingBox()]);
+    assert(width===320 ? selectedDraftBox.y>selectedOriginalBox.y : selectedDraftBox.x>selectedOriginalBox.x+selectedOriginalBox.width);
+    await screenshot('selection-compare');
+    await page.getByRole('button',{name:'只看修改稿',exact:true}).click();
+    assert.equal(await review.count(),0);
+    assert.equal((await mutationEvents('selected-paragraph')).filter(event=>event.url.endsWith('/content')).length,0);
+
+    await page.evaluate(()=>window.previewTest.replaceContent('review-block-kinds','# 标题\n\n旧开场。\n\n## 删除小节\n\n仅旧稿有这段。\n\n## 保留小节\n\n完全相同。\n\n## 改写小节\n\n旧句。\n\n## 结尾\n\n共同结尾。','# 标题\n\n新开场。\n\n## 保留小节\n\n完全相同。\n\n## 改写小节\n\n新句。\n\n## 新增小节\n\n只有新稿有这段。\n\n## 结尾\n\n共同结尾。','insert'));
     await editor.waitFor();await page.getByRole('button',{name:'对照原文',exact:true}).click();
     const paragraphReview=page.getByRole('region',{name:'段落对照',exact:true});
     await paragraphReview.locator('.nf-edit-review-block[data-kind="remove"]').waitFor();
@@ -364,7 +384,7 @@ try {
     await page.waitForTimeout(750);
     assert.equal(await page.evaluate(()=>window.previewTest.requests.filter(url=>url.includes('/whole-note/content')).length),0,'Opening or comparing a code-ending whole-note preview must not save source or trailing-node work');
     assert.deepEqual(errors,[]);assert.deepEqual(requests,[]);
-    reports.push({width,geometry,compactHeader:true,editableDuringComparison:true,comparisonExcludedFromSavedMarkdown:true,resultFirst:true,cleanIdleUi:true,moreMenuKeyboard:true,moreMenuOutsideClose:true,versionPanel:true,openedAuxiliaryVisibleAfterScrolling:true,initialUndoAbsent:true,undoAfterSuccessfulAdjustment:true,compactComposer:true,IME:true,splitChapterAndNote:true,stackedNarrowLayout:true,selectionBlockReview:true,allChangeKinds:true,diff:true,newPreviewReset:true,coloredCode:true,nativeEditorUndo:true,editorRetainedAcrossViews:true,manualAutosave:true,saveWhileTyping:true,saveFailureAndConflictRetainDraft:true,flushBeforeAIApplyRestore:true,manualHistory:true,deleteReadOnly:true,applyStage:true,inFlightNewInstructionRetained:true,revisionOwnership:true,lateRevisionIgnored:true,selectedRevisionRestored:true,revisionReadRetry:true,restoreFailureRetry:true,cancelFailureRetry:true,dark:true,reducedMotion:true,errors,requests});
+    reports.push({width,geometry,compactHeader:true,editableDuringComparison:true,comparisonExcludedFromSavedMarkdown:true,resultFirst:true,cleanIdleUi:true,moreMenuKeyboard:true,moreMenuOutsideClose:true,versionPanel:true,openedAuxiliaryVisibleAfterScrolling:true,initialUndoAbsent:true,undoAfterSuccessfulAdjustment:true,compactComposer:true,IME:true,splitChapterNoteAndSelection:true,stackedNarrowLayout:true,insertionBlockReview:true,allChangeKinds:true,diff:true,newPreviewReset:true,coloredCode:true,nativeEditorUndo:true,editorRetainedAcrossViews:true,manualAutosave:true,saveWhileTyping:true,saveFailureAndConflictRetainDraft:true,flushBeforeAIApplyRestore:true,manualHistory:true,deleteReadOnly:true,applyStage:true,inFlightNewInstructionRetained:true,revisionOwnership:true,lateRevisionIgnored:true,selectedRevisionRestored:true,revisionReadRetry:true,restoreFailureRetry:true,cancelFailureRetry:true,dark:true,reducedMotion:true,errors,requests});
     await context.close();
   }
   console.log(JSON.stringify({ok:true,productionComponent:true,syntheticOnly:true,output,reports},null,2));
