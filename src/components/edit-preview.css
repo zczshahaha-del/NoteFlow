@@ -28,7 +28,8 @@
 .edit-preview-workspace .nf-edit-identity h1 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; }
 .edit-preview-workspace .nf-edit-feedback { display: block; margin-top: 2px; color: var(--edit-muted); font-size: 12px; }
 .edit-preview-workspace .nf-edit-feedback:empty { margin-top: 0; }
-.edit-preview-workspace .nf-edit-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.edit-preview-workspace .nf-edit-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.edit-preview-workspace .nf-edit-compare:focus-visible { outline-width: 1px; outline-offset: -1px; }
 .edit-preview-workspace .nf-edit-more { position: relative; }
 .edit-preview-workspace .nf-edit-more-trigger { width: 32px; padding-inline: 0; }
 .edit-preview-workspace .nf-edit-menu { position: absolute; z-index: 20; top: calc(100% + 7px); right: 0; width: 176px; }

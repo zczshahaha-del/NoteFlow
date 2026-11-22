@@ -113,6 +113,7 @@ try {
     assert.equal(await page.evaluate(()=>window.previewTest.requests.filter(url=>url.endsWith('/content')).length),0,'Merely mounting or focusing the editor must not reserialize and resave Markdown');
     await editor.evaluate(n=>n.dataset.testRetainedEditor='same-editor');
     const compare=page.getByRole('button',{name:'对照原文',exact:true});assert.equal(await compare.getAttribute('aria-pressed'),'false');
+    assert.equal(await compare.locator('svg').count(),0,'Comparison is a text action');
     await compare.click();const collapseCompare=page.getByRole('button',{name:'只看修改稿',exact:true});assert.equal(await collapseCompare.getAttribute('aria-pressed'),'true');
     const review=page.getByRole('region',{name:'原文对照',exact:true});await review.waitFor();
     const originalPane=review.getByRole('region',{name:'原文',exact:true});
@@ -309,15 +310,27 @@ try {
     await page.getByRole('button',{name:'关闭历史版本',exact:true}).dispatchEvent('keydown',{key:'Escape',isComposing:true});assert(await page.getByRole('region',{name:'预览版本',exact:true}).isVisible());
     await page.getByRole('button',{name:'关闭历史版本',exact:true}).press('Escape');await page.getByRole('region',{name:'预览版本',exact:true}).waitFor({state:'detached'});assert.equal(await more.evaluate(n=>document.activeElement===n),true);
     const callsBeforeIME=await page.evaluate(()=>window.previewTest.requests.filter(url=>url.endsWith('/revise')).length);
-    await instruction.fill('输入法尚未确认');await instruction.dispatchEvent('keydown',{key:'Enter',ctrlKey:true,isComposing:true});await instruction.dispatchEvent('keydown',{key:'Enter',ctrlKey:true,keyCode:229});
+    await instruction.fill('输入法尚未确认');
+    await instruction.dispatchEvent('keydown',{key:'Enter',isComposing:true});
+    await instruction.dispatchEvent('keydown',{key:'Enter',keyCode:229});
+    await instruction.dispatchEvent('compositionstart');
+    await instruction.dispatchEvent('keydown',{key:'Enter'});
+    await instruction.dispatchEvent('compositionend');
     assert.equal(await page.evaluate(()=>window.previewTest.requests.filter(url=>url.endsWith('/revise')).length),callsBeforeIME,'IME confirmation must not submit a preview adjustment');
     await instruction.fill('失败后保留这条调整要求');
+    await instruction.press('End');
+    await instruction.press('Shift+Enter');
+    await page.keyboard.insertText('第二行要求');
+    const multilineInstruction='失败后保留这条调整要求\n第二行要求';
+    assert.equal(await instruction.inputValue(),multilineInstruction);
+    assert.equal(await page.evaluate(()=>window.previewTest.requests.filter(url=>url.endsWith('/revise')).length),callsBeforeIME);
     await page.evaluate(()=>window.previewTest.failNext='/revise');
-    await page.getByRole('button',{name:'继续修改',exact:true}).click();
+    await instruction.press('Enter');
     await page.getByRole('alert').filter({hasText:'合成请求失败'}).waitFor();
-    assert.equal(await instruction.inputValue(),'失败后保留这条调整要求');
+    assert.equal(await instruction.inputValue(),multilineInstruction);
     assert.equal(await page.getByRole('button',{name:'撤销上次调整',exact:true}).count(),0,'A failed first adjustment does not create an undo version');
-    await page.getByRole('button',{name:'继续修改',exact:true}).click();
+    assert.equal(await page.evaluate(()=>window.previewTest.requestBodies.filter(item=>item.url.endsWith('/revise')).at(-1).payload.instruction),multilineInstruction);
+    await instruction.press('Enter');
     await page.waitForFunction(()=>!document.querySelector('textarea').value);
     await page.waitForFunction(()=>document.querySelector('.edit-preview-result').textContent.includes('本轮调整'));
     const undo=page.getByRole('button',{name:'撤销上次调整',exact:true});await undo.waitFor();await page.waitForFunction(()=>{const button=Array.from(document.querySelectorAll('button')).find(n=>n.textContent.includes('撤销上次调整'));return button&&!button.disabled;});
@@ -338,7 +351,7 @@ try {
     assert.equal((await mutationEvents('ownership-current')).filter(event=>event.phase==='start'&&event.url.endsWith('/apply')).length,1);
     await page.getByText('正在应用',{exact:true}).waitFor();
     assert.ok(await page.getByRole('button',{name:'应用到笔记',exact:true}).isDisabled());assert.ok(await page.getByRole('button',{name:'放弃',exact:true}).isDisabled());assert.ok(await undo.isDisabled());
-    await instruction.fill('请求中输入的新要求');const callsWhileApplying=await page.evaluate(()=>window.previewTest.requests.length);await instruction.press('Control+Enter');assert.equal(await page.evaluate(()=>window.previewTest.requests.length),callsWhileApplying,'A pending apply cannot start another adjustment');
+    await instruction.fill('请求中输入的新要求');const callsWhileApplying=await page.evaluate(()=>window.previewTest.requests.length);await instruction.press('Enter');assert.equal(await page.evaluate(()=>window.previewTest.requests.length),callsWhileApplying,'A pending apply cannot start another adjustment');
     await page.evaluate(()=>window.previewTest.finishApply());
     await result.waitFor({state:'detached'});
     await replacePreview('post-apply');
@@ -384,7 +397,7 @@ try {
     await page.waitForTimeout(750);
     assert.equal(await page.evaluate(()=>window.previewTest.requests.filter(url=>url.includes('/whole-note/content')).length),0,'Opening or comparing a code-ending whole-note preview must not save source or trailing-node work');
     assert.deepEqual(errors,[]);assert.deepEqual(requests,[]);
-    reports.push({width,geometry,compactHeader:true,editableDuringComparison:true,comparisonExcludedFromSavedMarkdown:true,resultFirst:true,cleanIdleUi:true,moreMenuKeyboard:true,moreMenuOutsideClose:true,versionPanel:true,openedAuxiliaryVisibleAfterScrolling:true,initialUndoAbsent:true,undoAfterSuccessfulAdjustment:true,compactComposer:true,IME:true,splitChapterNoteAndSelection:true,stackedNarrowLayout:true,insertionBlockReview:true,allChangeKinds:true,diff:true,newPreviewReset:true,coloredCode:true,nativeEditorUndo:true,editorRetainedAcrossViews:true,manualAutosave:true,saveWhileTyping:true,saveFailureAndConflictRetainDraft:true,flushBeforeAIApplyRestore:true,manualHistory:true,deleteReadOnly:true,applyStage:true,inFlightNewInstructionRetained:true,revisionOwnership:true,lateRevisionIgnored:true,selectedRevisionRestored:true,revisionReadRetry:true,restoreFailureRetry:true,cancelFailureRetry:true,dark:true,reducedMotion:true,errors,requests});
+    reports.push({width,geometry,compactHeader:true,editableDuringComparison:true,comparisonExcludedFromSavedMarkdown:true,resultFirst:true,cleanIdleUi:true,moreMenuKeyboard:true,moreMenuOutsideClose:true,versionPanel:true,openedAuxiliaryVisibleAfterScrolling:true,initialUndoAbsent:true,undoAfterSuccessfulAdjustment:true,compactComposer:true,enterSends:true,shiftEnterInsertsNewline:true,IME:true,splitChapterNoteAndSelection:true,stackedNarrowLayout:true,insertionBlockReview:true,allChangeKinds:true,diff:true,newPreviewReset:true,coloredCode:true,nativeEditorUndo:true,editorRetainedAcrossViews:true,manualAutosave:true,saveWhileTyping:true,saveFailureAndConflictRetainDraft:true,flushBeforeAIApplyRestore:true,manualHistory:true,deleteReadOnly:true,applyStage:true,inFlightNewInstructionRetained:true,revisionOwnership:true,lateRevisionIgnored:true,selectedRevisionRestored:true,revisionReadRetry:true,restoreFailureRetry:true,cancelFailureRetry:true,dark:true,reducedMotion:true,errors,requests});
     await context.close();
   }
   console.log(JSON.stringify({ok:true,productionComponent:true,syntheticOnly:true,output,reports},null,2));

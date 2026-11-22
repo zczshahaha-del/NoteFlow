@@ -15,6 +15,7 @@ import {
   type NoteEditPreviewRevisionRecord,
 } from "../services/edits";
 import { diffMarkdownLines } from "../utils/markdownDiff";
+import { shouldSubmitChatInput } from "../utils/inputComposition";
 import { searchSnippetText } from "../utils/searchSnippetText";
 import { findFileById } from "../workspaceTree";
 import SoftMenu from "./SoftMenu";
@@ -64,6 +65,7 @@ export default function EditPreviewWorkspace() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [actionError, setActionError] = useState("");
   const revisionInputRef = useRef<HTMLTextAreaElement>(null);
+  const revisionComposing = useRef(false);
   const moreTriggerRef = useRef<HTMLButtonElement>(null);
   const menuAnchorRef = useRef<HTMLDivElement>(null);
   const historyCloseRef = useRef<HTMLButtonElement>(null);
@@ -223,11 +225,14 @@ export default function EditPreviewWorkspace() {
 
   const handleKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
-      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-        event.preventDefault();
-        handleRevise();
-      }
+      if (!shouldSubmitChatInput({
+        key: event.key,
+        shiftKey: event.shiftKey,
+        isComposing: event.nativeEvent.isComposing,
+        keyCode: event.nativeEvent.keyCode,
+      }, revisionComposing.current)) return;
+      event.preventDefault();
+      handleRevise();
     },
     [handleRevise]
   );
@@ -305,9 +310,8 @@ export default function EditPreviewWorkspace() {
               返回修改稿
             </button>
           ) : activeEditPreview.targetType !== "delete" && (
-            <button type="button" className="nf-edit-button" aria-pressed={viewMode === "compare"}
+            <button type="button" className="nf-edit-button nf-edit-compare" aria-pressed={viewMode === "compare"}
               onClick={() => setViewMode(current => current === "compare" ? "result" : "compare")}>
-              <GitCompareArrows size={15} aria-hidden="true" />
               {viewMode === "compare" ? "只看修改稿" : "对照原文"}
             </button>
           )}
@@ -409,6 +413,9 @@ export default function EditPreviewWorkspace() {
       {activeEditPreview.targetType !== "delete" && <footer className="nf-edit-footer">
         <div className="nf-edit-composer">
           <textarea ref={revisionInputRef} rows={1} value={revisionText} onChange={event => setRevisionText(event.target.value)}
+            onCompositionStart={() => { revisionComposing.current = true; }}
+            onCompositionEnd={() => { revisionComposing.current = false; }}
+            onBlur={() => { revisionComposing.current = false; }}
             onKeyDown={handleKeyDown} placeholder="继续修改…" aria-label="继续修改预览" />
           <button type="button" className="nf-edit-button nf-edit-adjust" aria-label="继续修改" title="继续修改"
             onClick={handleRevise} disabled={!revisionText.trim() || busy}>
