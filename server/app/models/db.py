@@ -441,6 +441,7 @@ class NoteEditPreview(Base):
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="preview")
     idempotency_key: Mapped[Optional[str]] = mapped_column("idempotency_key", String(160), nullable=True)
     apply_idempotency_key: Mapped[Optional[str]] = mapped_column("apply_idempotency_key", String(160), nullable=True)
+    current_revision_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     runtime: Mapped[str] = mapped_column(String(32), nullable=False, default="langgraph")
     graph_thread_id: Mapped[Optional[str]] = mapped_column("graph_thread_id", String(160), nullable=True, index=True)
     source_content_hash: Mapped[str] = mapped_column("source_content_hash", String(64), nullable=False, default="")
@@ -463,6 +464,7 @@ class NoteEditPreviewRevision(Base):
     instruction: Mapped[str] = mapped_column(Text, nullable=False, default="")
     change_summary: Mapped[list] = mapped_column("change_summary", JSON, nullable=False, default=lambda: [])
     source: Mapped[str] = mapped_column(String(50), nullable=False, default="generated")
+    previous_revision_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column("created_at", DateTime, default=datetime.utcnow)
 
 

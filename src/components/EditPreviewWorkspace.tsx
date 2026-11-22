@@ -10,11 +10,11 @@ import { useChatSlice, useEditorSlice } from "../store/selectors";
 import {
   listEditPreviewRevisions,
   type NoteEditPreviewRevisionRecord,
+  type NoteEditPreviewRecord,
 } from "../services/edits";
 import { diffMarkdownLines } from "../utils/markdownDiff";
 import { compareMarkdownBlocks, markdownReferenceContext } from "../utils/markdownReview";
 import { shouldSubmitChatInput } from "../utils/inputComposition";
-import { searchSnippetText } from "../utils/searchSnippetText";
 import { findFileById } from "../workspaceTree";
 import PreviewMarkdown from "./PreviewMarkdown";
 import "./document-prose.css";
@@ -22,16 +22,38 @@ import "./edit-preview.css";
 
 const EditablePreviewBody = lazy(() => import("./EditablePreviewBody"));
 
-const targetTypeLabels: Record<string, string> = {
-  selection: "选中内容",
-  section: "当前小节",
-  note: "整篇笔记",
-  insert: "插入内容",
-  delete: "删除内容",
-};
+function findCurrentRevision(revisions: NoteEditPreviewRevisionRecord[], preview: NoteEditPreviewRecord) {
+  if (preview.currentRevisionId) return revisions.findIndex(revision => revision.id === preview.currentRevisionId);
+  const matches = revisions.filter(revision => revision.newContent === preview.newContent &&
+    revision.instruction === preview.instruction &&
+    revision.changeSummary.length === preview.changeSummary.length &&
+    revision.changeSummary.every((item, index) => item === preview.changeSummary[index]));
+  return matches.length === 1 ? revisions.indexOf(matches[0]) : -1;
+}
 
-function targetTypeLabel(type: string): string {
-  return targetTypeLabels[type] ?? "修改范围";
+function findPreviousRevision(revisions: NoteEditPreviewRevisionRecord[], currentIndex: number) {
+  const current = revisions[currentIndex];
+  if (!current || current.source === "generated") return -1;
+  if (current.previousRevisionId) return revisions.findIndex(revision => revision.id === current.previousRevisionId);
+  // Older history has no links. The stored AI instruction used to be extended
+  // on each adjustment. Use that lineage only when it identifies a single base.
+  const suffix = current.instruction.lastIndexOf("\n\n继续调整：");
+  if (current.source === "revision" && suffix < 0) return -1;
+  const baseInstruction = current.source === "revision" ? current.instruction.slice(0, suffix) : current.instruction;
+  const matches = revisions.slice(0, currentIndex).filter(revision => revision.instruction === baseInstruction);
+  return matches.length === 1 ? revisions.indexOf(matches[0]) : -1;
+}
+
+function findAiUndoTarget(revisions: NoteEditPreviewRevisionRecord[], currentIndex: number) {
+  let index = currentIndex;
+  while (index >= 0 && revisions[index].source !== "generated") {
+    const previous = findPreviousRevision(revisions, index);
+    if (previous < 0 || previous >= index) return null;
+    if (revisions[index].source === "revision") return revisions[previous];
+    if (revisions[index].source !== "manual") return null;
+    index = previous;
+  }
+  return null;
 }
 
 export default function EditPreviewWorkspace() {
@@ -50,6 +72,7 @@ export default function EditPreviewWorkspace() {
   } = useEditorSlice();
   const { chatLoading } = useChatSlice();
   const [revisionText, setRevisionText] = useState("");
+  const [failedInstruction, setFailedInstruction] = useState("");
   const [viewMode, setViewMode] = useState<"result" | "compare" | "diff">("result");
   const [revisions, setRevisions] = useState<NoteEditPreviewRevisionRecord[]>([]);
   const [revisionError, setRevisionError] = useState("");
@@ -58,6 +81,7 @@ export default function EditPreviewWorkspace() {
   const [revisionOwnerId, setRevisionOwnerId] = useState("");
   const [revisionReload, setRevisionReload] = useState(0);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [undoTargetId, setUndoTargetId] = useState<string | null>(null);
   const [showChanges, setShowChanges] = useState(false);
   const [actionError, setActionError] = useState("");
   const revisionInputRef = useRef<HTMLTextAreaElement>(null);
@@ -67,21 +91,13 @@ export default function EditPreviewWorkspace() {
   const historyCloseRef = useRef<HTMLButtonElement>(null);
   const diffTriggerRef = useRef<HTMLButtonElement>(null);
   const undoRef = useRef<HTMLButtonElement>(null);
+  const keepEditingRef = useRef<HTMLButtonElement>(null);
+  const workspaceRef = useRef<HTMLElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const revisionLoadOwner = useRef("");
   const busy = chatLoading || operation !== null;
   const draftContent = editPreviewDraft?.content ?? activeEditPreview?.newContent ?? "";
   const manualDirty = !!editPreviewDraft && editPreviewDraft.content !== editPreviewDraft.savedContent;
-  const previewContentRef = useRef(draftContent);
-  previewContentRef.current = draftContent;
-  const previewTitle = useMemo(() => {
-    if (!activeEditPreview) return "修改预览";
-    const { targetType, oldContent, noteId } = activeEditPreview;
-    // Name the original target, so an AI title change never relabels its scope.
-    const heading = targetType === "section" ? oldContent.trimStart().match(/^#{1,6}[ \t]+([^\r\n]+)/)?.[1] : "";
-    const title = targetType === "note" ? findFileById(treeData, noteId)?.name.replace(/\.md$/i, "") : heading && searchSnippetText(heading);
-    return title ? `修改「${title}」` : `修改${targetTypeLabel(targetType)}`;
-  }, [activeEditPreview?.noteId, activeEditPreview?.targetType, activeEditPreview?.oldContent, treeData]);
   const oldContent = activeEditPreview?.oldContent ?? "";
   const targetType = activeEditPreview?.targetType;
   const splitTarget = targetType === "selection" || targetType === "section" || targetType === "note";
@@ -100,7 +116,8 @@ export default function EditPreviewWorkspace() {
     [viewMode, draftContent, activeEditPreview?.oldContent]
   );
   useEffect(() => {
-    setViewMode("result"); setHistoryOpen(false); setShowChanges(false); setActionError("");
+    setViewMode("result"); setHistoryOpen(false); setUndoTargetId(null); setShowChanges(false); setActionError("");
+    setFailedInstruction("");
   }, [activeEditPreview?.id]);
 
   useEffect(() => {
@@ -116,9 +133,12 @@ export default function EditPreviewWorkspace() {
   }, [activeEditPreview?.id, flushEditPreviewDraft]);
 
   useEffect(() => {
-    if (!historyOpen) return;
+    if (!historyOpen && !undoTargetId) return;
     const dismiss = (event: Event) => {
-      if (event.target instanceof Node && !historyAnchorRef.current?.contains(event.target)) setHistoryOpen(false);
+      if (event.target instanceof Node && !historyAnchorRef.current?.contains(event.target)) {
+        setHistoryOpen(false);
+        setUndoTargetId(null);
+      }
     };
     document.addEventListener("pointerdown", dismiss);
     document.addEventListener("focusin", dismiss);
@@ -126,7 +146,7 @@ export default function EditPreviewWorkspace() {
       document.removeEventListener("pointerdown", dismiss);
       document.removeEventListener("focusin", dismiss);
     };
-  }, [historyOpen]);
+  }, [historyOpen, undoTargetId]);
 
   useLayoutEffect(() => {
     const input = revisionInputRef.current;
@@ -170,67 +190,65 @@ export default function EditPreviewWorkspace() {
       })
       .finally(() => { if (alive) setRevisionLoading(false); });
     return () => { alive = false; };
-  }, [activeEditPreview?.id, activeEditPreview?.newContent, revisionReload]);
+  }, [activeEditPreview?.id, activeEditPreview?.newContent, activeEditPreview?.currentRevisionId, revisionReload]);
   const revisionsReady = !revisionLoading && revisionOwnerId === activeEditPreview?.id;
 
-  const currentRevisionIndex = useMemo(() => {
-    for (let index = revisions.length - 1; index >= 0; index -= 1) {
-      if (revisions[index].newContent === draftContent) return index;
-    }
-    return -1;
-  }, [draftContent, revisions]);
-  const undoRevision = currentRevisionIndex > 0
-    ? revisions[currentRevisionIndex - 1]
-    : currentRevisionIndex < 0
-      ? revisions[revisions.length - 1] ?? null
-      : null;
+  const ownedRevisions = revisionOwnerId === activeEditPreview?.id;
+  const currentRevisionIndex = useMemo(
+    () => activeEditPreview && ownedRevisions ? findCurrentRevision(revisions, activeEditPreview) : -1,
+    [ownedRevisions, revisions, activeEditPreview]
+  );
+  const hasManualChanges = manualDirty || revisions[currentRevisionIndex]?.source === "manual";
+  const undoRevision = useMemo(() => findAiUndoTarget(revisions, currentRevisionIndex), [revisions, currentRevisionIndex]);
 
-  const restoreRevision = useCallback(async (revisionId?: string) => {
-    if (!activeEditPreview || busy || (revisionId && (!revisionsReady || !revisions.some(revision => revision.id === revisionId)))) return;
-    const initiator = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const fromHistory = !!initiator?.closest("#edit-preview-history");
-    const fromUndo = initiator === undoRef.current;
-    const previewId = activeEditPreview?.id;
-    const contentAtStart = previewContentRef.current;
-    const stillCurrent = () => historyTriggerRef.current?.closest("[data-preview-id]")?.getAttribute("data-preview-id") === previewId;
+  const restoreRevision = useCallback(async (revisionId: string, source: "history" | "undo") => {
+    if (!activeEditPreview || busy || !ownedRevisions ||
+        (source === "history" && !revisionsReady) || !revisions.some(revision => revision.id === revisionId)) return;
+    const initiator = document.activeElement;
+    const previewId = activeEditPreview.id;
+    const stillCurrent = () => workspaceRef.current?.dataset.previewId === previewId;
     setOperation("restore");
     setActionError("");
     try {
       await flushEditPreviewDraft(previewId);
       if (!stillCurrent()) return;
-      let targetId = revisionId;
-      if (!targetId) {
-        // Saving pending manual edits may have just created a new version.
-        const latest = await listEditPreviewRevisions(previewId);
-        if (!stillCurrent()) return;
-        let current = -1;
-        for (let index = latest.length - 1; index >= 0; index -= 1) {
-          if (latest[index].newContent === contentAtStart) { current = index; break; }
-        }
-        targetId = current > 0 ? latest[current - 1].id : undefined;
+      await restoreEditPreviewRevisionRequest(revisionId);
+      if (stillCurrent()) {
+        setHistoryOpen(false);
+        setUndoTargetId(null);
       }
-      if (targetId) await restoreEditPreviewRevisionRequest(targetId);
-      if (fromHistory && stillCurrent()) setHistoryOpen(false);
-    }
-    catch (error) { if (stillCurrent()) setActionError(error instanceof Error ? error.message : "恢复失败，修改稿已保留。"); }
-    finally {
+    } catch (error) {
+      if (stillCurrent()) {
+        setActionError(error instanceof Error ? error.message : "恢复失败，修改稿已保留。");
+        setUndoTargetId(null);
+      }
+    } finally {
       setOperation(null);
       requestAnimationFrame(() => {
-        if ((!fromHistory && !fromUndo) || (document.activeElement !== document.body && document.activeElement !== initiator) || !stillCurrent()) return;
-        (fromHistory ? historyTriggerRef.current : revisionInputRef.current)?.focus({ preventScroll: true });
+        if (stillCurrent() && (document.activeElement === document.body || document.activeElement === initiator)) {
+          (source === "history" ? historyTriggerRef.current : undoRef.current ?? historyTriggerRef.current)?.focus({ preventScroll: true });
+        }
       });
     }
-  }, [activeEditPreview?.id, busy, revisionsReady, revisions, flushEditPreviewDraft, restoreEditPreviewRevisionRequest]);
+  }, [activeEditPreview, busy, ownedRevisions, revisionsReady, revisions, flushEditPreviewDraft, restoreEditPreviewRevisionRequest]);
 
-  const handleRevise = useCallback(() => {
-    const text = revisionText.trim();
-    if (!text || busy) return;
+  const handleRevise = useCallback(async (input: string, clearInput: boolean) => {
+    if (!input.trim() || !activeEditPreview || busy) return;
+    const previewId = activeEditPreview.id;
+    setFailedInstruction("");
     setActionError("");
+    if (clearInput) setRevisionText("");
     setOperation("revise");
-    void reviseEditPreviewRequest(text).then(success => {
-      if (success) setRevisionText(current => current.trim() === text ? "" : current);
-    }).finally(() => setOperation(null));
-  }, [busy, reviseEditPreviewRequest, revisionText]);
+    try {
+      const success = await reviseEditPreviewRequest(input.trim());
+      if (!success && workspaceRef.current?.dataset.previewId === previewId) {
+        if (!revisionComposing.current) setRevisionText(current => current === "" ? input : current);
+        setFailedInstruction(input);
+      }
+    } finally {
+      setOperation(null);
+    }
+  }, [activeEditPreview, busy, reviseEditPreviewRequest]);
 
   const handleKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -241,9 +259,9 @@ export default function EditPreviewWorkspace() {
         keyCode: event.nativeEvent.keyCode,
       }, revisionComposing.current)) return;
       event.preventDefault();
-      handleRevise();
+      void handleRevise(revisionText, true);
     },
-    [handleRevise]
+    [handleRevise, revisionText]
   );
 
   const closeHistory = () => {
@@ -251,11 +269,23 @@ export default function EditPreviewWorkspace() {
     historyTriggerRef.current?.focus({ preventScroll: true });
   };
 
-  const closeHistoryOnEscape = (event: React.KeyboardEvent<HTMLElement>) => {
-    if (!historyOpen || event.key !== "Escape" || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+  const closePopoverOnEscape = (event: React.KeyboardEvent<HTMLElement>) => {
+    if ((!historyOpen && !undoTargetId) || event.key !== "Escape" || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
     event.preventDefault();
     event.stopPropagation();
-    closeHistory();
+    if (undoTargetId) {
+      setUndoTargetId(null);
+      undoRef.current?.focus({ preventScroll: true });
+    } else closeHistory();
+  };
+
+  const handleUndo = () => {
+    if (!undoRevision || busy) return;
+    setHistoryOpen(false);
+    if (hasManualChanges) {
+      setUndoTargetId(undoRevision.id);
+      requestAnimationFrame(() => keepEditingRef.current?.focus({ preventScroll: true }));
+    } else void restoreRevision(undoRevision.id, "undo");
   };
 
   const changeView = (mode: typeof viewMode) => {
@@ -306,17 +336,17 @@ export default function EditPreviewWorkspace() {
   const failure = editPreviewError || editPreviewDraft?.error || actionError;
 
   return (
-    <main className="edit-preview-workspace document-canvas nf-prose-refined flex min-w-0 flex-1 flex-col"
+    <main ref={workspaceRef} className="edit-preview-workspace document-canvas nf-prose-refined flex min-w-0 flex-1 flex-col"
       data-preview-id={activeEditPreview.id} data-view-mode={viewMode}
       data-compare-layout={splitComparison ? "split" : undefined}
       aria-label="修改预览">
       <header className="nf-edit-header">
         <div className="nf-edit-identity">
-          <h1 title={previewTitle}>{previewTitle}</h1>
+          <h1>修改预览</h1>
           <span className="nf-edit-feedback" role="status">{feedback}</span>
         </div>
         <div className="nf-edit-actions">
-          <button type="button" className="nf-edit-button" disabled={busy}
+          <button type="button" className="nf-edit-button nf-edit-discard" disabled={busy}
             onClick={() => { if (busy) return; setOperation("cancel"); void cancelEditPreviewRequest().finally(() => setOperation(null)); }}>放弃</button>
           <button type="button" className="nf-edit-button nf-edit-primary" disabled={busy}
             onClick={() => { if (busy) return; setOperation("apply"); void applyEditPreviewRequest().finally(() => setOperation(null)); }}>
@@ -333,12 +363,29 @@ export default function EditPreviewWorkspace() {
           </div> : <button ref={diffTriggerRef} type="button" className="nf-edit-button" onClick={toggleDetailedDiff}>
             {viewMode === "diff" ? "返回删除预览" : "逐行差异"}
           </button>}
-          <div ref={historyAnchorRef} className="nf-edit-history" onKeyDown={closeHistoryOnEscape}>
-            <button ref={historyTriggerRef} type="button" className="nf-edit-button" aria-expanded={historyOpen}
+          <div ref={historyAnchorRef} className="nf-edit-history" onKeyDown={closePopoverOnEscape}>
+            {targetType !== "delete" && undoRevision && <button ref={undoRef} type="button"
+              className="nf-edit-button nf-edit-undo" aria-label="撤销上次 AI 修改" title="撤销上次 AI 修改"
+              aria-expanded={undoTargetId !== null} aria-controls={undoTargetId ? "edit-preview-undo" : undefined}
+              disabled={busy} onClick={handleUndo}><Undo2 size={16} aria-hidden="true" /></button>}
+            {undoTargetId && <section id="edit-preview-undo" className="nf-edit-auxiliary nf-edit-confirm" aria-labelledby="edit-preview-undo-title">
+              <h2 id="edit-preview-undo-title">撤销上次 AI 修改？</h2>
+              <p>将回到 AI 改写前。你手动改过的这一版会保留在版本记录里。</p>
+              <div className="nf-edit-confirm-actions">
+                <button ref={keepEditingRef} type="button" className="nf-edit-button" onClick={() => {
+                  setUndoTargetId(null);
+                  undoRef.current?.focus({ preventScroll: true });
+                }}>继续编辑</button>
+                <button type="button" className="nf-edit-button nf-edit-primary" disabled={busy}
+                  onClick={() => void restoreRevision(undoTargetId, "undo")}>撤销</button>
+              </div>
+            </section>}
+            <button ref={historyTriggerRef} type="button" className="nf-edit-button nf-edit-history-trigger" aria-expanded={historyOpen}
               aria-controls={historyOpen ? "edit-preview-history" : undefined}
               onClick={() => {
                 if (historyOpen) closeHistory();
                 else {
+                  setUndoTargetId(null);
                   setHistoryOpen(true);
                   requestAnimationFrame(() => historyCloseRef.current?.focus({ preventScroll: true }));
                 }
@@ -353,7 +400,7 @@ export default function EditPreviewWorkspace() {
                   const name = index === 0 ? "初始稿" : revision.source === "manual" ? `手动修改 ${index}` : `第${["", "一", "二", "三", "四", "五", "六", "七", "八", "九"][index] || index}次调整`;
                   const date = revision.createdAt ? new Date(revision.createdAt) : null;
                   const time = date && !Number.isNaN(date.getTime()) ? date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
-                  return <button type="button" className="nf-edit-revision" key={revision.id} aria-label={current ? name + "，当前预览" : "恢复" + name} aria-current={current ? "true" : undefined} disabled={current || busy || !revisionsReady} onClick={() => void restoreRevision(revision.id)}>
+                  return <button type="button" className="nf-edit-revision" key={revision.id} aria-label={current ? name + "，当前预览" : "恢复" + name} aria-current={current ? "true" : undefined} disabled={current || busy || !revisionsReady} onClick={() => void restoreRevision(revision.id, "history")}>
                     <span className="nf-edit-revision-name">{name}{time && <span>{time}</span>}</span><span className="nf-edit-revision-action">{current ? "当前" : "恢复"}</span>
                   </button>;
                 })}
@@ -430,13 +477,16 @@ export default function EditPreviewWorkspace() {
             onBlur={() => { revisionComposing.current = false; }}
             onKeyDown={handleKeyDown} placeholder="继续修改…" aria-label="继续修改预览" />
           <button type="button" className="nf-edit-button nf-edit-adjust" aria-label="继续修改" title="继续修改"
-            onClick={handleRevise} disabled={!revisionText.trim() || busy}>
+            aria-busy={operation === "revise"} onClick={() => void handleRevise(revisionText, true)} disabled={!revisionText.trim() || busy}>
             {operation === "revise"
               ? <Loader2 size={16} className="animate-spin" aria-hidden="true" />
               : <ArrowUp size={16} aria-hidden="true" />}
           </button>
         </div>
-        {(manualDirty || (undoRevision && revisionOwnerId === activeEditPreview.id)) && <div className="nf-edit-undo-row"><button ref={undoRef} type="button" className="nf-edit-button" onClick={() => void restoreRevision()} disabled={busy || (!manualDirty && !revisionsReady)}><Undo2 size={13} aria-hidden="true" />撤销上次调整</button></div>}
+        {failedInstruction && revisionText !== failedInstruction && <div className="nf-edit-retry-row">
+          <button type="button" className="nf-edit-button" disabled={busy}
+            onClick={() => void handleRevise(failedInstruction, false)}>重试上一条</button>
+        </div>}
       </footer>}
     </main>
   );

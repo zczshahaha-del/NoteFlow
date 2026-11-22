@@ -341,6 +341,31 @@ class EditPreviewContentTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([item["source"] for item in await self.revisions()], ["generated", "manual", "revision"])
         await self.assert_original_untouched()
 
+    async def test_edit_revision_lineage_uses_restored_base_instead_of_recent_history(self):
+        saved = await self.save("第一条分支的手改")
+        self.assertEqual(saved.status_code, 200, saved.text)
+        manual_id = saved.json()["preview"]["currentRevisionId"]
+        first = await self.client.post("/api/note-edit-previews/preview/revise", json={
+            "instruction": "改第一条分支", "memoryEnabled": False,
+        })
+        self.assertEqual(first.status_code, 200, first.text)
+        first_id = first.json()["preview"]["currentRevisionId"]
+        restored = await self.client.post("/api/note-edit-previews/preview/restore-revision", json={"revisionId": "generated"})
+        self.assertEqual(restored.status_code, 200, restored.text)
+        self.assertEqual(restored.json()["preview"]["currentRevisionId"], "generated")
+        second = await self.client.post("/api/note-edit-previews/preview/revise", json={
+            "instruction": "从初始稿重改", "memoryEnabled": False,
+        })
+        self.assertEqual(second.status_code, 200, second.text)
+        second_preview = second.json()["preview"]
+        self.assertEqual(first.json()["preview"]["newContent"], second_preview["newContent"])
+        self.assertNotEqual(first_id, second_preview["currentRevisionId"])
+        records = {row["id"]: row for row in await self.revisions()}
+        self.assertEqual(records[manual_id]["previousRevisionId"], "generated")
+        self.assertEqual(records[first_id]["previousRevisionId"], manual_id)
+        self.assertEqual(records[second_preview["currentRevisionId"]]["previousRevisionId"], "generated")
+        await self.assert_original_untouched()
+
     async def test_apply_uses_current_manual_content_and_keeps_original_version(self):
         self.assertEqual((await self.save("最终人工稿")).status_code, 200)
         await self.assert_original_untouched()

@@ -149,6 +149,7 @@ def _edit_out(preview: NoteEditPreview) -> dict:
         "newContent": preview.new_content,
         "instruction": preview.instruction,
         "changeSummary": preview.change_summary or [],
+        "currentRevisionId": preview.current_revision_id,
         "status": preview.status,
         "runtime": preview.runtime,
         "sourceContentHash": preview.source_content_hash,
@@ -167,12 +168,13 @@ def _edit_revision_out(revision: NoteEditPreviewRevision) -> dict:
         "instruction": revision.instruction,
         "changeSummary": revision.change_summary or [],
         "source": revision.source,
+        "previousRevisionId": revision.previous_revision_id,
         "createdAt": _dt(revision.created_at),
     }
 
 
-def _make_edit_revision(preview: NoteEditPreview, *, source: str) -> NoteEditPreviewRevision:
-    return NoteEditPreviewRevision(
+def _make_edit_revision(preview: NoteEditPreview, *, source: str, previous_revision_id: str | None = None) -> NoteEditPreviewRevision:
+    revision = NoteEditPreviewRevision(
         id=random_id(),
         edit_id=preview.id,
         user_id=preview.user_id,
@@ -180,7 +182,10 @@ def _make_edit_revision(preview: NoteEditPreview, *, source: str) -> NoteEditPre
         instruction=preview.instruction or "",
         change_summary=preview.change_summary or [],
         source=source,
+        previous_revision_id=previous_revision_id,
     )
+    preview.current_revision_id = revision.id
+    return revision
 
 
 async def _get_note(session, user_id: str, note_id: str) -> Note:
@@ -757,11 +762,12 @@ async def update_preview_content(
                 detail="预览已在其他位置更新，手动修改已保留，请重新打开核对。",
             )
 
+        previous_revision_id = await EditRepository(session).current_revision_id(user.id, preview)
         preview.new_content = payload.newContent
         preview.change_summary = ["手动调整预览正文"]
         now = datetime.utcnow()
         preview.updated_at = max(now, preview.updated_at + timedelta(microseconds=1)) if preview.updated_at else now
-        session.add(_make_edit_revision(preview, source="manual"))
+        session.add(_make_edit_revision(preview, source="manual", previous_revision_id=previous_revision_id))
         await session.commit()
         await session.refresh(preview)
         return {"preview": _edit_out(preview)}
@@ -780,6 +786,7 @@ async def restore_edit_preview_revision(
         revision = await EditRepository(session).get_revision(user.id, edit_id, payload.revisionId)
         if revision is None:
             raise HTTPException(status_code=404, detail="edit preview revision not found")
+        preview.current_revision_id = revision.id
         preview.new_content = revision.new_content
         preview.change_summary = revision.change_summary or []
         preview.instruction = revision.instruction
@@ -845,11 +852,12 @@ async def revise_preview(
                 status_code=409,
                 detail="预览在生成期间已更新，本次 AI 调整未覆盖，请检查当前修改稿后重试。",
             )
+        previous_revision_id = await EditRepository(session).current_revision_id(user.id, preview)
         preview.old_content = original_content
         preview.new_content = result.new_content
         preview.change_summary = result.change_summary
         preview.instruction = f"{preview.instruction}\n\n继续调整：{payload.instruction.strip()}"
-        session.add(_make_edit_revision(preview, source="revision"))
+        session.add(_make_edit_revision(preview, source="revision", previous_revision_id=previous_revision_id))
         await session.commit()
         await session.refresh(preview)
         return {"preview": _edit_out(preview)}
