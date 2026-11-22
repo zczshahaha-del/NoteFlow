@@ -62,17 +62,17 @@ function reviewWidget(block: MarkdownReviewBlock, number: number, context: strin
   return wrapper;
 }
 
-export function updatePreviewReview(editor: Editor, oldContent: string, newContent: string, enabled: boolean, expanded: Set<string>) {
+export function updatePreviewReview(editor: Editor, oldContent: string, newContent: string, showReferences: boolean, expanded: Set<string>, highlights: MarkdownReviewBlock[] | null = null) {
   if (editor.isDestroyed) return;
-  if (!enabled) {
+  if (!showReferences && !highlights) {
     if (key.getState(editor.state) === DecorationSet.empty) return;
     editor.view.dispatch(editor.state.tr.setMeta(key, DecorationSet.empty).setMeta("addToHistory", false).setMeta("preventUpdate", true));
     return;
   }
   const doc = editor.state.doc;
-  const blocks = compareMarkdownBlocks(oldContent, newContent);
+  const blocks = highlights ?? compareMarkdownBlocks(oldContent, newContent);
   const references = markdownReferenceContext(newContent);
-  const originalReferences = markdownReferenceContext(oldContent);
+  const originalReferences = showReferences ? markdownReferenceContext(oldContent) : "";
   const offsets: number[] = [0];
   doc.forEach(node => offsets.push(offsets[offsets.length - 1] + node.nodeSize));
   const ranges: { block: MarkdownReviewBlock; start: number; end: number }[] = [];
@@ -102,13 +102,15 @@ export function updatePreviewReview(editor: Editor, oldContent: string, newConte
   let number = 0;
   for (const { block, start, end } of ranges) {
     if (block.kind === "equal") continue;
-    const changeNumber = ++number;
-    decorations.push(Decoration.widget(start, () => reviewWidget(block, changeNumber, originalReferences, expanded), {
-      key: `${block.id}-${changeNumber}`, side: -1, stopEvent: () => true, ignoreSelection: true,
-    }));
+    if (showReferences) {
+      const changeNumber = ++number;
+      decorations.push(Decoration.widget(start, () => reviewWidget(block, changeNumber, originalReferences, expanded), {
+        key: `${block.id}-${changeNumber}`, side: -1, stopEvent: () => true, ignoreSelection: true,
+      }));
+    }
     doc.nodesBetween(start, end, (node, pos, parent) => {
       if (parent === doc && node.isBlock) {
-        decorations.push(Decoration.node(pos, pos + node.nodeSize, { class: "nf-edit-changed-text", "data-change-kind": block.kind }));
+        decorations.push(Decoration.node(pos, pos + node.nodeSize, { class: highlights ? "nf-edit-highlight" : "nf-edit-changed-text", "data-change-kind": block.kind }));
       }
       return false;
     });

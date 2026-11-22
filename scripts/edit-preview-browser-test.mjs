@@ -76,8 +76,7 @@ try {
     assert.equal(await page.getByText('更新说明并增加代码示例',{exact:true}).count(),0);
     assert.equal(await page.getByRole('button',{name:/打开 AI 助手/}).count(),0);
     assert.equal(await page.getByRole('button',{name:'撤销上次调整',exact:true}).count(),0,'The initial generated version has nothing to undo');
-    assert.equal(await page.getByRole('menu').count(),0,'The more menu does not remain in the closed DOM');
-    assert.equal(await page.getByRole('menuitem').count(),0);
+    assert.equal(await page.getByRole('button',{name:'更多预览操作'}).count(),0);
     assert.equal(await page.getByRole('region',{name:'预览版本',exact:true}).count(),0);
     const geometry=await page.evaluate(()=>{const r=n=>{const b=document.querySelector(n).getBoundingClientRect();return {left:b.left,right:b.right,top:b.top,bottom:b.bottom,height:b.height}};return {header:r('.nf-edit-header'),result:r('.edit-preview-result'),footer:r('.nf-edit-footer'),composer:r('.nf-edit-composer'),scroll:r('.nf-edit-scroll')}});
     assert(geometry.header.height<=(width===320?108:74));assert(geometry.footer.height<=90);
@@ -89,20 +88,19 @@ try {
     await instruction.fill('一行\n二行\n三行\n四行\n五行\n六行');
     assert.equal(await instruction.evaluate(n=>Math.round(n.getBoundingClientRect().height)),width===1280?88:96);assert.equal(await instruction.evaluate(n=>getComputedStyle(n).overflowY),'auto');
     await instruction.fill('');assert.equal(await instruction.evaluate(n=>Math.round(n.getBoundingClientRect().height)),width===1280?22:24);
-    const more=page.getByRole('button',{name:'更多预览操作',exact:true});
-    const openMenu=async()=>{await more.click();await page.getByRole('menu').waitFor();return page.getByRole('menu');};
-    const openHistory=async()=>{await page.locator('.nf-edit-scroll').evaluate(n=>n.scrollTop=n.scrollHeight);const menu=await openMenu();await menu.getByRole('menuitem',{name:'历史版本',exact:true}).click();await page.getByRole('menu').waitFor({state:'detached'});await page.getByRole('region',{name:'预览版本',exact:true}).waitFor();await page.waitForFunction(()=>document.querySelector('.nf-edit-scroll').scrollTop===0);};
-    const closeHistory=async()=>{await page.getByRole('button',{name:'关闭历史版本',exact:true}).click();await page.getByRole('region',{name:'预览版本',exact:true}).waitFor({state:'detached'});};
-    let menu=await openMenu();const menuItems=menu.getByRole('menuitem');assert.equal(await menuItems.count(),2);
-    await more.press('ArrowDown');await page.waitForFunction(()=>document.activeElement?.getAttribute('role')==='menuitem');
-    await page.keyboard.press('End');assert.equal(await menuItems.last().evaluate(n=>document.activeElement===n),true);
-    await page.keyboard.press('Home');assert.equal(await menuItems.first().evaluate(n=>document.activeElement===n),true);
-    await page.keyboard.press('ArrowDown');assert.equal(await menuItems.last().evaluate(n=>document.activeElement===n),true);
-    await page.keyboard.press('ArrowUp');assert.equal(await menuItems.first().evaluate(n=>document.activeElement===n),true);
-    await menuItems.first().dispatchEvent('keydown',{key:'Escape',isComposing:true});assert(await menu.isVisible());
-    await menuItems.first().dispatchEvent('keydown',{key:'Escape',keyCode:229});assert(await menu.isVisible(),'Legacy IME Escape must not enter the shared menu fallback');
-    await page.keyboard.press('Escape');await menu.waitFor({state:'detached'});assert.equal(await more.evaluate(n=>document.activeElement===n),true);
-    await openMenu();await result.locator('p').first().click();await page.getByRole('menu').waitFor({state:'detached'});
+    const versionTrigger=page.getByRole('button',{name:'版本记录',exact:true});
+    const history=page.getByRole('region',{name:'预览版本',exact:true});
+    const historyClose=page.getByRole('button',{name:'关闭版本记录',exact:true});
+    const openHistory=async()=>{await versionTrigger.click();await history.waitFor();};
+    const closeHistory=async()=>{await historyClose.click();await history.waitFor({state:'detached'});};
+    assert.deepEqual(await page.locator('.nf-edit-header button').allTextContents(),['放弃','应用到笔记']);
+    const draftBox=await result.boundingBox();
+    await openHistory();
+    assert.deepEqual(await result.boundingBox(),draftBox,'The version popover does not displace the draft');
+    await historyClose.dispatchEvent('keydown',{key:'Escape',isComposing:true});assert(await history.isVisible());
+    await historyClose.dispatchEvent('keydown',{key:'Escape',keyCode:229});assert(await history.isVisible());
+    await historyClose.press('Escape');await history.waitFor({state:'detached'});assert.equal(await versionTrigger.evaluate(n=>document.activeElement===n),true);
+    await openHistory();await page.locator('.nf-edit-header h1').click();await history.waitFor({state:'detached'});
     const colors=await result.locator('pre span').evaluateAll(nodes=>[...new Set(nodes.map(n=>getComputedStyle(n).color))]);
     assert(colors.length>=2,JSON.stringify({width,colors}));
     assert.equal(await page.locator('.note-content p').first().evaluate(n=>getComputedStyle(n).fontSize),'16px');
@@ -112,9 +110,9 @@ try {
     await page.waitForTimeout(750);
     assert.equal(await page.evaluate(()=>window.previewTest.requests.filter(url=>url.endsWith('/content')).length),0,'Merely mounting or focusing the editor must not reserialize and resave Markdown');
     await editor.evaluate(n=>n.dataset.testRetainedEditor='same-editor');
-    const compare=page.getByRole('button',{name:'对照原文',exact:true});assert.equal(await compare.getAttribute('aria-pressed'),'false');
+    const compare=page.getByRole('button',{name:'原文对照',exact:true});assert.equal(await compare.getAttribute('aria-pressed'),'false');
     assert.equal(await compare.locator('svg').count(),0,'Comparison is a text action');
-    await compare.click();const collapseCompare=page.getByRole('button',{name:'只看修改稿',exact:true});assert.equal(await collapseCompare.getAttribute('aria-pressed'),'true');
+    await compare.click();const collapseCompare=page.getByRole('button',{name:'修改稿',exact:true});assert.equal(await collapseCompare.getAttribute('aria-pressed'),'false');assert.equal(await compare.getAttribute('aria-pressed'),'true');
     const review=page.getByRole('region',{name:'原文对照',exact:true});await review.waitFor();
     const originalPane=review.getByRole('region',{name:'原文',exact:true});
     const revisedPane=review.getByRole('region',{name:'修改稿',exact:true});
@@ -133,6 +131,10 @@ try {
     }
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth),width);
     await screenshot('compare');
+    const compareBox=await review.boundingBox();
+    await openHistory();
+    assert.deepEqual(await review.boundingBox(),compareBox,'Version records leave the active comparison in place');
+    await closeHistory();
     await editor.focus();await editor.press(process.platform==='darwin'?'Meta+ArrowDown':'Control+End');
     await page.keyboard.insertText(' 对照中直接手改');
     await page.waitForFunction(()=>window.previewTest.state().editPreviewDrafts['synthetic-preview']?.content.includes('对照中直接手改'));
@@ -150,12 +152,27 @@ try {
       await page.locator('#root').evaluate(n=>n.style.width='');
     }
     await collapseCompare.click();await result.waitFor();assert.equal(await editor.getAttribute('data-test-retained-editor'),'same-editor');
-    await page.locator('.nf-edit-scroll').evaluate(n=>n.scrollTop=n.scrollHeight);menu=await openMenu();await menu.getByRole('menuitem',{name:'详细差异',exact:true}).click();await page.getByRole('menu').waitFor({state:'detached'});await page.waitForFunction(()=>document.querySelector('.nf-edit-scroll').scrollTop===0);
+    await compare.click();
+    const showChanges=page.getByRole('button',{name:'显示改动',exact:true});
+    const contentSaves=()=>page.evaluate(()=>window.previewTest.requests.filter(url=>url.endsWith('/content')).length);
+    const savesBeforeHighlights=await contentSaves();
+    await showChanges.click();
+    await originalPane.locator('[data-changed]').first().waitFor();
+    await editor.locator('.nf-edit-highlight').first().waitFor();
+    assert.equal(await page.getByRole('button',{name:/查看第 .*处改动的原文/}).count(),0);
+    await page.waitForTimeout(750);
+    assert.equal(await contentSaves(),savesBeforeHighlights,'Highlighting is a display-only operation');
+    await screenshot('compare-changes');
+    await page.getByRole('button',{name:'逐行差异',exact:true}).click();
     await page.getByRole('region',{name:'详细差异正文',exact:true}).waitFor();
     assert.match(await page.locator('main').innerText(),/原来的合成内容/);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth),width,'Wide diff rows scroll locally');
-    await page.getByRole('button',{name:'返回修改稿',exact:true}).click();await result.waitFor();
-    assert.equal(await editor.getAttribute('data-test-retained-editor'),'same-editor','Detailed diff also preserves the editor instance');
+    await page.getByRole('button',{name:'返回原文对照',exact:true}).click();await review.waitFor();
+    await page.getByRole('button',{name:'隐藏改动',exact:true}).click();
+    await editor.locator('.nf-edit-highlight').first().waitFor({state:'detached'});
+    assert.equal(await originalPane.locator('[data-changed]').count(),0);
+    assert.equal(await editor.getAttribute('data-test-retained-editor'),'same-editor','Highlighting and detailed diff preserve the editor instance');
+    await collapseCompare.click();
     const appendAtEnd=async text=>{await editor.focus();await editor.press(process.platform==='darwin'?'Meta+ArrowDown':'Control+End');await page.keyboard.insertText(text);};
     const replacePreview=async id=>{await page.evaluate(id=>window.previewTest.replace(id),id);await page.waitForFunction(id=>document.querySelector('main').dataset.previewId===id,id);await editor.waitFor();};
     const mutationEvents=async id=>page.evaluate(id=>window.previewTest.events.filter(event=>event.id===id&&/\/(content|revise|restore-revision|apply)$/.test(event.url)),id);
@@ -168,8 +185,8 @@ try {
     await editor.press('ControlOrMeta+z');assert.notEqual(await editor.innerText(),typedText,'Local editor undo actually reverses typing');
     await editor.press('ControlOrMeta+Shift+z');assert.equal(await editor.innerText(),typedText,'Local redo restores typing');
     await editor.evaluate(n=>n.dataset.testUndoOwner='manual-typing');
-    await page.getByRole('button',{name:'对照原文',exact:true}).click();await review.waitFor();
-    await page.getByRole('button',{name:'只看修改稿',exact:true}).click();await editor.waitFor();
+    await page.getByRole('button',{name:'原文对照',exact:true}).click();await review.waitFor();
+    await page.getByRole('button',{name:'修改稿',exact:true}).click();await editor.waitFor();
     assert.equal(await editor.getAttribute('data-test-undo-owner'),'manual-typing');
     await editor.press('ControlOrMeta+z');assert.notEqual(await editor.innerText(),typedText,'Opening and closing comparison keeps local undo history');
     await editor.press('ControlOrMeta+Shift+z');assert.equal(await editor.innerText(),typedText);
@@ -256,7 +273,7 @@ try {
       'Docker 可以把应用和它需要的环境一起打包，换台电脑也能用同样的方式运行。',
       'selection'
     ));
-    await page.getByRole('button',{name:'对照原文',exact:true}).click();
+    await page.getByRole('button',{name:'原文对照',exact:true}).click();
     assert.equal(await review.count(),1,'Selected text must use the same original/draft comparison as a chapter');
     const selectionOriginal=review.getByRole('region',{name:'原文',exact:true});
     const selectionDraft=review.getByRole('region',{name:'修改稿',exact:true});
@@ -267,19 +284,19 @@ try {
     const [selectedOriginalBox,selectedDraftBox]=await Promise.all([selectionOriginal.boundingBox(),selectionDraft.boundingBox()]);
     assert(width===320 ? selectedDraftBox.y>selectedOriginalBox.y : selectedDraftBox.x>selectedOriginalBox.x+selectedOriginalBox.width);
     await screenshot('selection-compare');
-    await page.getByRole('button',{name:'只看修改稿',exact:true}).click();
+    await page.getByRole('button',{name:'修改稿',exact:true}).click();
     assert.equal(await review.count(),0);
     assert.equal((await mutationEvents('selected-paragraph')).filter(event=>event.url.endsWith('/content')).length,0);
 
     await page.evaluate(()=>window.previewTest.replaceContent('review-block-kinds','# 标题\n\n旧开场。\n\n## 删除小节\n\n仅旧稿有这段。\n\n## 保留小节\n\n完全相同。\n\n## 改写小节\n\n旧句。\n\n## 结尾\n\n共同结尾。','# 标题\n\n新开场。\n\n## 保留小节\n\n完全相同。\n\n## 改写小节\n\n新句。\n\n## 新增小节\n\n只有新稿有这段。\n\n## 结尾\n\n共同结尾。','insert'));
-    await editor.waitFor();await page.getByRole('button',{name:'对照原文',exact:true}).click();
+    await editor.waitFor();await page.getByRole('button',{name:'原文对照',exact:true}).click();
     const paragraphReview=page.getByRole('region',{name:'段落对照',exact:true});
     await paragraphReview.locator('.nf-edit-review-block[data-kind="remove"]').waitFor();
     for(const kind of ['replace','add','remove'])assert(await paragraphReview.locator('.nf-edit-review-block[data-kind="'+kind+'"]').count()>0,'Review exposes '+kind+' blocks');
     assert.match(await paragraphReview.innerText(),/新增/);assert.match(await paragraphReview.innerText(),/已删除/);assert.match(await paragraphReview.innerText(),/改写/);
     assert.equal(await paragraphReview.locator('h1').count(),1,'An unchanged heading is shown once instead of duplicating complete documents');
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth),width);await screenshot('paragraph-review');
-    await page.getByRole('button',{name:'只看修改稿',exact:true}).click();
+    await page.getByRole('button',{name:'修改稿',exact:true}).click();
     await page.evaluate(()=>window.previewTest.replaceDelete());await result.waitFor();
     assert.equal(await result.getByRole('textbox',{name:'修改稿正文',exact:true}).count(),0,'Deletion previews are not editable replacement drafts');
     assert.match(await result.innerText(),/删除/);
@@ -307,8 +324,8 @@ try {
     await page.waitForFunction(()=>window.previewTest.completedRevisionReads.includes('held-second'));
     await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
     assert.equal(await page.locator('.nf-edit-revision').count(),1,'The late previous preview response cannot replace the current owner’s revision list');assert.equal(await page.getByRole('button',{name:'恢复初始稿',exact:true}).count(),0);
-    await page.getByRole('button',{name:'关闭历史版本',exact:true}).dispatchEvent('keydown',{key:'Escape',isComposing:true});assert(await page.getByRole('region',{name:'预览版本',exact:true}).isVisible());
-    await page.getByRole('button',{name:'关闭历史版本',exact:true}).press('Escape');await page.getByRole('region',{name:'预览版本',exact:true}).waitFor({state:'detached'});assert.equal(await more.evaluate(n=>document.activeElement===n),true);
+    await page.getByRole('button',{name:'关闭版本记录',exact:true}).dispatchEvent('keydown',{key:'Escape',isComposing:true});assert(await page.getByRole('region',{name:'预览版本',exact:true}).isVisible());
+    await page.getByRole('button',{name:'关闭版本记录',exact:true}).press('Escape');await page.getByRole('region',{name:'预览版本',exact:true}).waitFor({state:'detached'});assert.equal(await versionTrigger.evaluate(n=>document.activeElement===n),true);
     const callsBeforeIME=await page.evaluate(()=>window.previewTest.requests.filter(url=>url.endsWith('/revise')).length);
     await instruction.fill('输入法尚未确认');
     await instruction.dispatchEvent('keydown',{key:'Enter',isComposing:true});
@@ -342,7 +359,7 @@ try {
     await undo.click();await page.waitForFunction(()=>!document.querySelector('.edit-preview-result').textContent.includes('本轮调整'));
     await undo.waitFor({state:'detached'});await page.waitForFunction(()=>document.activeElement===document.querySelector('textarea'));
     const restoreBodies=await page.evaluate(()=>window.previewTest.requestBodies.filter(item=>item.url.endsWith('/ownership-current/restore-revision')).map(item=>item.payload.revisionId));assert.deepEqual(restoreBodies,['ownership-current-r1','ownership-current-r1']);
-    await openHistory();await page.getByRole('button',{name:'恢复第一次调整',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.edit-preview-result').textContent.includes('本轮调整'));await page.waitForFunction(()=>document.activeElement?.getAttribute('aria-label')==='更多预览操作');
+    await openHistory();await page.getByRole('button',{name:'恢复第一次调整',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.edit-preview-result').textContent.includes('本轮调整'));await page.waitForFunction(()=>document.activeElement?.textContent==='版本记录');
     if(await page.getByRole('region',{name:'预览版本',exact:true}).count())await closeHistory();
     assert.equal(await page.evaluate(()=>window.previewTest.requestBodies.filter(item=>item.url.endsWith('/restore-revision')).at(-1).payload.revisionId),'ownership-current-r2','An explicit history restore uses the selected revision, not a fixed old body');
     await page.evaluate(()=>delete window.previewTest.finishApply);
@@ -391,13 +408,13 @@ try {
     assert.equal(await editor.locator('h2').textContent(),'一、第一章');
     assert.equal(await editor.locator('h2').getAttribute('data-heading-number'),null);
     assert.equal(await editor.locator('h3').getAttribute('data-heading-number'),null);
-    await page.getByRole('button',{name:'对照原文',exact:true}).click();
+    await page.getByRole('button',{name:'原文对照',exact:true}).click();
     await page.getByRole('region',{name:'原文对照',exact:true}).waitFor();
-    await page.getByRole('button',{name:'只看修改稿',exact:true}).click();
+    await page.getByRole('button',{name:'修改稿',exact:true}).click();
     await page.waitForTimeout(750);
     assert.equal(await page.evaluate(()=>window.previewTest.requests.filter(url=>url.includes('/whole-note/content')).length),0,'Opening or comparing a code-ending whole-note preview must not save source or trailing-node work');
     assert.deepEqual(errors,[]);assert.deepEqual(requests,[]);
-    reports.push({width,geometry,compactHeader:true,editableDuringComparison:true,comparisonExcludedFromSavedMarkdown:true,resultFirst:true,cleanIdleUi:true,moreMenuKeyboard:true,moreMenuOutsideClose:true,versionPanel:true,openedAuxiliaryVisibleAfterScrolling:true,initialUndoAbsent:true,undoAfterSuccessfulAdjustment:true,compactComposer:true,enterSends:true,shiftEnterInsertsNewline:true,IME:true,splitChapterNoteAndSelection:true,stackedNarrowLayout:true,insertionBlockReview:true,allChangeKinds:true,diff:true,newPreviewReset:true,coloredCode:true,nativeEditorUndo:true,editorRetainedAcrossViews:true,manualAutosave:true,saveWhileTyping:true,saveFailureAndConflictRetainDraft:true,flushBeforeAIApplyRestore:true,manualHistory:true,deleteReadOnly:true,applyStage:true,inFlightNewInstructionRetained:true,revisionOwnership:true,lateRevisionIgnored:true,selectedRevisionRestored:true,revisionReadRetry:true,restoreFailureRetry:true,cancelFailureRetry:true,dark:true,reducedMotion:true,errors,requests});
+    reports.push({width,geometry,compactHeader:true,editableDuringComparison:true,comparisonExcludedFromSavedMarkdown:true,resultFirst:true,cleanIdleUi:true,versionPopoverKeyboard:true,versionPopoverOutsideClose:true,versionPopoverKeepsDraftLayout:true,highlightBothPanes:true,versionPanel:true,openedAuxiliaryVisibleAfterScrolling:true,initialUndoAbsent:true,undoAfterSuccessfulAdjustment:true,compactComposer:true,enterSends:true,shiftEnterInsertsNewline:true,IME:true,splitChapterNoteAndSelection:true,stackedNarrowLayout:true,insertionBlockReview:true,allChangeKinds:true,diff:true,newPreviewReset:true,coloredCode:true,nativeEditorUndo:true,editorRetainedAcrossViews:true,manualAutosave:true,saveWhileTyping:true,saveFailureAndConflictRetainDraft:true,flushBeforeAIApplyRestore:true,manualHistory:true,deleteReadOnly:true,applyStage:true,inFlightNewInstructionRetained:true,revisionOwnership:true,lateRevisionIgnored:true,selectedRevisionRestored:true,revisionReadRetry:true,restoreFailureRetry:true,cancelFailureRetry:true,dark:true,reducedMotion:true,errors,requests});
     await context.close();
   }
   console.log(JSON.stringify({ok:true,productionComponent:true,syntheticOnly:true,output,reports},null,2));

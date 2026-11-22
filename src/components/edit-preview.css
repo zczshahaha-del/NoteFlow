@@ -10,7 +10,6 @@
   color: var(--edit-text);
   font: 400 13px/1.5 var(--nf-font-ui, system-ui, sans-serif);
 }
-.edit-preview-workspace[data-view-mode="diff"] { --edit-reading-width: 1180px; }
 .edit-preview-workspace :is(button, textarea) { font: inherit; }
 .edit-preview-workspace .nf-edit-button {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
@@ -29,40 +28,53 @@
 .edit-preview-workspace .nf-edit-feedback { display: block; margin-top: 2px; color: var(--edit-muted); font-size: 12px; }
 .edit-preview-workspace .nf-edit-feedback:empty { margin-top: 0; }
 .edit-preview-workspace .nf-edit-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
-.edit-preview-workspace .nf-edit-compare:focus-visible { outline-width: 1px; outline-offset: -1px; }
-.edit-preview-workspace .nf-edit-more { position: relative; }
-.edit-preview-workspace .nf-edit-more-trigger { width: 32px; padding-inline: 0; }
-.edit-preview-workspace .nf-edit-menu { position: absolute; z-index: 20; top: calc(100% + 7px); right: 0; width: 176px; }
-.edit-preview-workspace .nf-edit-menu .nf-soft-menu-item { font-size: 12px; }
-.edit-preview-workspace .nf-edit-scroll { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 18px 24px 30px; }
+.edit-preview-workspace .nf-edit-scroll { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 0 24px 30px; }
+.edit-preview-workspace .nf-edit-tools {
+  position: sticky; top: 0; z-index: 3; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: min(100%, 1160px); margin-inline: auto; padding-block: 12px;
+  background: var(--color-jelly-card);
+}
+.edit-preview-workspace .nf-edit-view-switch { display: flex; gap: 2px; padding: 3px; border-radius: 9px; background: var(--edit-soft); }
+.edit-preview-workspace .nf-edit-tools .nf-edit-button:focus-visible,
+.edit-preview-workspace .nf-edit-compare-actions .nf-edit-button:focus-visible { outline-width: 1px; outline-offset: -1px; }
+.edit-preview-workspace .nf-edit-view-switch .nf-edit-button[aria-pressed="true"] {
+  background: var(--color-jelly-card); color: var(--edit-text); font-weight: 600; box-shadow: 0 0 0 1px var(--edit-line);
+}
 .edit-preview-workspace .nf-edit-frame { width: min(100%, var(--edit-reading-width)); margin-inline: auto; }
 .edit-preview-workspace .nf-edit-button[aria-pressed="true"] { background: var(--edit-soft); color: var(--edit-text); }
-.edit-preview-workspace[data-compare-layout="split"] .nf-edit-frame { width: min(100%, 1160px); }
+.edit-preview-workspace:is([data-compare-layout="split"], [data-view-mode="diff"]) .nf-edit-frame { width: min(100%, 1160px); }
 .edit-preview-workspace[data-compare-layout="split"] .nf-edit-review {
-  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: clamp(14px, 2.4cqi, 28px);
+  position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: clamp(28px, 4cqi, 48px);
+}
+.edit-preview-workspace[data-compare-layout="split"] .nf-edit-review::before {
+  content: ""; position: absolute; inset-block: 0; left: 50%; width: 1px; background: var(--edit-line);
 }
 .edit-preview-workspace .nf-edit-pane { min-width: 0; }
-.edit-preview-workspace[data-compare-layout="split"] .nf-edit-pane {
-  padding: 15px clamp(13px, 1.5cqi, 20px); border: 1px solid var(--edit-line); border-radius: 12px;
-  overflow-wrap: anywhere;
-}
-.edit-preview-workspace[data-compare-layout="split"] .nf-edit-pane-revised {
-  background: color-mix(in srgb, var(--nf-ui-accent-soft) 28%, var(--color-jelly-card));
-}
-.edit-preview-workspace .nf-edit-pane-label {
-  display: block; margin-bottom: 12px; color: var(--edit-muted); font-size: 12px; font-weight: 600;
-}
-.edit-preview-workspace .nf-edit-pane-revised .nf-edit-pane-label { color: var(--color-jelly-blue-deep); }
+.edit-preview-workspace[data-compare-layout="split"] .nf-edit-pane { overflow-wrap: anywhere; }
+.edit-preview-workspace .nf-edit-pane-heading { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-height: 32px; margin-bottom: 12px; }
+.edit-preview-workspace .nf-edit-pane-label { color: var(--edit-muted); font-size: 12px; font-weight: 600; }
+.edit-preview-workspace .nf-edit-compare-actions { display: flex; align-items: center; gap: 2px; }
+.edit-preview-workspace .nf-edit-original-block + .nf-edit-original-block { margin-top: 12px; }
+.edit-preview-workspace .nf-edit-original-block[data-changed] { background: var(--color-jelly-red-bg); border-radius: 3px; }
+.edit-preview-workspace .nf-edit-highlight { background: var(--color-jelly-green-bg); border-radius: 3px; }
 .edit-preview-workspace[data-compare-layout="split"] .nf-edit-pane .nf-reading-prose { max-width: none; }
 @container (max-width: 720px) {
   .edit-preview-workspace[data-compare-layout="split"] .nf-edit-review { grid-template-columns: minmax(0, 1fr); }
+  .edit-preview-workspace[data-compare-layout="split"] .nf-edit-review::before { display: none; }
+  .edit-preview-workspace[data-compare-layout="split"] .nf-edit-pane-revised { border-top: 1px solid var(--edit-line); padding-top: 12px; }
+  .edit-preview-workspace .nf-edit-compare-actions { position: absolute; right: 0; top: 0; }
 }
-.edit-preview-workspace .nf-edit-auxiliary { margin: 0 0 24px; padding: 12px 14px; border-radius: 10px; background: color-mix(in srgb, var(--edit-soft) 70%, transparent); color: var(--edit-muted); font-size: 12px; }
+.edit-preview-workspace .nf-edit-history { position: relative; margin-left: auto; }
+.edit-preview-workspace .nf-edit-auxiliary {
+  position: absolute; right: 0; top: calc(100% + 6px); width: min(270px, 100cqi - 32px);
+  padding: 8px; border: 1px solid var(--edit-line); border-radius: 12px; background: var(--color-jelly-card);
+  box-shadow: var(--nf-ui-shadow-popover, 0 8px 24px #0002); color: var(--edit-muted); font-size: 12px;
+}
 .edit-preview-workspace .nf-edit-auxiliary p { margin: 0; }
 .edit-preview-workspace .nf-edit-history-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .edit-preview-workspace .nf-edit-history-heading h2 { margin: 0; color: var(--edit-text); font-size: 12px; font-weight: 500; }
 .edit-preview-workspace .nf-edit-history-error { color: var(--nf-ui-danger); }
-.edit-preview-workspace .nf-edit-revisions { max-height: 240px; overflow-y: auto; overscroll-behavior: contain; }
+.edit-preview-workspace .nf-edit-revisions { max-height: clamp(72px, 36dvh, 240px); overflow-y: auto; overscroll-behavior: contain; }
 .edit-preview-workspace .nf-edit-revision { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; min-height: 48px; padding: 8px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--edit-text); text-align: left; cursor: pointer; }
 .edit-preview-workspace .nf-edit-revision:hover, .edit-preview-workspace .nf-edit-revision[aria-current="true"] { background: var(--edit-soft); }
 .edit-preview-workspace .nf-edit-revision[aria-current="true"] { opacity: 1; }
@@ -96,7 +108,9 @@
 .edit-preview-workspace .nf-edit-review-block .note-content > :last-child { margin-bottom: 0; }
 .edit-preview-workspace .nf-edit-code-language { padding: 6px 9px; border-right: 1px solid var(--edit-line); color: var(--edit-muted); font-size: 12px; }
 .edit-preview-workspace .chat-table-scroll { max-width: 100%; overflow-x: auto; }
-.edit-preview-workspace .nf-edit-diff-summary { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 10px; color: var(--edit-muted); font-size: 11px; }
+.edit-preview-workspace .nf-edit-diff-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 10px; color: var(--edit-muted); font-size: 11px; }
+.edit-preview-workspace .nf-edit-diff-summary button { margin-left: auto; }
+.edit-preview-workspace .nf-edit-insert-diff { display: flex; justify-content: flex-end; margin-bottom: 8px; }
 .edit-preview-workspace .nf-edit-diff-scroll { max-width: 100%; overflow-x: auto; border: 1px solid var(--edit-line); border-radius: 9px; }
 .edit-preview-workspace .nf-edit-diff-row { display: grid; min-width: 560px; grid-template-columns: 42px 42px 28px minmax(0, 1fr); border-bottom: 1px solid var(--edit-line); color: var(--edit-text); font: 400 12px/1.7 ui-monospace, monospace; }
 .edit-preview-workspace .nf-edit-diff-row > span { padding: 1px 6px; }
@@ -120,10 +134,9 @@
 @keyframes edit-preview-enter { from { opacity: 0; } to { opacity: 1; } }
 @container (max-width: 520px) {
   .edit-preview-workspace .nf-edit-header { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; padding: 10px 12px; }
-  .edit-preview-workspace .nf-edit-identity { padding-right: 44px; }
   .edit-preview-workspace .nf-edit-actions { justify-content: flex-end; }
-  .edit-preview-workspace .nf-edit-more { position: absolute; top: 8px; right: 12px; }
-  .edit-preview-workspace .nf-edit-scroll { padding: 12px 16px 24px; }
+  .edit-preview-workspace .nf-edit-scroll { padding: 0 16px 24px; }
+  .edit-preview-workspace .nf-edit-tools { padding-block: 7px; }
   .edit-preview-workspace .nf-edit-footer { padding: 10px 16px; }
   .edit-preview-workspace .nf-edit-auxiliary { padding: 10px; }
   .edit-preview-workspace .nf-edit-review-block:not([data-kind="equal"]) { padding-left: 10px; }
@@ -131,7 +144,8 @@
 }
 @media (pointer: coarse) {
   .edit-preview-workspace .nf-edit-button, .edit-preview-workspace .nf-edit-revision { min-height: 44px; }
-  .edit-preview-workspace :is(.nf-edit-more-trigger, .nf-edit-adjust) { width: 44px; }
+  .edit-preview-workspace .nf-edit-pane-heading { min-height: 44px; }
+  .edit-preview-workspace .nf-edit-adjust { width: 44px; }
   .edit-preview-workspace .nf-edit-composer textarea { min-height: 24px; max-height: 96px; margin-block: 10px; font-size: 16px; line-height: 24px; }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -142,4 +156,5 @@
   .edit-preview-workspace .nf-edit-button[aria-pressed="true"], .edit-preview-workspace .nf-edit-button[aria-selected="true"], .edit-preview-workspace .nf-edit-revision[aria-current="true"] { outline: 1px solid Highlight; outline-offset: -1px; }
   .edit-preview-workspace .nf-edit-composer:focus-within { outline: 1px solid Highlight; box-shadow: none; }
   .edit-preview-workspace .nf-edit-composer textarea:focus-visible { outline: 2px solid Highlight; }
+  .edit-preview-workspace :is(.nf-edit-original-block[data-changed], .nf-edit-highlight) { outline: 1px solid Highlight; }
 }
