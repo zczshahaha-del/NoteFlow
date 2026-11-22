@@ -213,8 +213,12 @@ interface AppState {
   ) => void;
   reviseEditPreviewRequest: (instruction: string) => Promise<boolean>;
   restoreEditPreviewRevisionRequest: (revisionId: string) => Promise<void>;
-  applyEditPreviewRequest: () => Promise<void>;
-  cancelEditPreviewRequest: () => Promise<void>;
+  applyEditPreviewRequest: (chatAction?: {
+    editId: string;
+    noteId?: string;
+    assistantMessageId: string;
+  }) => Promise<void>;
+  cancelEditPreviewRequest: (chatAction?: { editId: string; assistantMessageId: string }) => Promise<void>;
   closeEditPreview: () => void;
   focusChatSource: (source: ChatSource) => void;
   clearPendingSourceFocus: () => void;
@@ -1334,121 +1338,111 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
     }
   },
 
-  applyEditPreviewRequest: async () => {
-    const preview = get().activeEditPreview;
-    if (!preview || get().chatLoading) return;
-    const ownerId = get().hydratedUserId;
-    set({ chatLoading: true, editPreviewError: "" });
+  applyEditPreviewRequest: async (chatAction) => {
+    const start = get();
+    const editId = chatAction?.editId ?? start.activeEditPreview?.id;
+    if (!editId || (!chatAction && start.chatLoading)) return;
+    const noteId = chatAction?.noteId ??
+      (start.activeEditPreview?.id === editId ? start.activeEditPreview.noteId : undefined);
+    const startingPreviewId = start.activeEditPreview?.id;
+    const ownerId = start.hydratedUserId;
+    const sessionId = start.pendingCheckpoint?.sessionId;
+
+    const updateStatusMessage = (messages: ChatMessage[], text: string): ChatMessage[] => (
+      chatAction
+        ? messages.map((message) => message.id === chatAction.assistantMessageId ? { ...message, text } : message)
+        : [...messages, { ...newChatMessageMetadata(), role: "assistant", kind: "edit_preview_status", text }]
+    );
+
+    if (!chatAction) set({ chatLoading: true, editPreviewError: "" });
     try {
-      await get().flushEditPreviewDraft(preview.id);
-      if (get().hydratedUserId !== ownerId || get().activeEditPreview?.id !== preview.id) return;
-      await syncNoteContentBeforeAiEdit(preview.noteId);
-      const result = await applyEditPreview(preview.id);
+      await get().flushEditPreviewDraft(editId);
+      if (get().hydratedUserId !== ownerId) return;
+      if (!chatAction && get().activeEditPreview?.id !== editId) return;
+      if (noteId) await syncNoteContentBeforeAiEdit(noteId);
+      if (get().hydratedUserId !== ownerId) return;
+      const result = await applyEditPreview(editId);
       const current = get();
       if (current.hydratedUserId !== ownerId) return;
-      const checkpoint = current.pendingCheckpoint;
-      if (checkpoint?.checkpointType === "edit_preview") {
-        void resolveAgentCheckpoint(checkpoint.id, "resolved", {
-          editPreviewId: preview.id,
-          noteId: result.note.id,
-        })
-          .then(() => get().refreshAgentRunHistory(checkpoint.sessionId))
-          .catch(() => null);
-      }
+      const ownsView = current.activeEditPreview?.id === startingPreviewId &&
+        (!startingPreviewId || startingPreviewId === editId);
       set({
-        ...(current.activeEditPreview?.id === preview.id ? { activeEditPreview: null, editPreviewError: "" } : {}),
-        editPreviewDrafts: withoutEditPreviewDraft(current.editPreviewDrafts, preview.id),
-        ...(current.activeEditPreview?.id === preview.id ? {
+        ...(ownsView ? {
+          activeEditPreview: null,
+          editPreviewError: "",
           pendingCheckpoint: null,
           agentTask: taskWithCheckpoint(current.agentTask, null),
           centerMode: "note",
           activeDraftContext: null,
           selectedFileId: result.note.id,
+          pendingEditorSelection: {
+            id: `editor-selection-${Date.now()}`,
+            noteId: result.note.id,
+            markdown: result.preview.newContent,
+            mode: ["selection", "section", "insert"].includes(result.preview.targetType) ? "select" : "caret-start",
+          },
         } : {}),
+        editPreviewDrafts: withoutEditPreviewDraft(current.editPreviewDrafts, editId),
         fileContents: { ...current.fileContents, [result.note.id]: result.note.content },
         treeData: replaceNoteRecordInTree(current.treeData, result.note),
         ...(current.selectedFileId === result.note.id ? { noteSaveState: noteSaveState("saved") } : {}),
-        noteSaveStates: { ...current.noteSaveStates, [result.note.id]: noteSaveState('saved') },
-        ...(current.activeEditPreview?.id === preview.id ? { pendingEditorSelection: {
-          id: `editor-selection-${Date.now()}`,
-          noteId: result.note.id,
-          markdown: result.preview.newContent,
-          mode:
-            result.preview.targetType === "selection" ||
-            result.preview.targetType === "section" ||
-            result.preview.targetType === "insert"
-              ? "select"
-              : "caret-start",
-        } } : {}),
-        chatMessages: [
-          ...current.chatMessages,
-          {
-            ...newChatMessageMetadata(),
-            role: "assistant",
-            kind: "edit_preview_status",
-            text: "修改已应用到正式笔记，并已保存旧版本和更新索引。",
-          },
-        ],
+        noteSaveStates: { ...current.noteSaveStates, [result.note.id]: noteSaveState("saved") },
+        chatMessages: updateStatusMessage(current.chatMessages, "修改已应用到正式笔记，原文已保留在版本记录里。"),
       });
       persistLocalCurrentState();
+      if (sessionId && get().agentSessionId === sessionId) get().refreshAgentRunHistory(sessionId);
     } catch (error) {
       if (get().hydratedUserId !== ownerId) return;
-      const text = error instanceof Error ? error.message : "应用修改失败，正式笔记未变化";
+      const text = error instanceof Error ? error.message : "应用修改失败，请重试。";
       set((current) => ({
-        ...(current.activeEditPreview?.id === preview.id ? { editPreviewError: text } : {}),
-        chatMessages: [
-          ...current.chatMessages,
-          { ...newChatMessageMetadata(), role: "assistant", kind: "edit_preview_status", text },
-        ],
+        ...(current.activeEditPreview?.id === editId ? { editPreviewError: text } : {}),
+        chatMessages: updateStatusMessage(current.chatMessages, text),
       }));
     } finally {
-      if (get().hydratedUserId === ownerId) set({ chatLoading: false });
+      if (!chatAction && get().hydratedUserId === ownerId) set({ chatLoading: false });
     }
   },
 
-  cancelEditPreviewRequest: async () => {
-    const current = get();
-    const ownerId = current.hydratedUserId;
-    const preview = current.activeEditPreview;
-    const checkpoint = current.pendingCheckpoint ?? current.agentTask?.checkpoint ?? null;
-    const editPreviewId = preview?.id ?? editPreviewIdFromCheckpoint(checkpoint);
-    if (!editPreviewId || current.chatLoading) return;
-    set({ chatLoading: true, editPreviewError: "" });
+  cancelEditPreviewRequest: async (chatAction) => {
+    const start = get();
+    const ownerId = start.hydratedUserId;
+    const startingPreviewId = start.activeEditPreview?.id;
+    const checkpoint = start.pendingCheckpoint ?? start.agentTask?.checkpoint ?? null;
+    const editId = chatAction?.editId ?? startingPreviewId ?? editPreviewIdFromCheckpoint(checkpoint);
+    if (!editId || (!chatAction && start.chatLoading)) return;
+    if (!chatAction) set({ chatLoading: true, editPreviewError: "" });
     try {
-      await cancelEditPreview(editPreviewId);
+      await cancelEditPreview(editId);
       if (get().hydratedUserId !== ownerId) return;
-      if (checkpoint?.checkpointType === "edit_preview") {
-        void resolveAgentCheckpoint(checkpoint.id, "cancelled", {
-          editPreviewId,
-        })
-          .then(() => get().refreshAgentRunHistory(checkpoint.sessionId))
-          .catch(() => null);
-      }
+      const text = "已取消本次修改预览，正式笔记没有变化。";
       set((current) => ({
-        ...(current.activeEditPreview?.id === editPreviewId ? { activeEditPreview: null, editPreviewError: "" } : {}),
-        editPreviewDrafts: withoutEditPreviewDraft(current.editPreviewDrafts, editPreviewId),
-        ...(current.activeEditPreview?.id === editPreviewId || !current.activeEditPreview ? {
+        ...(current.activeEditPreview?.id === startingPreviewId && (!startingPreviewId || startingPreviewId === editId) ? {
+          activeEditPreview: null,
+          editPreviewError: "",
           pendingCheckpoint: null,
           agentTask: taskWithCheckpoint(current.agentTask, null),
           centerMode: "note",
           activeDraftContext: null,
         } : {}),
-        chatMessages: [
-          ...current.chatMessages,
-          {
-            ...newChatMessageMetadata(),
-            role: "assistant",
-            kind: "edit_preview_status",
-            text: "已取消本次修改预览，正式笔记没有变化。",
-          },
-        ],
+        editPreviewDrafts: withoutEditPreviewDraft(current.editPreviewDrafts, editId),
+        chatMessages: chatAction
+          ? current.chatMessages.map((message) => message.id === chatAction.assistantMessageId ? { ...message, text } : message)
+          : [...current.chatMessages, { ...newChatMessageMetadata(), role: "assistant", kind: "edit_preview_status", text }],
       }));
+      if (checkpoint && get().agentSessionId === checkpoint.sessionId) get().refreshAgentRunHistory(checkpoint.sessionId);
     } catch (error) {
-      if (get().hydratedUserId === ownerId && get().activeEditPreview?.id === editPreviewId) {
-        set({ editPreviewError: error instanceof Error ? error.message : "取消失败，请重试；预览已保留。" });
-      }
+      if (get().hydratedUserId !== ownerId) return;
+      const text = error instanceof Error ? error.message : "取消修改预览失败，请重试。";
+      set((current) => ({
+        ...(current.activeEditPreview?.id === editId ? { editPreviewError: text } : {}),
+        ...(chatAction ? {
+          chatMessages: current.chatMessages.map((message) =>
+            message.id === chatAction.assistantMessageId ? { ...message, text } : message
+          ),
+        } : {}),
+      }));
     } finally {
-      if (get().hydratedUserId === ownerId) set({ chatLoading: false });
+      if (!chatAction && get().hydratedUserId === ownerId) set({ chatLoading: false });
     }
   },
 
@@ -2089,72 +2083,12 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
         if (action.toolName === "note_edit_tool" && action.action === "apply_preview") {
           const editId =
             typeof payload.editPreviewId === "string" ? payload.editPreviewId : get().activeEditPreview?.id;
-          if (!editId) return;
-          const actionOwnerId = get().hydratedUserId;
-          const startingPreviewId = get().activeEditPreview?.id;
-          try {
-            await get().flushEditPreviewDraft(editId);
-            if (get().hydratedUserId !== actionOwnerId) return;
-            const noteId =
-              typeof payload.noteId === "string" ? payload.noteId : get().activeEditPreview?.noteId;
-            if (noteId) {
-              await syncNoteContentBeforeAiEdit(noteId);
-            }
-            const result = await applyEditPreview(editId);
-            const current = get();
-            if (current.hydratedUserId !== actionOwnerId) return;
-            const ownsView = current.activeEditPreview?.id === startingPreviewId && (!startingPreviewId || startingPreviewId === editId);
-            set({
-              ...(ownsView ? {
-                activeEditPreview: null,
-                pendingCheckpoint: null,
-                agentTask: taskWithCheckpoint(current.agentTask, null),
-                centerMode: "note",
-                activeDraftContext: null,
-                selectedFileId: result.note.id,
-              } : {}),
-              editPreviewDrafts: withoutEditPreviewDraft(current.editPreviewDrafts, editId),
-              fileContents: { ...current.fileContents, [result.note.id]: result.note.content },
-              treeData: replaceNoteRecordInTree(current.treeData, result.note),
-              ...(current.selectedFileId === result.note.id ? { noteSaveState: noteSaveState("saved") } : {}),
-              noteSaveStates: { ...current.noteSaveStates, [result.note.id]: noteSaveState('saved') },
-              ...(ownsView ? { pendingEditorSelection: {
-                id: `editor-selection-${Date.now()}`,
-                noteId: result.note.id,
-                markdown: result.preview.newContent,
-                mode:
-                  result.preview.targetType === "selection" ||
-                  result.preview.targetType === "section" ||
-                  result.preview.targetType === "insert"
-                    ? "select"
-                    : "caret-start",
-              } } : {}),
-              chatMessages: current.chatMessages.map((message) =>
-                message.id === assistantMsg.id
-                  ? { ...message, text: "修改已应用到正式笔记，并已保存旧版本和更新索引。" }
-                  : message
-              ),
+          if (editId) {
+            await get().applyEditPreviewRequest({
+              editId,
+              noteId: typeof payload.noteId === "string" ? payload.noteId : undefined,
+              assistantMessageId: assistantMsg.id,
             });
-            persistLocalCurrentState();
-            if (checkpointId) {
-              await resolveAgentCheckpoint(checkpointId, "resolved", {
-                editPreviewId: editId,
-                noteId: result.note.id,
-              }).catch(() => null);
-            }
-          } catch (error) {
-            if (get().hydratedUserId !== actionOwnerId) return;
-            const errorText = error instanceof Error ? error.message : "应用修改失败，正式笔记未变化";
-            set((current) => ({
-              ...(current.activeEditPreview?.id === editId ? { editPreviewError: errorText } : {}),
-              agentTask: taskWithRunStatus(current.agentTask, current.agentTask?.run.id ?? "", "failed"),
-              chatMessages: current.chatMessages.map((message) =>
-                message.id === assistantMsg.id ? { ...message, text: errorText } : message
-              ),
-            }));
-            if (checkpointId) {
-              await resolveAgentCheckpoint(checkpointId, "failed", { error: errorText }).catch(() => null);
-            }
           }
           return;
         }
@@ -2162,38 +2096,8 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
         if (action.toolName === "note_edit_tool" && action.action === "cancel_preview") {
           const editId =
             typeof payload.editPreviewId === "string" ? payload.editPreviewId : get().activeEditPreview?.id;
-          if (!editId) return;
-          const actionOwnerId = get().hydratedUserId;
-          const startingPreviewId = get().activeEditPreview?.id;
-          try {
-            await cancelEditPreview(editId);
-            if (get().hydratedUserId !== actionOwnerId) return;
-            set((current) => ({
-              ...(current.activeEditPreview?.id === startingPreviewId && (!startingPreviewId || startingPreviewId === editId) ? {
-                activeEditPreview: null,
-                pendingCheckpoint: null,
-                agentTask: taskWithCheckpoint(current.agentTask, null),
-                centerMode: "note",
-                activeDraftContext: null,
-              } : {}),
-              editPreviewDrafts: withoutEditPreviewDraft(current.editPreviewDrafts, editId),
-              chatMessages: current.chatMessages.map((message) =>
-                message.id === assistantMsg.id
-                  ? { ...message, text: "已取消本次修改预览，正式笔记没有变化。" }
-                  : message
-              ),
-            }));
-            if (checkpointId) {
-              await resolveAgentCheckpoint(checkpointId, "cancelled", { editPreviewId: editId }).catch(() => null);
-            }
-          } catch (error) {
-            if (get().hydratedUserId !== actionOwnerId) return;
-            const errorText = error instanceof Error ? error.message : "取消修改预览失败";
-            set((current) => ({
-              chatMessages: current.chatMessages.map((message) =>
-                message.id === assistantMsg.id ? { ...message, text: errorText } : message
-              ),
-            }));
+          if (editId) {
+            await get().cancelEditPreviewRequest({ editId, assistantMessageId: assistantMsg.id });
           }
           return;
         }
