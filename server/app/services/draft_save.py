@@ -3,12 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from app.agent.write_runtime import authorize_draft_save, initialize_draft_graph
 from app.database import AsyncSessionLocal
 from app.models.db import Note, NoteDraft, NoteDraftSection, NoteIndexJob, NoteVersion
 from app.repositories.drafts import DraftRepository
 from app.repositories.index_jobs import IndexJobRepository
 from app.repositories.notes import NoteRepository
+from app.services.agent_checkpoints import settle_linked_checkpoints
 from app.services.draft_content import assemble_draft_content, clean_draft_title
 from app.services.markdown_index import index_note_now
 from app.utils import random_id
@@ -52,7 +52,15 @@ async def save_confirmed_draft(
                 raise DraftSaveError("saved_note_missing")
             job = await IndexJobRepository(session).latest_for_note(user_id, draft.saved_note_id)
             sections = await drafts.list_sections(user_id, draft.id)
+            if await settle_linked_checkpoints(
+                session, user_id=user_id, checkpoint_type="draft_workspace",
+                object_id=draft.id, status="resolved", note_id=note.id,
+            ):
+                await session.commit()
             return SavedDraft(draft, sections, note, job, replayed=True)
+
+        if draft.status == "canceled":
+            raise DraftSaveError("draft_canceled")
 
         if use_draft_category:
             category_id = draft.category_id
@@ -63,18 +71,6 @@ async def save_confirmed_draft(
         content = (draft.assembled_content or assemble_draft_content(draft, sections)).strip()
         if not content:
             raise DraftSaveError("empty_draft")
-
-        if not draft.graph_thread_id:
-            draft.runtime = "langgraph"
-            draft.graph_thread_id = f"draft-{random_id()}"
-            initialized = await initialize_draft_graph(
-                user_id=user_id, thread_id=draft.graph_thread_id,
-                draft_id=draft.id, topic=draft.topic, outline=draft.outline,
-            )
-            if not initialized:
-                raise DraftSaveError("graph_initialization_failed")
-        if not await authorize_draft_save(thread_id=draft.graph_thread_id, assembled_content=content):
-            raise DraftSaveError("graph_authorization_failed")
 
         note = Note(
             id=random_id(), user_id=user_id, title=clean_draft_title(title or draft.title), category_id=category_id,
@@ -91,6 +87,10 @@ async def save_confirmed_draft(
         draft.saved_note_id = note.id
         draft.saved_at = datetime.now(timezone.utc).replace(tzinfo=None)
         draft.assembled_content = content
+        await settle_linked_checkpoints(
+            session, user_id=user_id, checkpoint_type="draft_workspace",
+            object_id=draft.id, status="resolved", note_id=note.id,
+        )
         await session.commit()
         await session.refresh(draft)
         await session.refresh(note)

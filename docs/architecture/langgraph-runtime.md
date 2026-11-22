@@ -38,8 +38,8 @@ Planner 只提出计划；Validator 负责模式约束、必填字段、页面�
 - 普通聊天不读取笔记。
 - 当前笔记或选区问答进入只读 LangGraph，并由 RAG Service 读取指定范围。
 - 全库模式进入 LlamaIndex RAG。
-- 创建笔记和修改笔记继续使用现有 LangGraph 草稿图、编辑图与业务 checkpoint。
-- LangGraph checkpoint 保存图的中断位置；`agent_checkpoints` 保存草稿/编辑等业务状态，二者职责不同。
+- 聊天的语义规划、澄清中断和只读回答继续用 LangGraph。草稿生成与修改预览的状态由业务记录维护。
+- 草稿保存和预览应用将正文、版本、待执行的索引任务和已绑定的会话任务结果一起提交。重试以业务记录判断是否已经成功；LangGraph 的历史写入检查点不参与保存授权。
 
 ## 记忆
 

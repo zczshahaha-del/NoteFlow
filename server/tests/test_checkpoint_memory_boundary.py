@@ -6,7 +6,7 @@ from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from app.routers import agent
+from app.services import agent_checkpoints
 
 
 class CheckpointSession:
@@ -51,11 +51,11 @@ class CheckpointMemoryBoundaryTest(unittest.IsolatedAsyncioTestCase):
             yield session
 
         repository = SimpleNamespace(get_checkpoint=AsyncMock(return_value=checkpoint))
-        with patch.object(agent, "AsyncSessionLocal", sessions), patch.object(agent, "RunRepository", return_value=repository):
-            result = await agent._resolve_checkpoint_by_id(
+        with patch.object(agent_checkpoints, "AsyncSessionLocal", sessions), patch.object(agent_checkpoints, "RunRepository", return_value=repository):
+            result = await agent_checkpoints.resolve_checkpoint_by_id(
                 user_id="user-a", checkpoint_id="checkpoint-a", status=status, **kwargs,
             )
-        repository.get_checkpoint.assert_awaited_once_with("user-a", "checkpoint-a")
+        repository.get_checkpoint.assert_awaited_once_with("user-a", "checkpoint-a", for_update=True)
         return result, session
 
     async def test_terminal_task_outcomes_preserve_history_without_memory_side_effects(self):
@@ -63,11 +63,13 @@ class CheckpointMemoryBoundaryTest(unittest.IsolatedAsyncioTestCase):
             for status, working_status in (("resolved", "completed"), ("cancelled", "cancelled"), ("failed", "failed")):
                 with self.subTest(kind=kind, status=status):
                     checkpoint = self.checkpoint(kind)
-                    result, session = await self.resolve(checkpoint, status, payload_patch={"editPreviewId": "edit-a"})
+                    if status == "resolved" and kind in {"draft_workspace", "edit_preview"}:
+                        checkpoint.payload["draftId" if kind == "draft_workspace" else "editPreviewId"] = "saved"
+                    with patch.object(agent_checkpoints, "_linked_outcome", AsyncMock(return_value=("resolved", "note-a"))):
+                        result, session = await self.resolve(checkpoint, status, payload_patch={"noteId": "note-a"})
                     self.assertEqual(result["status"], status)
                     self.assertEqual(result["workingMemory"]["status"], working_status)
                     self.assertEqual(result["workingMemory"]["relatedNoteId"], "note-a")
-                    self.assertEqual(result["workingMemory"]["relatedEditPreviewId"], "edit-a")
                     self.assertEqual(result["payload"]["instruction"], "把这句话解释得简单一点")
                     self.assertIsNotNone(result["resolvedAt"])
                     self.assertEqual(session.commits, 1)

@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import re
 import time
-from datetime import datetime
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -41,10 +40,9 @@ from app.services.agent_runtime import (
 from app.services.agent_checkpoints import (
     agent_run_history as _agent_run_history,
     agent_task_snapshot as _agent_task_snapshot,
-    checkpoint_out as _checkpoint_out,
     create_checkpoint as _create_checkpoint,
     latest_waiting_checkpoint as _latest_waiting_checkpoint,
-    patch_working_memory_status as _patch_working_memory_status,
+    resolve_checkpoint_by_id as _resolve_checkpoint_by_id,
 )
 from app.memory.agent import (
     auto_save_memory_from_question as _auto_save_memory_from_question,
@@ -331,44 +329,6 @@ async def _checkpoint_for_plan(user_id: str, session_id: Optional[str], intent: 
 
 async def _effective_memory_enabled(user_id: str, requested: bool) -> bool:
     return await MemoryContextService().enabled(user_id=user_id, requested=requested)
-
-
-async def _resolve_checkpoint_by_id(
-    *,
-    user_id: str,
-    checkpoint_id: str,
-    status: str,
-    payload_patch: Optional[dict] = None,
-) -> Optional[dict]:
-    async with AsyncSessionLocal() as db:
-        checkpoint = await RunRepository(db).get_checkpoint(user_id, checkpoint_id)
-        if checkpoint is None:
-            return None
-        if checkpoint.status != "waiting_user_confirm" and status == "cancelled":
-            return _checkpoint_out(checkpoint)
-        payload = dict(checkpoint.payload or {})
-        if payload_patch:
-            payload.update(payload_patch)
-        if checkpoint.checkpoint_type in {"draft_workspace", "edit_preview"} or payload.get("workingMemory"):
-            working_extra = {}
-            if payload.get("draftId"):
-                working_extra["relatedDraftId"] = payload.get("draftId")
-            if payload.get("editPreviewId"):
-                working_extra["relatedEditPreviewId"] = payload.get("editPreviewId")
-            if payload.get("noteId"):
-                working_extra["relatedNoteId"] = payload.get("noteId")
-            payload = _patch_working_memory_status(payload, status, working_extra)
-            # Task outcomes belong to the checkpoint/run history. They are not
-            # user facts and must not create long-term memories or index jobs.
-            # Meaningful experiences can still enter through the explicit or
-            # conversational memory flow, independently of task completion.
-        checkpoint.payload = payload
-        checkpoint.status = status
-        checkpoint.resolved_at = datetime.utcnow() if status != "waiting_user_confirm" else None
-        checkpoint.updated_at = datetime.utcnow()
-        await db.commit()
-        await db.refresh(checkpoint)
-        return _checkpoint_out(checkpoint)
 
 
 def _choice_delta(text: str) -> dict:
@@ -1346,7 +1306,7 @@ async def chat(
                 return
 
             if intent == "note_draft_create":
-                draft_runtime = "langgraph"
+                draft_runtime = "database"
                 draft_seed = _draft_seed_from_plan(context_plan, payload.question)
                 planned_brief = _short(
                     str((context_plan.draft_request or {}).get("brief") or ""),
@@ -1450,7 +1410,7 @@ async def chat(
                 return
 
             if intent == "note_edit_create":
-                edit_runtime = "langgraph"
+                edit_runtime = "database"
                 if not page_state or not page_state.currentNoteId:
                     answer = "请先打开一篇正式笔记，再让我生成修改预览。"
                     yield _sse_format(_choice_delta(answer))

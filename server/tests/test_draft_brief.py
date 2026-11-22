@@ -37,8 +37,7 @@ class DraftBriefTests(unittest.IsolatedAsyncioTestCase):
             includeCode=False, includeExercises=False, sections=[drafts.DraftSectionPayload(title="教学过程")])
 
     async def test_brief_is_saved_with_request_and_worker_uses_it(self):
-        initialize = AsyncMock(return_value=True)
-        with patch.object(drafts, "AsyncSessionLocal", self.sessions), patch.object(drafts, "initialize_draft_graph", initialize):
+        with patch.object(drafts, "AsyncSessionLocal", self.sessions):
             result = await drafts.update_draft("brief-draft", self.payload(), self.user)
         record = result["draft"]
         self.assertEqual(record["topic"], "《两小儿辩日》教案")
@@ -47,17 +46,21 @@ class DraftBriefTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(record["draftConfig"]["bodyInstruction"], "旧全文要求")
         self.assertNotIn("generationJob", record["draftConfig"])
         self.assertFalse(record["includeCode"])
-        self.assertEqual(initialize.await_args.kwargs["topic"], "《两小儿辩日》教案")
         async with self.sessions() as db:
             draft = await db.get(NoteDraft, "brief-draft")
             self.assertIn("当前生成要求：重点设计课堂提问", draft_worker._raw_request(draft))
             self.assertEqual(draft_worker._raw_request(draft), draft.extra_request)
 
-    async def test_graph_failure_rolls_back_existing_body_and_brief(self):
-        with patch.object(drafts, "AsyncSessionLocal", self.sessions), patch.object(drafts, "initialize_draft_graph", AsyncMock(return_value=False)):
-            with self.assertRaises(HTTPException) as error:
+    async def test_commit_failure_rolls_back_existing_body_and_brief(self):
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        async def fail_commit(session):
+            await session.flush()
+            raise RuntimeError("simulated write interruption")
+
+        with patch.object(drafts, "AsyncSessionLocal", self.sessions), patch.object(AsyncSession, "commit", fail_commit):
+            with self.assertRaisesRegex(RuntimeError, "interruption"):
                 await drafts.update_draft("brief-draft", self.payload(), self.user)
-        self.assertEqual(error.exception.status_code, 503)
         async with self.sessions() as db:
             draft = await db.get(NoteDraft, "brief-draft")
             section = await db.get(NoteDraftSection, "old-section")
@@ -73,7 +76,7 @@ class DraftBriefTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(error.exception.status_code, 404)
 
     async def test_confirmed_task_cannot_be_replaced_with_another_topic(self):
-        with patch.object(drafts, "AsyncSessionLocal", self.sessions), patch.object(drafts, "initialize_draft_graph", AsyncMock(return_value=True)):
+        with patch.object(drafts, "AsyncSessionLocal", self.sessions):
             await drafts.update_draft("brief-draft", self.payload(), self.user)
             for key, value in (("title", "加法笔记"), ("requirements", "另一份文档")):
                 payload = self.payload()

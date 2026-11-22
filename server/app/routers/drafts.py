@@ -8,6 +8,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from app.database import AsyncSessionLocal
+from app.services.agent_checkpoints import settle_linked_checkpoints
 from app.deps import CurrentUser, get_current_user
 from app.models.db import (
     Note,
@@ -18,7 +19,6 @@ from app.models.db import (
 )
 from app.repositories.drafts import DraftRepository
 from app.repositories.notes import NoteRepository
-from app.agent.write_runtime import initialize_draft_graph, resume_draft_generation
 from app.services.draft_content import assemble_draft_content, clean_draft_title
 from app.services.draft_save import DraftSaveError, save_confirmed_draft
 from app.services.draft_brief import DraftBrief, generation_request
@@ -413,27 +413,19 @@ async def create_draft(
                 ).strip()[:4000],
                 "orchestration": {
                     **dict((payload.draftConfig or {}).get("orchestration") or {}),
-                    "runtime": "langgraph",
+                    "runtime": "database",
                     "stage": "outline_ready" if status == "outline_ready" else "requirements",
                 },
             },
             outline=outline,
             status=status,
             idempotency_key=idempotency_key or None,
-            runtime="langgraph",
-            graph_thread_id=f"draft-{random_id()}",
+            runtime="database",
         )
         session.add(draft)
         await session.flush()
         await _replace_sections(session, draft, sections)
         draft.outline = number_markdown_headings(outline, draft.title, style=draft_numbering_style(draft)) if outline else _outline_from_sections(draft, await _get_sections(session, user.id, draft.id))
-        initialized = await initialize_draft_graph(
-            user_id=user.id, thread_id=draft.graph_thread_id,
-            draft_id=draft.id, topic=draft.topic, outline=draft.outline,
-        )
-        if not initialized:
-            await session.rollback()
-            raise HTTPException(status_code=503, detail="LangGraph 草稿流程初始化失败，请稍后重试")
         await session.commit()
         await session.refresh(draft)
         return {"draft": _draft_out(draft, await _get_sections(session, user.id, draft.id))}
@@ -514,13 +506,6 @@ async def update_draft(
                 draft.status = "outline_ready"
         if payload.outline is not None:
             draft.outline = number_markdown_headings(draft.outline, draft.title, style=draft_numbering_style(draft))
-        if payload.generationBrief is not None and payload.outline is not None:
-            draft.graph_thread_id = f"draft-{random_id()}"
-            initialized = await initialize_draft_graph(user_id=user.id, thread_id=draft.graph_thread_id,
-                draft_id=draft.id, topic=draft.topic, outline=draft.outline)
-            if not initialized:
-                await session.rollback()
-                raise HTTPException(status_code=503, detail="LangGraph 草稿流程初始化失败，请稍后重试")
         if payload.sectionOrder is not None:
             sections = await _get_sections(session, user.id, draft.id)
             active_sections = [section for section in sections if section.deleted_at is None]
@@ -769,18 +754,6 @@ async def generate_all_draft_sections(
             "startedAt": previous_job.get("startedAt") or _now().isoformat(),
             "updatedAt": _now().isoformat(),
         }
-        if not draft.graph_thread_id:
-            draft.runtime = "langgraph"
-            draft.graph_thread_id = f"draft-{random_id()}"
-            initialized = await initialize_draft_graph(
-                user_id=user.id, thread_id=draft.graph_thread_id,
-                draft_id=draft.id, topic=draft.topic, outline=draft.outline,
-            )
-            if not initialized:
-                raise HTTPException(status_code=503, detail="LangGraph 草稿流程初始化失败，请稍后重试")
-        resumed = await resume_draft_generation(thread_id=draft.graph_thread_id)
-        if not resumed:
-            raise HTTPException(status_code=503, detail="LangGraph 草稿流程恢复失败，请稍后重试")
         draft.draft_config = config
         draft.status = "generating"
         await session.commit()
@@ -846,8 +819,7 @@ async def save_draft_to_notes(
             "saved_note_missing": (409, "draft saved note is unavailable"),
             "category_missing": (404, "category not found"),
             "empty_draft": (400, "draft content is empty"),
-            "graph_initialization_failed": (503, "LangGraph 草稿流程初始化失败，请稍后重试"),
-            "graph_authorization_failed": (503, "LangGraph 草稿保存授权失败，请稍后重试"),
+            "draft_canceled": (409, "canceled draft cannot be saved"),
         }[str(exc)]
         raise HTTPException(status_code=status, detail=detail) from exc
 
@@ -867,11 +839,14 @@ async def cancel_draft(
     user: CurrentUser = Depends(get_current_user),
 ):
     async with AsyncSessionLocal() as session:
-        draft = await _get_draft(session, user.id, draft_id)
-        if draft.status == "saved":
+        draft = await _get_draft(session, user.id, draft_id, for_update=True)
+        if draft.saved_note_id or draft.status == "saved":
             raise HTTPException(status_code=409, detail="saved draft cannot be canceled")
         draft.status = "canceled"
         draft.canceled_at = _now()
+        await settle_linked_checkpoints(
+            session, user_id=user.id, checkpoint_type="draft_workspace", object_id=draft.id, status="cancelled",
+        )
         await session.commit()
         await session.refresh(draft)
         return {"draft": _draft_out(draft, await _get_sections(session, user.id, draft.id))}

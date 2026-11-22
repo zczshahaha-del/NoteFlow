@@ -7,14 +7,13 @@ from app.repositories.base import Repository, require_user_id
 
 
 class RunRepository(Repository):
-    async def get_checkpoint(self, user_id: str, checkpoint_id: str) -> AgentCheckpoint | None:
+    async def get_checkpoint(self, user_id: str, checkpoint_id: str, *, for_update: bool = False) -> AgentCheckpoint | None:
         user_id = require_user_id(user_id)
-        return await self.session.scalar(
-            select(AgentCheckpoint).where(
-                AgentCheckpoint.id == checkpoint_id,
-                AgentCheckpoint.user_id == user_id,
-            )
+        statement = select(AgentCheckpoint).where(
+            AgentCheckpoint.id == checkpoint_id,
+            AgentCheckpoint.user_id == user_id,
         )
+        return await self.session.scalar(statement.with_for_update() if for_update else statement)
 
     async def get_run(self, user_id: str, run_id: str) -> AgentRun | None:
         user_id = require_user_id(user_id)
@@ -52,6 +51,6 @@ class RunRepository(Repository):
                 AgentCheckpoint.run_id == run_id,
                 AgentCheckpoint.user_id == user_id,
                 AgentCheckpoint.status == "waiting_user_confirm",
-            )
+            ).with_for_update()
         )
         return list(result.scalars().all())

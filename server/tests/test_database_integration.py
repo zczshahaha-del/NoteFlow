@@ -522,9 +522,13 @@ async def _exercise_concurrent_draft_save() -> None:
     from app.deps import CurrentUser, get_current_user
     from app.main import app
     from app.services import draft_save
+    from sqlalchemy.ext.asyncio import AsyncSession
 
     owner_id = f"draft-save-check-{uuid.uuid4().hex}"
     draft_id = f"{owner_id}-draft"
+    chat_id = f"{owner_id}-chat"
+    run_id = f"{owner_id}-run"
+    checkpoint_id = f"{owner_id}-checkpoint"
     user = CurrentUser(id=owner_id, email=f"{owner_id}@local.test", display_name="草稿保存验收")
 
     async def enqueue_for_test(session, note):
@@ -536,7 +540,6 @@ async def _exercise_concurrent_draft_save() -> None:
         return job
 
     original_enqueue = draft_save.index_note_now
-    authorize = AsyncMock(return_value=True)
     try:
         async with AsyncSessionLocal() as session:
             session.add(User(id=user.id, email=user.email, display_name=user.display_name))
@@ -544,17 +547,38 @@ async def _exercise_concurrent_draft_save() -> None:
             session.add(NoteDraft(
                 id=draft_id, user_id=user.id, title="待保存", topic="合成草稿",
                 status="assembled", assembled_content="## 章节\n\n合成正文",
-                graph_thread_id=f"{owner_id}-mocked-graph",
+                graph_thread_id=f"{owner_id}-obsolete-graph",
+            ))
+            session.add(ChatSession(id=chat_id, user_id=user.id))
+            await session.flush()
+            session.add(AgentRun(id=run_id, session_id=chat_id, user_id=user.id, intent="note_draft_create"))
+            await session.flush()
+            session.add(AgentCheckpoint(
+                id=checkpoint_id, session_id=chat_id, run_id=run_id, user_id=user.id,
+                status="waiting_user_confirm", checkpoint_type="draft_workspace", payload={"draftId": draft_id},
             ))
             await session.commit()
 
         with patch.dict(app.dependency_overrides, {get_current_user: lambda: user}), patch.object(
-            draft_save, "authorize_draft_save", authorize,
-        ), patch.object(draft_save, "index_note_now", enqueue_for_test):
-            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            draft_save, "index_note_now", enqueue_for_test,
+        ):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app, raise_app_exceptions=False), base_url="http://test") as client:
                 url = f"/api/note-drafts/{draft_id}/save-to-notes"
                 denied = await client.post(url, json={"confirm": False})
                 assert denied.status_code == 400
+
+                async def fail_commit(session):
+                    await session.flush()
+                    raise RuntimeError("interrupted before commit")
+
+                with patch.object(AsyncSession, "commit", fail_commit):
+                    failed = await client.post(url, json={"confirm": True})
+                assert failed.status_code == 500
+                async with AsyncSessionLocal() as session:
+                    assert (await session.get(NoteDraft, draft_id)).saved_note_id is None
+                    assert (await session.get(AgentCheckpoint, checkpoint_id)).status == "waiting_user_confirm"
+                    assert not await session.scalar(select(Note.id).where(Note.user_id == user.id))
+
                 results = await asyncio.gather(*[
                     client.post(url, json={"confirm": True, "title": "正式笔记.md", "categoryId": None})
                     for _ in range(2)
@@ -565,12 +589,13 @@ async def _exercise_concurrent_draft_save() -> None:
         assert first["note"]["id"] == second["note"]["id"]
         assert first["note"]["title"] == "正式笔记"
         assert first["draft"]["savedNoteId"] == first["note"]["id"]
-        authorize.assert_awaited_once()
 
         async with AsyncSessionLocal() as session:
             notes = list((await session.scalars(select(Note).where(Note.user_id == user.id))).all())
             versions = list((await session.scalars(select(NoteVersion).where(NoteVersion.user_id == user.id))).all())
             jobs = list((await session.scalars(select(NoteIndexJob).where(NoteIndexJob.user_id == user.id))).all())
+            checkpoint = await session.get(AgentCheckpoint, checkpoint_id)
+            assert checkpoint.status == "resolved" and checkpoint.payload["noteId"] == first["note"]["id"]
             assert len(notes) == len(versions) == 1
             assert notes[0].content == versions[0].content == "## 章节\n\n合成正文"
             assert len(jobs) == 2 and {bool(job.graph_version) for job in jobs} == {False, True}

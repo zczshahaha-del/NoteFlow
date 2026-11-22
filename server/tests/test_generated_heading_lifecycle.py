@@ -8,7 +8,7 @@ from sqlalchemy.pool import StaticPool
 from fastapi import HTTPException
 
 from app.deps import CurrentUser
-from app.models.db import User, Note, NoteCategory, NoteVersion, NoteIndexJob, NoteDraft, NoteDraftSection, NoteDraftSectionVersion, NoteEditPreview
+from app.models.db import AgentCheckpoint, User, Note, NoteCategory, NoteVersion, NoteIndexJob, NoteDraft, NoteDraftSection, NoteDraftSectionVersion, NoteEditPreview
 from app.routers import agent, drafts, notes
 from app.services import draft_save, draft_worker, note_write
 from app.services.heading_number_repair import repair_heading_numbers, content_hash
@@ -55,7 +55,7 @@ class GeneratedHeadingLifecycleTest(unittest.IsolatedAsyncioTestCase):
         self.engine = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool)
         self.addAsyncCleanup(self.engine.dispose)
         async with self.engine.begin() as connection:
-            for model in (User, NoteCategory, Note, NoteVersion, NoteIndexJob, NoteDraft, NoteDraftSection, NoteDraftSectionVersion, NoteEditPreview):
+            for model in (User, NoteCategory, Note, NoteVersion, NoteIndexJob, NoteDraft, NoteDraftSection, NoteDraftSectionVersion, NoteEditPreview, AgentCheckpoint):
                 await connection.run_sync(model.__table__.create)
         self.sessions = async_sessionmaker(self.engine, expire_on_commit=False)
         self.user = CurrentUser(id="heading-user", email="headings@example.invalid", display_name="合成用户")
@@ -63,11 +63,6 @@ class GeneratedHeadingLifecycleTest(unittest.IsolatedAsyncioTestCase):
             session.add(User(id=self.user.id, email=self.user.email, display_name=self.user.display_name))
             await session.commit()
         self.patches = [patch.object(module, "AsyncSessionLocal", self.sessions) for module in (drafts, notes, draft_save, draft_worker)]
-        self.patches.extend([
-            patch.object(drafts, "initialize_draft_graph", AsyncMock(return_value=True)),
-            patch.object(draft_save, "initialize_draft_graph", AsyncMock(return_value=True)),
-            patch.object(draft_save, "authorize_draft_save", AsyncMock(return_value=True)),
-        ])
         for item in self.patches:
             item.start()
             self.addCleanup(item.stop)
