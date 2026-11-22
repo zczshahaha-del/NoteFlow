@@ -719,7 +719,7 @@ try {
     },
   });
   const editHtml = await renderClient(React.createElement(EditPreviewWorkspace));
-  assert.match(editHtml, /预览中，尚未写入笔记/);
+  assert.doesNotMatch(editHtml, /预览中，尚未写入笔记|修改后的内容已准备好|替换第二行/);
   assert.doesNotMatch(editHtml, /旧内容/);
   assert.match(editHtml, /修改后正文/);
   assert.match(editHtml, /对照原文/);

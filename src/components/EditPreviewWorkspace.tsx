@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
-  ChevronDown,
+  ArrowUp,
   FileText,
   GitCompareArrows,
   History,
@@ -17,7 +17,6 @@ import {
 import { diffMarkdownLines } from "../utils/markdownDiff";
 import { searchSnippetText } from "../utils/searchSnippetText";
 import { findFileById } from "../workspaceTree";
-import AIWritingStatus from "./AIWritingStatus";
 import SoftMenu from "./SoftMenu";
 import MarkdownBlockReview from "./MarkdownBlockReview";
 import PreviewMarkdown from "./PreviewMarkdown";
@@ -61,14 +60,10 @@ export default function EditPreviewWorkspace() {
   const [revisionLoading, setRevisionLoading] = useState(false);
   const [revisionOwnerId, setRevisionOwnerId] = useState("");
   const [revisionReload, setRevisionReload] = useState(0);
-  const [summaryExpanded, setSummaryExpanded] = useState(false);
-  const [summaryOverflows, setSummaryOverflows] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [actionError, setActionError] = useState("");
   const revisionInputRef = useRef<HTMLTextAreaElement>(null);
-  const summaryTriggerRef = useRef<HTMLButtonElement>(null);
-  const summaryTextRef = useRef<HTMLParagraphElement>(null);
   const moreTriggerRef = useRef<HTMLButtonElement>(null);
   const menuAnchorRef = useRef<HTMLDivElement>(null);
   const historyCloseRef = useRef<HTMLButtonElement>(null);
@@ -81,18 +76,6 @@ export default function EditPreviewWorkspace() {
   const manualDirty = !!editPreviewDraft && editPreviewDraft.content !== editPreviewDraft.savedContent;
   const previewContentRef = useRef(draftContent);
   previewContentRef.current = draftContent;
-  const summaryItems = useMemo(() => activeEditPreview?.changeSummary.filter(item => item.trim()) ?? [], [activeEditPreview?.changeSummary]);
-
-  useLayoutEffect(() => {
-    const text = summaryTextRef.current;
-    if (!text) return;
-    const measure = () => setSummaryOverflows(text.scrollWidth > text.clientWidth + 1);
-    measure();
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
-    observer?.observe(text);
-    return () => observer?.disconnect();
-  }, [summaryExpanded, summaryItems, activeEditPreview?.id]);
-
   const previewTitle = useMemo(() => {
     if (!activeEditPreview) return "修改预览";
     const { targetType, oldContent, noteId } = activeEditPreview;
@@ -101,24 +84,12 @@ export default function EditPreviewWorkspace() {
     const title = targetType === "note" ? findFileById(treeData, noteId)?.name.replace(/\.md$/i, "") : heading && searchSnippetText(heading);
     return title ? `修改「${title}」` : `修改${targetTypeLabel(targetType)}`;
   }, [activeEditPreview?.noteId, activeEditPreview?.targetType, activeEditPreview?.oldContent, treeData]);
-  const scopeDescription = useMemo(() => {
-    if (!activeEditPreview) return "";
-    const note = findFileById(treeData, activeEditPreview.noteId)?.name.replace(/\.md$/i, "");
-    const excerpt = searchSnippetText(activeEditPreview.oldContent).replace(/\s+/g, " ").trim();
-    const scope = activeEditPreview.targetType === "section" ? "本次范围：这一小节（含子标题）"
-      : activeEditPreview.targetType === "note" ? "本次范围：整篇笔记"
-      : activeEditPreview.targetType === "insert" ? "插入位置：所选内容之后"
-      : activeEditPreview.targetType === "delete" ? "本次删除：所选范围"
-      : `本次范围：选中文字${excerpt ? `「${excerpt.length > 40 ? excerpt.slice(0, 40) + "…" : excerpt}」` : ""}`;
-    return `${note && activeEditPreview.targetType !== "note" ? note + " · " : ""}${scope}`;
-  }, [activeEditPreview, treeData]);
-
   const diff = useMemo(
     () => viewMode === "diff" ? diffMarkdownLines(activeEditPreview?.oldContent ?? "", draftContent) : null,
     [viewMode, draftContent, activeEditPreview?.oldContent]
   );
   useEffect(() => {
-    setViewMode("result"); setSummaryExpanded(false); setHistoryOpen(false); setMenuOpen(false); setActionError("");
+    setViewMode("result"); setHistoryOpen(false); setMenuOpen(false); setActionError("");
   }, [activeEditPreview?.id]);
 
   useEffect(() => {
@@ -267,7 +238,6 @@ export default function EditPreviewWorkspace() {
     event.stopPropagation();
     if (menuOpen) { setMenuOpen(false); moreTriggerRef.current?.focus({ preventScroll: true }); }
     else if (historyOpen) { setHistoryOpen(false); moreTriggerRef.current?.focus({ preventScroll: true }); }
-    else if (summaryExpanded) { setSummaryExpanded(false); summaryTriggerRef.current?.focus({ preventScroll: true }); }
   };
 
   const handleMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -309,24 +279,37 @@ export default function EditPreviewWorkspace() {
     );
   }
 
-  const operationLabel = operation === "apply" ? "正在应用并保存" : operation === "cancel" ? "正在放弃修改"
-    : operation === "revise" ? "正在调整预览" : operation === "restore" ? "正在恢复预览版本" : "AI 正在处理";
-  const canExpandSummary = summaryExpanded || summaryItems.length > 1 || summaryOverflows;
+  const splitComparison = viewMode === "compare" &&
+    (activeEditPreview.targetType === "section" || activeEditPreview.targetType === "note");
+  const operationLabel = operation === "apply" ? "正在应用" : operation === "cancel" ? "正在放弃"
+    : operation === "revise" ? "正在改写" : operation === "restore" ? "正在恢复" : "AI 正在处理";
+  const feedback = busy ? operationLabel
+    : editPreviewDraft?.status === "saving" ? "正在保存修改稿"
+    : manualDirty && editPreviewDraft?.status !== "error" ? "修改稿待保存" : "";
   const failure = editPreviewError || editPreviewDraft?.error || actionError;
-  const previewLabel = busy ? operationLabel : editPreviewDraft?.status === "saving" ? "正在保留手动修改，尚未写入笔记"
-    : manualDirty ? "手动修改待保留，尚未写入笔记" : "预览中，尚未写入笔记";
 
   return (
-    <main className="edit-preview-workspace document-canvas nf-prose-refined flex min-w-0 flex-1 flex-col" data-preview-id={activeEditPreview.id} data-view-mode={viewMode} onKeyDown={menuOpen || historyOpen || summaryExpanded ? closeAuxiliaryPanel : undefined}>
+    <main className="edit-preview-workspace document-canvas nf-prose-refined flex min-w-0 flex-1 flex-col"
+      data-preview-id={activeEditPreview.id} data-view-mode={viewMode}
+      data-compare-layout={splitComparison ? "split" : undefined}
+      aria-label="修改预览" onKeyDown={menuOpen || historyOpen ? closeAuxiliaryPanel : undefined}>
       <header className="nf-edit-header">
         <div className="nf-edit-identity">
-          <div className="nf-edit-heading"><h1 title={previewTitle}>{previewTitle}</h1></div>
-          <p className="nf-edit-scope" title={scopeDescription}>{scopeDescription}</p>
-          <div className="nf-edit-meta">
-            <AIWritingStatus compact kind="edit" step={operation === "apply" ? 2 : 1} label={previewLabel} />
-          </div>
+          <h1 title={previewTitle}>{previewTitle}</h1>
+          <span className="nf-edit-feedback" role="status">{feedback}</span>
         </div>
         <div className="nf-edit-actions">
+          {viewMode === "diff" ? (
+            <button ref={diffReturnRef} type="button" className="nf-edit-button" onClick={() => setViewMode("result")}>
+              返回修改稿
+            </button>
+          ) : activeEditPreview.targetType !== "delete" && (
+            <button type="button" className="nf-edit-button" aria-pressed={viewMode === "compare"}
+              onClick={() => setViewMode(current => current === "compare" ? "result" : "compare")}>
+              <GitCompareArrows size={15} aria-hidden="true" />
+              {viewMode === "compare" ? "只看修改稿" : "对照原文"}
+            </button>
+          )}
           <div ref={menuAnchorRef} className="nf-edit-more">
             <button ref={moreTriggerRef} type="button" className="nf-edit-button nf-edit-more-trigger" aria-label="更多预览操作" aria-haspopup="menu" aria-expanded={menuOpen} aria-controls={menuOpen ? "edit-preview-menu" : undefined}
               onClick={() => setMenuOpen(current => !current)}
@@ -367,15 +350,6 @@ export default function EditPreviewWorkspace() {
       <div ref={scrollRef} className="nf-edit-scroll">
         <div className="nf-edit-frame">
           {failure && <div role="alert" className="nf-edit-error">{failure}{manualDirty && <button type="button" className="nf-edit-button" disabled={busy} onClick={() => { setActionError(""); void flushEditPreviewDraft(activeEditPreview.id).catch(() => {}); }}>重试保存预览</button>}</div>}
-          <div className="nf-edit-reviewbar">
-            <section className="nf-edit-summary" aria-label="修改说明" data-expanded={summaryExpanded}>
-              {summaryExpanded && summaryItems.length > 0 ? <ul id="edit-preview-summary" className="nf-edit-summary-list">{summaryItems.map((item, index) => <li key={index + "-" + item}>{item}</li>)}</ul> : <p ref={summaryTextRef}>{summaryItems[0] || "修改后的内容已准备好"}</p>}
-              {canExpandSummary && <button ref={summaryTriggerRef} type="button" className="nf-edit-button nf-edit-summary-toggle" aria-label={summaryExpanded ? "收起修改说明" : "展开修改说明"} aria-expanded={summaryExpanded} aria-controls={summaryExpanded && summaryItems.length > 0 ? "edit-preview-summary" : undefined}
-                onClick={() => setSummaryExpanded(current => !current)}><ChevronDown size={13} aria-hidden="true" /></button>}
-            </section>
-            {viewMode === "diff" ? <button ref={diffReturnRef} type="button" className="nf-edit-button" onClick={() => setViewMode("result")}>返回修改稿</button> : activeEditPreview.targetType !== "delete" && <button type="button" className="nf-edit-button" onClick={() => setViewMode(current => current === "compare" ? "result" : "compare")} aria-pressed={viewMode === "compare"}>{viewMode === "compare" ? "收起对照" : "对照原文"}</button>}
-          </div>
-
           {historyOpen && <section id="edit-preview-history" className="nf-edit-auxiliary" aria-label="预览版本">
             <div className="nf-edit-history-heading"><h2>历史版本</h2><button ref={historyCloseRef} type="button" className="nf-edit-button" aria-label="关闭历史版本" onClick={() => { setHistoryOpen(false); moreTriggerRef.current?.focus({ preventScroll: true }); }}>收起</button></div>
             {revisionError ? <div role="alert" className="nf-edit-history-error">{revisionError}<button type="button" className="nf-edit-button" disabled={busy} onClick={() => setRevisionReload(value => value + 1)}>重试读取</button></div> : revisionLoading || revisionOwnerId !== activeEditPreview.id ? <p role="status">正在读取版本…</p> : revisions.length === 0 ? <p>暂无可恢复的预览版本。</p> : <div className="nf-edit-revisions">
@@ -392,11 +366,32 @@ export default function EditPreviewWorkspace() {
           </section>}
 
           <section className="edit-preview-result" aria-label="修改后正文" hidden={viewMode === "diff"}>
-            {activeEditPreview.targetType === "delete" ? <div className="nf-edit-deletion"><span className="nf-edit-change-label">将删除</span><PreviewMarkdown content={activeEditPreview.oldContent} /></div> : <Suspense fallback={<PreviewMarkdown content={draftContent} />}>
-              <EditablePreviewBody key={activeEditPreview.id} previewId={activeEditPreview.id} content={draftContent} oldContent={activeEditPreview.oldContent} showComparison={viewMode === "compare"} disabled={busy}
-                documentTitle={activeEditPreview.targetType === "note" ? findFileById(treeData, activeEditPreview.noteId)?.name.replace(/\.md$/i, "") : ""}
-                onChange={updateEditPreviewDraft} onBlur={() => { void flushEditPreviewDraft(activeEditPreview.id).catch(() => {}); }} />
-            </Suspense>}
+            {activeEditPreview.targetType === "delete" ? (
+              <div className="nf-edit-deletion">
+                <span className="nf-edit-change-label">将删除</span>
+                <PreviewMarkdown content={activeEditPreview.oldContent} />
+              </div>
+            ) : (
+              <div className="nf-edit-review" role={splitComparison ? "region" : undefined}
+                aria-label={splitComparison ? "原文对照" : undefined}>
+                {splitComparison && <section className="nf-edit-pane nf-edit-pane-original" aria-label="原文">
+                  <span className="nf-edit-pane-label">原文</span>
+                  <PreviewMarkdown content={activeEditPreview.oldContent} />
+                </section>}
+                <section key="revision" className="nf-edit-pane nf-edit-pane-revised"
+                  aria-label={splitComparison ? "修改稿" : undefined}>
+                  {splitComparison && <span className="nf-edit-pane-label">修改稿</span>}
+                  <Suspense fallback={<PreviewMarkdown content={draftContent} />}>
+                    <EditablePreviewBody key={activeEditPreview.id} previewId={activeEditPreview.id}
+                      content={draftContent} oldContent={activeEditPreview.oldContent}
+                      showComparison={viewMode === "compare" && !splitComparison} disabled={busy}
+                      documentTitle={activeEditPreview.targetType === "note" ? findFileById(treeData, activeEditPreview.noteId)?.name.replace(/\.md$/i, "") : ""}
+                      onChange={updateEditPreviewDraft}
+                      onBlur={() => { void flushEditPreviewDraft(activeEditPreview.id).catch(() => {}); }} />
+                  </Suspense>
+                </section>
+              </div>
+            )}
           </section>
           {viewMode === "diff" && diff ? <section className="nf-edit-diff" aria-label="详细差异正文">
             <div className="nf-edit-diff-summary"><span>+{diff.added} 行</span><span>−{diff.removed} 行</span>{diff.simplified && <span>长文已使用精简对比</span>}</div>
@@ -410,15 +405,19 @@ export default function EditPreviewWorkspace() {
         </div>
       </div>
 
-      <footer className="nf-edit-footer">
-        {activeEditPreview.targetType === "delete" ? <p className="nf-edit-scope">应用后删除上方内容。想保留它，可以选择“放弃”。</p> : <div className="nf-edit-composer">
-          <textarea ref={revisionInputRef} rows={1} value={revisionText} onChange={event => setRevisionText(event.target.value)} onKeyDown={handleKeyDown} placeholder="告诉 AI 还需要怎么改…" aria-label="继续修改预览" aria-description="Ctrl 或 Command 加 Enter 提交。只调整预览，应用到笔记后才保存。" />
-          <button type="button" className="nf-edit-button nf-edit-adjust" onClick={handleRevise} disabled={!revisionText.trim() || busy}>
-            {operation === "revise" && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}继续修改
+      {activeEditPreview.targetType !== "delete" && <footer className="nf-edit-footer">
+        <div className="nf-edit-composer">
+          <textarea ref={revisionInputRef} rows={1} value={revisionText} onChange={event => setRevisionText(event.target.value)}
+            onKeyDown={handleKeyDown} placeholder="继续修改…" aria-label="继续修改预览" />
+          <button type="button" className="nf-edit-button nf-edit-adjust" aria-label="继续修改" title="继续修改"
+            onClick={handleRevise} disabled={!revisionText.trim() || busy}>
+            {operation === "revise"
+              ? <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+              : <ArrowUp size={16} aria-hidden="true" />}
           </button>
-        </div>}
+        </div>
         {(manualDirty || (undoRevision && revisionOwnerId === activeEditPreview.id)) && <div className="nf-edit-undo-row"><button ref={undoRef} type="button" className="nf-edit-button" onClick={() => void restoreRevision()} disabled={busy || (!manualDirty && !revisionsReady)}><Undo2 size={13} aria-hidden="true" />撤销上次调整</button></div>}
-      </footer>
+      </footer>}
     </main>
   );
 }
