@@ -16,7 +16,7 @@
 .nf-selection-edit button:focus-visible { outline: 2px solid var(--color-jelly-blue, #436f91); outline-offset: 2px; }
 .nf-selection-edit-input { border-radius: 9px; background: var(--nf-ui-soft, #f1f4f7); padding: 9px 10px; }
 .nf-selection-edit-input:focus-within { box-shadow: 0 0 0 1px var(--color-jelly-blue, #436f91); }
-.nf-selection-edit textarea { display: block; width: 100%; border: 0; padding: 0; background: transparent; color: inherit; outline: none; box-shadow: none; font: inherit; line-height: 1.6; resize: vertical; max-height: 120px; min-height: 42px; }
+.nf-selection-edit textarea { display: block; width: 100%; border: 0; padding: 0; background: transparent; color: inherit; outline: none; box-shadow: none; font: inherit; line-height: 1.6; resize: none; max-height: 120px; min-height: 42px; }
 .nf-selection-edit footer { margin-top: 8px; }
 .nf-selection-edit-result { overflow: auto; max-height: 240px; min-height: 36px; padding: 0 2px 10px; margin-bottom: 10px; border-bottom: 1px solid var(--nf-ui-line, #e4e8ed); }
 .nf-selection-edit-result .note-content { font-size: 14px; line-height: 1.65; }
