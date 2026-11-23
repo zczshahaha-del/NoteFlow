@@ -751,12 +751,12 @@ try {
       onSignOut() {},
     }));
   });
-  const activeFileButton = directoryContainer.querySelector('.directory-node-row button[aria-current="page"]');
+  const activeFileButton = directoryContainer.querySelector('.directory-node-row[data-selected] button[aria-current="page"]');
   assert.ok(activeFileButton);
   assert.ok(activeFileButton.classList.contains("directory-node-open"));
   assert.equal(activeFileButton.closest(".directory-node-row").dataset.selected, "true");
   assert.equal(activeFileButton.getAttribute("aria-label"), "组件测试笔记");
-  assert.equal(activeFileButton.getAttribute("title"), "组件测试笔记");
+  assert.equal(activeFileButton.hasAttribute("title"), false);
   assert.equal(activeFileButton.querySelector("span[aria-hidden]"), null);
   assert.ok(activeFileButton.closest(".directory-node-row")
     .querySelector(".file-node-menu-button").classList.contains("opacity-100"));
@@ -923,8 +923,9 @@ try {
   })));
   const selectedRow = rowContainer.querySelector('[data-selected="true"]');
   assert.equal(selectedRow.style.marginLeft, "12px");
-  assert.ok(selectedRow.querySelector('svg[aria-label="已置顶"]'));
-  assert.ok(selectedRow.querySelector('svg[aria-label="已收藏"]'));
+  assert.ok(selectedRow.querySelector(':scope > button[aria-label="取消置顶"]'));
+  assert.ok(selectedRow.querySelector(':scope > button[aria-label="取消收藏"]'));
+  assert.equal(selectedRow.querySelector('.directory-node-open .directory-node-status'), null);
   const folderArrow = rowContainer.querySelector('button[aria-label="收起全栈开发"]');
   const rowFolderMore = folderArrow.closest('.directory-node-row').querySelector('button[aria-label="文件夹操作"]');
   await act(async () => rowFolderMore.click());
@@ -933,13 +934,13 @@ try {
   await act(async () => folderMenu.querySelector('button').dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   assert.equal(document.activeElement === rowFolderMore, true);
   await act(async () => folderArrow.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })));
-  assert.equal(rowContainer.querySelector('.directory-node-row [aria-current="page"]'), null);
+  assert.equal(rowContainer.querySelector('.directory-node-branch [aria-current="page"]'), null);
   assert.equal(useAppStore.getState().selectedFileId, nestedNote.id);
   assert.equal(fileOpenCalls, 0);
   const folderOpen = rowContainer.querySelector('.directory-node-row[data-folder] .directory-node-open');
   assert.equal(folderOpen.getAttribute("aria-expanded"), "false");
   await act(async () => folderOpen.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })));
-  await act(async () => rowContainer.querySelector('.directory-node-row [aria-current="page"]')
+  await act(async () => rowContainer.querySelector('.directory-node-branch [aria-current="page"]')
     .dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })));
   assert.equal(fileOpenCalls, 1);
   const rowMenu = rowContainer.querySelector('[data-selected] .file-node-menu-button');
@@ -970,9 +971,11 @@ try {
   await act(async () => useAppStore.setState({ addNode: originalAddNode, expandedFolderIds: new Set() }));
   const favorites = rowContainer.querySelector('.directory-favorites');
   assert.equal(favorites.open, true);
-  const favoriteLinks = favorites.querySelectorAll('button');
+  const favoriteLinks = favorites.querySelectorAll('.directory-favorite-link');
   assert.equal(favoriteLinks.length, 1);
-  assert.equal(favoriteLinks[0].title, '全栈开发 / 组件测试笔记');
+  assert.equal(favoriteLinks[0].hasAttribute('title'), false);
+  assert.equal(favoriteLinks[0].getAttribute('aria-description'), '全栈开发 / 组件测试笔记');
+  assert.ok(favorites.querySelector('button[aria-label="取消收藏 组件测试笔记"]'));
   await act(async () => favorites.querySelector('summary').click());
   assert.equal(favorites.open, false);
   await act(async () => favorites.querySelector('summary').click());

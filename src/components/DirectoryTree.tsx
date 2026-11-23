@@ -279,6 +279,7 @@ function TreeNode({
   const hasChildren = isFolder && node.children && node.children.length > 0;
   const isRenaming = renamingId === node.id;
   const menuOpen = menuNodeId === node.id;
+  const openButton = useRef<HTMLButtonElement>(null);
   const menuRoot = useRef<HTMLDivElement>(null);
   const menuTrigger = useRef<HTMLButtonElement>(null);
   const PinIcon = node.pinned ? PinOff : Pin;
@@ -349,6 +350,7 @@ function TreeNode({
         )}
 
         <button
+          ref={openButton}
           type="button"
           className="directory-node-open relative flex min-w-0 flex-1 items-center overflow-hidden text-left"
           onClick={() => {
@@ -362,7 +364,6 @@ function TreeNode({
           aria-expanded={isFolder ? isExpanded : undefined}
           aria-current={isSelected ? "page" : undefined}
           aria-label={node.name.replace(/\.md$/, "")}
-          title={isRenaming ? undefined : node.name.replace(/\.md$/, "")}
         >
           {isFolder ? (
             isExpanded ? (
@@ -403,19 +404,24 @@ function TreeNode({
               {node.name.replace(/\.md$/, "")}
             </span>
           )}
-          {node.pinned && (
-            <Pin size={12} className="shrink-0 text-jelly-text-muted" strokeWidth={1.8} aria-label="已置顶" />
-          )}
-          {node.favorite && (
-            <Star
-              size={12}
-              className="shrink-0 text-jelly-amber"
-              fill="currentColor"
-              strokeWidth={1.8}
-              aria-label="已收藏"
-            />
-          )}
         </button>
+
+        {node.pinned && !isRenaming && (
+          <button type="button" className="directory-node-status" aria-label="取消置顶" onClick={(event) => {
+            if (event.detail === 0) openButton.current?.focus({ preventScroll: true });
+            onTogglePin(node);
+          }}>
+            <Pin size={13} strokeWidth={1.8} aria-hidden="true" />
+          </button>
+        )}
+        {!isFolder && node.favorite && !isRenaming && (
+          <button type="button" className="directory-node-status directory-node-star" aria-label="取消收藏" onClick={(event) => {
+            if (event.detail === 0) openButton.current?.focus({ preventScroll: true });
+            onToggleFavorite(node);
+          }}>
+            <Star size={13} fill="currentColor" strokeWidth={1.8} aria-hidden="true" />
+          </button>
+        )}
 
         <div ref={menuRoot} className="relative shrink-0" data-file-menu-root>
           <button
@@ -618,6 +624,8 @@ export default function DirectoryTree({
   const [moveTargetId, setMoveTargetId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTargetState | null>(null);
   const newMenuRef = useRef<HTMLDivElement>(null);
+  const libraryHeadingRef = useRef<HTMLHeadingElement>(null);
+  const favoriteSummaryRef = useRef<HTMLElement>(null);
   const newFolderLocationRef = useRef<HTMLButtonElement>(null);
   const lastDeleteNodeRef = useRef<FileNode | null>(null);
   const expanded = pinned;
@@ -929,7 +937,7 @@ export default function DirectoryTree({
             <div className="mb-3 flex items-center justify-between gap-2">
               <div className="flex min-w-0 flex-1 items-center gap-2 text-jelly-text">
                 <BookOpen size={16} className="shrink-0 text-jelly-text-muted" strokeWidth={1.8} />
-                <h1 className="shrink-0 text-[15px] font-semibold">知识库</h1>
+                <h1 ref={libraryHeadingRef} tabIndex={-1} className="directory-library-title shrink-0 text-[15px] font-semibold">知识库</h1>
               </div>
               <div className="flex shrink-0 items-center gap-1">
                 <button
@@ -1031,26 +1039,35 @@ export default function DirectoryTree({
       <div className={`flex-1 overflow-y-auto ${expanded ? "directory-node-list py-2" : "px-2 py-3"}`}>
         {expanded && favoriteNotes.length > 0 && (
           <details className="directory-favorites" open>
-            <summary className="directory-favorites-title">
+            <summary ref={favoriteSummaryRef} className="directory-favorites-title">
               <Star size={15} strokeWidth={1.65} aria-hidden="true" />
               收藏
               <ChevronDown className="directory-favorites-chevron" size={14} strokeWidth={1.8} aria-hidden="true" />
             </summary>
             <ul aria-label="收藏的笔记">
               {favoriteNotes.map((note) => (
-                <li key={note.id}>
+                <li key={note.id} className="directory-node-row relative flex min-w-0 items-center">
                   <button
                     type="button"
-                    className="directory-node-open directory-favorite-link"
+                    className="directory-node-open directory-favorite-link relative flex min-w-0 flex-1 items-center"
                     aria-current={selectedFileId === note.id ? "page" : undefined}
-                    title={note.path}
+                    aria-description={note.path !== note.title ? note.path : undefined}
                     onClick={() => {
                       setSelectedFileId(note.id);
                       onFileOpen?.();
                     }}
                   >
                     <FileText size={16} className="directory-node-icon shrink-0" strokeWidth={1.6} aria-hidden="true" />
-                    <span className="min-w-0 truncate">{note.title}</span>
+                    <span className="directory-node-name min-w-0 truncate">{note.title}</span>
+                  </button>
+                  <button type="button" className="directory-node-status directory-node-star" aria-label={`取消收藏 ${note.title}`} onClick={(event) => {
+                    if (event.detail === 0) {
+                      const focusTarget = favoriteNotes.length > 1 ? favoriteSummaryRef.current : libraryHeadingRef.current;
+                      focusTarget?.focus({ preventScroll: true });
+                    }
+                    toggleNodeFavorite(note.id);
+                  }}>
+                    <Star size={13} fill="currentColor" strokeWidth={1.8} aria-hidden="true" />
                   </button>
                 </li>
               ))}

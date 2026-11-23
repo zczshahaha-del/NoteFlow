@@ -2779,16 +2779,14 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
 
   toggleNodePinned: (id) => {
     const node = findNode(get().treeData, id);
+    if (!node) return;
     set((state) => ({ treeData: togglePinned(state.treeData, id) }));
     persistLocalCurrentState();
-    if (!node || node.type !== "file") return;
-    void updateNote(id, {
-      isPinned: !node.pinned,
-      source: "manual_edit",
-      changeSummary: node.pinned ? "取消置顶" : "置顶笔记",
-    }).catch((error) => {
-      set({ workspaceError: error instanceof Error ? error.message : "更新置顶失败" });
-    });
+    if (node.type !== "file") return;
+    const changeSummary = node.pinned ? "取消置顶" : "置顶笔记";
+    runWorkspaceOperation(`pin:${id}`, id, changeSummary, (active) => enqueueNoteMutation(id, () =>
+      active() ? updateNote(id, { isPinned: !node.pinned, source: "manual_edit", changeSummary }) : Promise.resolve(null)
+    ));
   },
 
   toggleNodeFavorite: (id) => {
@@ -2799,22 +2797,28 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
       treeData: updateFileMetadata(state.treeData, id, { favorite: nextFavorite }),
     }));
     persistLocalCurrentState();
-    void updateNote(id, {
-      isFavorite: nextFavorite,
-      source: "manual_edit",
-      changeSummary: nextFavorite ? "收藏笔记" : "取消收藏",
-    })
-      .then((note) => {
-        const current = get();
-        set({ treeData: replaceNoteRecordInTree(current.treeData, note) });
-        persistLocalCurrentState();
-      })
-      .catch((error) => {
+    const changeSummary = nextFavorite ? "收藏笔记" : "取消收藏";
+    runWorkspaceOperation(`favorite:${id}`, id, changeSummary, (active) => enqueueNoteMutation(id, async () => {
+      if (!active()) return null;
+      try {
+        return await updateNote(id, { isFavorite: nextFavorite, source: "manual_edit", changeSummary });
+      } catch (error) {
+        if (active()) {
+          set((state) => ({ treeData: updateFileMetadata(state.treeData, id, { favorite: !nextFavorite }) }));
+          persistLocalCurrentState();
+        }
+        throw error;
+      }
+    }), (note) => {
+      if (note) {
         set((state) => ({
-          treeData: updateFileMetadata(state.treeData, id, { favorite: !nextFavorite }),
-          workspaceError: error instanceof Error ? error.message : "更新收藏失败",
+          treeData: updateFileMetadata(state.treeData, id, {
+            favorite: note.isFavorite,
+            ...(note.updatedAt ? { updatedAt: note.updatedAt } : {}),
+          }),
         }));
-      });
+      }
+    });
   },
 
   setNoteTags: (id, tags) => {
