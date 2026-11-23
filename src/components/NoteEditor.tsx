@@ -4,6 +4,7 @@ import { BubbleMenu } from "@tiptap/react/menus";
 import {
   Bold,
   Code2,
+  Eraser,
   Highlighter,
   Italic,
   Link,
@@ -12,7 +13,6 @@ import {
   Menu,
   MessageSquarePlus,
   Quote,
-  RefreshCw,
   Strikethrough,
   Sparkles,
   Underline as UnderlineIcon,
@@ -231,7 +231,7 @@ function NoteSelectionToolbar({
         <Quote size={15} />
       </SelectionToolbarButton>
       <SelectionToolbarButton label="清除格式" onClick={() => editor.chain().focus().unsetAllMarks().clearNodes().run()}>
-        <RefreshCw size={15} />
+        <Eraser size={15} />
       </SelectionToolbarButton>
     </>
   );
