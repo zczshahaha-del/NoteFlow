@@ -103,6 +103,7 @@ class DraftSectionUpdatePayload(BaseModel):
     content: Optional[str] = None
     status: Optional[str] = None
     source: str = "revise_section"
+    generationKey: Optional[str] = None
 
 
 class DraftAssemblePayload(BaseModel):
@@ -565,6 +566,27 @@ async def update_draft_section(
         draft = await _get_draft(session, user.id, draft_id, for_update=True)
         _require_section_draft(draft)
         section = await _get_section(session, user.id, draft.id, section_id)
+        generation_key = None
+        single_generation = payload.source in {"generate_section", "generation_stopped"}
+        if single_generation:
+            if draft.status in {"saved", "canceled"} or section.deleted_at is not None:
+                raise HTTPException(409, detail="草稿状态已变化，请查看最新章节。")
+            if payload.source == "generate_section" and payload.status == "generating":
+                if draft.status == "generating":
+                    raise HTTPException(409, detail="草稿正在批量生成，请稍后再修改这一章。")
+                generation_key = f"single:{random_id()}"
+            elif (
+                not payload.generationKey
+                or not payload.generationKey.startswith("single:")
+                or section.generation_key != payload.generationKey
+                or section.status != "generating"
+            ):
+                raise HTTPException(409, detail="这次生成已失效，请查看最新章节。")
+            section.generation_key = generation_key
+        elif (section.generation_key or "").startswith("single:"):
+            section.generation_key = None
+            if section.status == "generating" and payload.status is None:
+                section.status = "generated" if section.content.strip() else "outline_only"
         session.add(_make_section_version(section, payload.source))
 
         if payload.title is not None:
@@ -605,7 +627,10 @@ async def update_draft_section(
         draft.updated_at = _now()
         await session.commit()
         await session.refresh(draft)
-        return {"draft": _draft_out(draft, await _get_sections(session, user.id, draft.id))}
+        result = {"draft": _draft_out(draft, await _get_sections(session, user.id, draft.id))}
+        if generation_key:
+            result["generationKey"] = generation_key
+        return result
 
 
 @router.post("/note-drafts/{draft_id}/sections")
@@ -652,10 +677,9 @@ async def generate_draft_section(
     payload: DraftSectionUpdatePayload,
     user: CurrentUser = Depends(get_current_user),
 ):
-    payload.status = payload.status or "generated"
-    if "source" not in payload.model_fields_set:
-        payload.source = "generate_section"
-    return await update_draft_section(draft_id, section_id, payload, user)
+    return await update_draft_section(
+        draft_id, section_id, payload.model_copy(update={"status": "generated", "source": "generate_section"}), user
+    )
 
 
 @router.post("/note-drafts/{draft_id}/sections/{section_id}/confirm")

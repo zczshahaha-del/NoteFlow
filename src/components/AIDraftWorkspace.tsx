@@ -31,11 +31,13 @@ import {
   createDraftSection,
   createNoteDraft,
   deleteDraftSection,
+  DraftSectionConflictError,
   generateAllDraftSections,
   generateDraftSection,
   getNoteDraft,
   restoreDraftSection,
   saveDraftToNotes,
+  startDraftSectionGeneration,
   stopAllDraftSections,
   updateNoteDraft,
   updateDraftSection,
@@ -914,15 +916,13 @@ export default function AIDraftWorkspace() {
       const controller = activeRequestRef.current;
       if (!controller) return null;
       let generated = "";
+      let generationKey: string | undefined;
       patchSection(section.id, { status: "generating", content: "" });
       setSelectedSectionId(section.id);
       setStatusText(`正在生成：${section.title}`);
 
       try {
-        await updateDraftSection(baseDraft.id, section.id, {
-          status: "generating",
-          source: "generate_section",
-        }).catch(() => {});
+        generationKey = await startDraftSectionGeneration(baseDraft.id, section.id);
 
         const rawRequest = rawRequestFromDraft(
           baseDraft,
@@ -961,43 +961,39 @@ export default function AIDraftWorkspace() {
 
         const nextDraft = await generateDraftSection(baseDraft.id, section.id, {
           content: generated.trim(),
-          status: "generated",
-          source: "generate_section",
+          generationKey,
         });
         replaceDraft(nextDraft);
         return nextDraft;
       } catch (error) {
-        if (error instanceof Error && error.name === "AbortError") {
-          const partialContent = generated.trim();
-          const stoppedStatus = partialContent ? "needs_revision" : "outline_only";
-          const stoppedDraft = await updateDraftSection(baseDraft.id, section.id, {
-            content: partialContent,
+        const stopped = error instanceof Error && error.name === "AbortError";
+        const partialContent = generated.trim();
+        const stoppedStatus = partialContent ? "needs_revision" : section.status === "generating" ? "outline_only" : section.status;
+        try {
+          if (!generationKey || error instanceof DraftSectionConflictError) throw error;
+          const updated = await updateDraftSection(baseDraft.id, section.id, stopped ? {
+            generationKey,
+            content: partialContent || section.content,
             status: stoppedStatus,
             source: "generation_stopped",
-          }).catch(() => null);
-          if (stoppedDraft) {
-            replaceDraft(stoppedDraft);
-          } else {
-            patchSection(section.id, {
-              content: partialContent,
-              status: stoppedStatus,
-            });
+          } : { generationKey, status: "failed", source: "generate_section" });
+          replaceDraft(updated);
+          if (stopped) {
+            setStatusText(partialContent ? `${section.title} 已停止生成，已保留当前内容。` : `${section.title} 已停止生成。`);
+            return null;
           }
-          setStatusText(
-            partialContent
-              ? `${section.title} 已停止生成，已保留当前内容。`
-              : `${section.title} 已停止生成。`
-          );
-        } else {
-          patchSection(section.id, { status: "failed" });
-          await updateDraftSection(baseDraft.id, section.id, {
-            status: "failed",
-            source: "generate_section",
-          }).catch(() => {});
-          setErrorText(
-            error instanceof Error ? `${section.title} 生成失败：${error.message}` : "小节生成失败"
-          );
+        } catch (writeError) {
+          const latest = await getNoteDraft(baseDraft.id).catch(() => null);
+          if (latest) replaceDraft(latest);
+          else patchSection(section.id, { status: section.status, content: section.content });
+          if (writeError instanceof DraftSectionConflictError) {
+            setErrorText(writeError.message);
+            return null;
+          }
         }
+        setErrorText(
+          error instanceof Error ? `${section.title} 生成失败：${error.message}` : "小节生成失败"
+        );
         return null;
       }
     },

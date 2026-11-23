@@ -11,7 +11,7 @@ const assets = new URL('../dist/assets/', import.meta.url);
 const cssFile = readdirSync(assets).find(name => /^index-.*\.css$/.test(name));
 assert.ok(cssFile, 'run npm run build first');
 const css = readFileSync(new URL(cssFile, assets), 'utf8');
-const serviceNames = ['assembleNoteDraft','cancelNoteDraft','confirmDraftSection','createDraftSection','createNoteDraft','deleteDraftSection','generateAllDraftSections','generateDraftSection','getNoteDraft','restoreDraftSection','saveDraftToNotes','stopAllDraftSections','updateNoteDraft','updateDraftSection'];
+const serviceNames = ['assembleNoteDraft','cancelNoteDraft','confirmDraftSection','createDraftSection','createNoteDraft','deleteDraftSection','generateAllDraftSections','generateDraftSection','getNoteDraft','restoreDraftSection','saveDraftToNotes','startDraftSectionGeneration','stopAllDraftSections','updateNoteDraft','updateDraftSection'];
 const entry = `import React from 'react'; import {createRoot} from 'react-dom/client';
 import Draft from ${JSON.stringify(component)};
 const root=createRoot(document.getElementById('root'));
@@ -47,7 +47,7 @@ const bundled = await build({configFile:false,logLevel:'silent',plugins:[{
     if(id==='\0offline-draft')return entry;
     if(id==='\0draft-store')return 'export const useDraftSlice=()=>window.draftTest.slice; export const useWorkspaceSlice=()=>window.draftTest.workspace;';
     if(id==='\0draft-mock:../services/drafts')return serviceNames.map(name=>
-      'export const '+name+'=(...args)=>window.draftTest.api.call('+JSON.stringify(name)+',args);').join('\n');
+      'export const '+name+'=(...args)=>window.draftTest.api.call('+JSON.stringify(name)+',args);').concat('export class DraftSectionConflictError extends Error {}').join('\n');
     if(id==='\0draft-mock:../services/aiStream')return 'export const generateNoteStream=()=>{throw new Error("unexpected generation")}';
     if(id==='\0draft-mock:../services/agent')return 'export const bindAgentCheckpoint=async()=>null; export const resolveAgentCheckpoint=async()=>null;';
     if(id==='\0draft-mock:../services/memories')return 'export const isMemoryEnabled=()=>false;';

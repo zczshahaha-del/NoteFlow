@@ -81,13 +81,60 @@ class GeneratedHeadingLifecycleTest(unittest.IsolatedAsyncioTestCase):
         await session.flush()
         return job
 
+    async def start_section(self, draft_id, section_id):
+        result = await drafts.update_draft_section(
+            draft_id, section_id, drafts.DraftSectionUpdatePayload(status="generating", source="generate_section"), self.user,
+        )
+        return result["generationKey"]
+
+    async def finish_section(self, draft_id, section_id, generation_key, content):
+        return await drafts.generate_draft_section(
+            draft_id, section_id, drafts.DraftSectionUpdatePayload(content=content, generationKey=generation_key), self.user,
+        )
+
+    async def test_older_single_section_attempt_cannot_write_or_reset_a_newer_result(self):
+        draft_id = (await self.create())["id"]
+        older_key = await self.start_section(draft_id, "2")
+        newer_key = await self.start_section(draft_id, "2")
+        self.assertNotEqual(older_key, newer_key)
+        with self.assertRaises(HTTPException) as conflict:
+            await self.finish_section(draft_id, "2", older_key, "旧请求提前返回")
+        self.assertEqual(conflict.exception.status_code, 409)
+        await self.finish_section(draft_id, "2", newer_key, "较新的生成结果")
+        for status, source in (("generated", "generate_section"), ("failed", "generate_section"), ("needs_revision", "generation_stopped")):
+            with self.subTest(status=status), self.assertRaises(HTTPException) as conflict:
+                await drafts.update_draft_section(
+                    draft_id, "2", drafts.DraftSectionUpdatePayload(
+                        generationKey=older_key, status=status, source=source, content="迟到的旧结果",
+                    ), self.user,
+                )
+            self.assertEqual(conflict.exception.status_code, 409)
+        with self.assertRaises(HTTPException) as conflict:
+            await self.finish_section(draft_id, "2", None, "旧客户端未提供生成标识")
+        self.assertEqual(conflict.exception.status_code, 409)
+        result = await drafts.get_draft(draft_id, self.user)
+        section = next(section for section in result["draft"]["sections"] if section["id"] == "2")
+        self.assertEqual(section["status"], "generated")
+        self.assertIn("较新的生成结果", section["content"])
+
+    async def test_manual_section_change_invalidates_pending_generation(self):
+        draft_id = (await self.create())["id"]
+        generation_key = await self.start_section(draft_id, "2")
+        await drafts.update_draft_section(draft_id, "2", drafts.DraftSectionUpdatePayload(content="手动修改"), self.user)
+        with self.assertRaises(HTTPException) as conflict:
+            await self.finish_section(draft_id, "2", generation_key, "模型旧内容")
+        self.assertEqual(conflict.exception.status_code, 409)
+        result = await drafts.get_draft(draft_id, self.user)
+        self.assertEqual(result["draft"]["sections"][2]["content"], "手动修改")
+
     async def test_outline_chapter_assembly_save_and_manual_delete_reopen(self):
         draft = await self.create()
         self.assertIn("## 1. 基础", draft["outline"])
         self.assertIn("## 3. 运行", draft["outline"])
         self.assertEqual([s["title"] for s in draft["sections"]], ["基础", "安装", "运行"])
         self.assertEqual(draft["sections"][2]["outlineText"], "## 3. 运行")
-        generated = await drafts.update_draft_section(draft["id"], "2", drafts.DraftSectionUpdatePayload(content="## 一、运行\n\n### 9.1 示例\n\n```md\n## 一、代码\n```", source="generate_section", status="generated"), self.user)
+        generation_key = await self.start_section(draft["id"], "2")
+        generated = await self.finish_section(draft["id"], "2", generation_key, "## 一、运行\n\n### 9.1 示例\n\n```md\n## 一、代码\n```")
         section_content = next(s["content"] for s in generated["draft"]["sections"] if s["id"] == "2")
         self.assertIn("## 3. 运行", section_content)
         self.assertIn("### 3.1 示例", section_content)
@@ -170,7 +217,8 @@ class GeneratedHeadingLifecycleTest(unittest.IsolatedAsyncioTestCase):
     async def test_explicit_workspace_reorder_reforms_numbers_and_keeps_section_versions(self):
         draft = await self.create()
         for section in draft["sections"]:
-            await drafts.update_draft_section(draft["id"], section["id"], drafts.DraftSectionUpdatePayload(content=f'## {section["title"]}\n\n### 示例\n\n正文', source="generate_section", status="generated"), self.user)
+            generation_key = await self.start_section(draft["id"], section["id"])
+            await self.finish_section(draft["id"], section["id"], generation_key, f'## {section["title"]}\n\n### 示例\n\n正文')
         result = await drafts.update_draft(draft["id"], drafts.DraftUpdatePayload(sectionOrder=["2", "0", "1"]), self.user)
         sections = result["draft"]["sections"]
         self.assertEqual(sections[0]["id"], "2")

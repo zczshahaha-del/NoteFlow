@@ -64,9 +64,10 @@ const vite = await createServer({
       if (id === '\0draft-lifecycle-memory') return 'export const isMemoryEnabled=()=>false;';
       if (id === '\0draft-lifecycle-services') return [
         'export const createNoteDraft=p=>globalThis.draftLifecycle.create(p);',
+        'export class DraftSectionConflictError extends Error {}',
         ...['assembleNoteDraft','cancelNoteDraft','confirmDraftSection','createDraftSection','deleteDraftSection',
           'generateAllDraftSections','generateDraftSection','getNoteDraft','restoreDraftSection','saveDraftToNotes',
-          'stopAllDraftSections','updateNoteDraft','updateDraftSection']
+          'startDraftSectionGeneration','stopAllDraftSections','updateNoteDraft','updateDraftSection']
           .map(name => `export const ${name}=()=>{throw new Error('unexpected service: ${name}')};`),
       ].join('\n');
     },
