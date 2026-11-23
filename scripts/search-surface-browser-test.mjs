@@ -52,8 +52,11 @@ try {
       const buttons=[...panel.querySelectorAll('button')];
       return { x:p.x,y:p.y,width:p.width,height:p.height,right:p.right,bottom:p.bottom,viewHeight:innerHeight,docWidth:document.documentElement.scrollWidth,bodyHeight:v.height,bodyScroll:viewport.scrollHeight,bodyClient:viewport.clientHeight,font:getComputedStyle(input).fontSize,border:s.borderWidth,radius:s.borderRadius,minButton:Math.min(...buttons.map(b=>b.getBoundingClientRect().height)),background:s.backgroundColor,clipped:buttons.some(b=>{const r=b.getBoundingClientRect();return r.width && (r.left<p.left || r.right>p.right)}) };
     });
-    const initial=await geometry(); assert.equal(initial.width, Math.min(580,width-(width<=480?24:32))); assert.ok(initial.height<(mobile?210:170));
+    const initial=await geometry(); assert.equal(initial.width, Math.min(580,width-(width<=480?24:32))); assert.ok(initial.height<90);
     assert.equal(initial.bodyClient,0,'The initial state has no redundant description area or scrollbar');
+    assert.equal(await page.getByRole('group',{name:'搜索范围'}).count(),0);
+    assert.equal(await page.locator('.nf-search-dialog button').count(),1);
+    assert.equal(await page.locator('.nf-search-dialog kbd').count(),0);
     assert.equal(initial.border,'0px'); assert.equal(initial.radius,'18px'); assert.equal(initial.font,mobile?'16px':'15px');
     assert.equal(initial.docWidth,width); assert.equal(initial.clipped,false); if(mobile) assert.ok(initial.minButton>=44);
     assert.equal(await page.evaluate(()=>document.getElementById('root').inert), true);
@@ -66,12 +69,14 @@ try {
       await page.locator('.nf-search-dialog').screenshot({path:process.env.NOTEFLOW_SEARCH_SCREENSHOT_DIR+'/search-panel-'+width+'-initial.png'});
     }
     await page.locator('.nf-search-input').fill('Redis');
+    await page.getByRole('group',{name:'搜索范围'}).waitFor();
     await page.waitForFunction(()=>window.searchTest.pending.length===1);
     assert.equal(await page.locator('[role="status"]').count(),1); assert.equal(await page.locator('.nf-search-summary').textContent(),'');
     await page.evaluate((rows)=>window.searchTest.resolve(rows), [row(0),{...row(0),sectionId:'second-hit'},row(1)]);
     await page.waitForFunction(()=>document.querySelectorAll('[role="option"]').length===2); await page.waitForTimeout(250);
     const results=await geometry(); assert.equal(results.y,initial.y); assert.ok(results.height>initial.height); assert.ok(results.bottom<=results.viewHeight-15); assert.equal(results.clipped,false);
     assert.equal(await page.locator('.nf-search-summary').textContent(),'2 篇笔记 · 3 处命中');
+    assert.ok(await page.locator('.nf-search-summary').evaluate(node=>node.classList.contains('sr-only')));
     assert.equal(await page.locator('[role="status"]').count(),0);
     assert.equal(await page.locator('.nf-search-location').first().textContent(),'知识库 / 缓存基础 · 创建于 2026-09-10');
     assert.equal(await page.locator('.nf-search-location').nth(1).textContent(),'知识库 / 缓存基础','Missing creation time must not fall back to update time');

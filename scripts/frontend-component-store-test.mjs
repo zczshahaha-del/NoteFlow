@@ -1487,10 +1487,13 @@ try {
   assert.equal(searchSurface().querySelector('#library-search-hint').textContent, '输入笔记标题、章节名或正文关键词。');
   assert.equal(searchSurface().querySelector('.nf-search-input').getAttribute('aria-describedby'), 'library-search-hint');
   assert.equal(searchSurface().querySelectorAll('svg').length, 2);
-  assert.equal(searchSurface().querySelector('.nf-search-scope').textContent, '全部');
+  assert.equal(searchSurface().querySelector('.nf-search-scope'), null);
+  assert.equal(searchSurface().querySelectorAll('kbd').length, 0);
+  assert.equal(surfaceInput().placeholder, '搜索笔记');
 
   await setSearchQuery('Redis');
-  assert.equal(searchSurface().querySelectorAll('[role="status"]').length, 1);
+  assert.equal(searchSurface().querySelectorAll('[role="status"]').length, 0);
+  assert.equal(searchSurface().querySelector('.nf-search-scope').textContent, '全部');
   assert.equal(searchSurface().querySelector('.nf-search-summary').textContent, '');
   assert.equal(pendingSearches.length, 0);
   await debounceSearch();
@@ -1541,13 +1544,13 @@ try {
   assert.equal(searchSurface().querySelectorAll('[role="option"]').length, 0);
   await act(async () => current.resolve({ results: [] }));
   assert.match(searchSurface().querySelector('[role="status"]').textContent, /没有找到“新查询”/);
-  assert.equal(searchSurface().querySelector('.nf-search-summary').textContent, '0 篇笔记 · 0 处命中');
+  assert.equal(searchSurface().querySelector('.nf-search-summary').textContent, '');
   await surfaceClick([...searchSurface().querySelectorAll('.nf-search-scope')].find((node) => node.textContent === '标题'));
   await debounceSearch();
   const titleSearch = pendingSearches.at(-1);
   assert.equal(titleSearch.options.scope, 'title');
   await act(async () => titleSearch.reject(new Error('合成网络错误')));
-  assert.match(searchSurface().querySelector('[role="alert"]').textContent, /搜索没有完成.*合成网络错误.*重新搜索/);
+  assert.match(searchSurface().querySelector('[role="alert"]').textContent, /^合成网络错误重新搜索$/);
   await surfaceClick(searchSurface().querySelector('.nf-search-retry'));
   await debounceSearch();
   assert.equal(pendingSearches.at(-1).query, '新查询');
@@ -1561,13 +1564,12 @@ try {
   assert.equal(searchSurface().querySelectorAll('img').length, 0);
 
   await act(async () => surfaceInput().dispatchEvent(new dom.window.CompositionEvent('compositionstart', { bubbles: true })));
-  assert.equal(searchSurface().querySelectorAll('[role="status"]').length, 1);
+  assert.equal(searchSurface().querySelectorAll('[role="status"]').length, 0);
   await surfaceKey(surfaceInput(), 'Escape', { isComposing: true });
   assert.equal(surfaceOpen, true);
   await surfaceClick(searchSurface().querySelector('.nf-search-close'));
   assert.equal(surfaceOpen, false);
   surfaceOpen = true; await act(async () => renderSearchSurface());
-  assert.notEqual(searchSurface().querySelector('[role="status"]')?.textContent, '继续完成输入');
   await surfaceKey(surfaceInput(), 'Escape');
   assert.equal(surfaceOpen, false, 'pointer-close / quick-reopen must not keep a stale IME lock');
   surfaceOpen = true; await act(async () => renderSearchSurface());
@@ -1582,6 +1584,8 @@ try {
   assert.equal(document.body.style.overflow, '');
   surfaceOpen = true; await act(async () => renderSearchSurface());
   assert.equal(surfaceInput().value, '');
+  assert.equal(searchSurface().querySelector('[aria-pressed="true"]'), null);
+  await setSearchQuery('重新打开');
   assert.equal(searchSurface().querySelector('[aria-pressed="true"]').textContent, '全部');
   const originalMatchMedia = window.matchMedia;
   window.matchMedia = () => ({ matches: true });

@@ -147,9 +147,7 @@ function groupSnippet(group: SearchResultGroup): string {
   const contentMatch =
     group.matches.find((source) => source.sectionId && sourceHasChannel(source, "content")) ??
     group.matches.find((source) => sourceHasChannel(source, "content"));
-  if (contentMatch?.snippet) return contentMatch.snippet;
-  if (group.primary.sectionTitle) return `章节标题：${group.primary.sectionTitle}`;
-  return "笔记标题中包含这个关键词";
+  return contentMatch?.snippet ?? "";
 }
 
 export default function LibrarySearchDialog({
@@ -458,8 +456,9 @@ export default function LibrarySearchDialog({
 
   if (!visible) return null;
 
+  const hasQuery = Boolean(inputValue.trim());
   const resultSummary =
-    normalizedQuery && resultsAreCurrent && !compositionActive && !loading && !searchPending && !errorText
+    normalizedQuery && resultsAreCurrent && groups.length > 0 && !compositionActive && !loading && !searchPending && !errorText
       ? `${groups.length} 篇笔记 · ${results.length} 处命中`
       : "";
 
@@ -492,7 +491,7 @@ export default function LibrarySearchDialog({
             onCompositionEnd={handleCompositionEnd}
             onKeyDown={handleInputKeyDown}
             className="nf-search-input"
-            placeholder="搜索标题、章节和正文"
+            placeholder="搜索笔记"
             aria-label="搜索全部笔记"
             aria-describedby="library-search-hint"
             role="combobox"
@@ -523,7 +522,7 @@ export default function LibrarySearchDialog({
           </button>
         </div>
 
-        <div className="nf-search-controls">
+        {hasQuery && (
           <div className="nf-search-scopes" role="group" aria-label="搜索范围">
             {SEARCH_SCOPES.map((option) => {
               const active = option.value === scope;
@@ -540,27 +539,18 @@ export default function LibrarySearchDialog({
               );
             })}
           </div>
-          <p className="nf-search-summary" aria-live="polite">
-            {resultSummary}
-          </p>
-        </div>
+        )}
+        <p className="nf-search-summary sr-only" aria-live="polite">{resultSummary}</p>
 
         <div className="nf-search-viewport" style={{ height: contentHeight }}>
           <div ref={bodyRef} className="nf-search-body">
-          {!inputValue.trim() ? null : compositionActive ? (
-            <div className="nf-search-wait" role="status">继续完成输入</div>
-          ) : searchPending ? (
-            <div className="nf-search-wait" role="status">
-              等待输入完成…
-            </div>
-          ) : loading ? (
+          {!hasQuery || compositionActive || searchPending ? null : loading ? (
             <div className="nf-search-wait" role="status">
               <span className="nf-search-dot" aria-hidden="true" />正在搜索…
             </div>
           ) : errorText ? (
             <div className="nf-search-empty" role="alert">
-              <p className="nf-search-empty-title nf-search-error">搜索没有完成</p>
-              <p className="nf-search-empty-detail">{errorText}</p>
+              <p className="nf-search-error">{errorText}</p>
               <button
                 type="button"
                 className="nf-search-retry"
@@ -570,13 +560,10 @@ export default function LibrarySearchDialog({
                 重新搜索
               </button>
             </div>
-          ) : groups.length === 0 ? (
+          ) : !resultsAreCurrent ? null : groups.length === 0 ? (
             <div className="nf-search-empty" role="status">
               <p className="nf-search-empty-title">
                 没有找到“{normalizedQuery}”
-              </p>
-              <p className="nf-search-empty-detail">
-                可以缩短关键词，或切换到“全部”查看标题和正文
               </p>
             </div>
           ) : (
@@ -612,9 +599,11 @@ export default function LibrarySearchDialog({
                       <span className="nf-search-location">
                         {location}{createdDate && ` · 创建于 ${createdDate}`}
                       </span>
-                      <span className="nf-search-snippet">
-                        {highlightTerms(snippets[index], normalizedQuery)}
-                      </span>
+                      {snippets[index] && (
+                        <span className="nf-search-snippet">
+                          {highlightTerms(snippets[index], normalizedQuery)}
+                        </span>
+                      )}
                       {group.matches.length > 1 && (
                         <span className="nf-search-more">
                           另有 {group.matches.length - 1} 处命中
@@ -627,10 +616,6 @@ export default function LibrarySearchDialog({
             </div>
           )}
           </div>
-        </div>
-        <div className="nf-search-footer">
-          <span className="nf-search-key-hint"><kbd>↑</kbd><kbd>↓</kbd><span>选择</span><kbd>Enter</kbd><span>打开</span></span>
-          <span className="nf-search-key-hint"><kbd>Esc</kbd><span>关闭</span></span>
         </div>
       </section>
     </div>,
