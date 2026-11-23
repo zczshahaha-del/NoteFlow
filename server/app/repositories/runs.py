@@ -15,9 +15,10 @@ class RunRepository(Repository):
         )
         return await self.session.scalar(statement.with_for_update() if for_update else statement)
 
-    async def get_run(self, user_id: str, run_id: str) -> AgentRun | None:
+    async def get_run(self, user_id: str, run_id: str, *, for_update: bool = False) -> AgentRun | None:
         user_id = require_user_id(user_id)
-        return await self.session.scalar(select(AgentRun).where(AgentRun.id == run_id, AgentRun.user_id == user_id))
+        statement = select(AgentRun).where(AgentRun.id == run_id, AgentRun.user_id == user_id)
+        return await self.session.scalar(statement.with_for_update() if for_update else statement)
 
     async def get_session(self, user_id: str, session_id: str, *, active_only: bool = True) -> ChatSession | None:
         user_id = require_user_id(user_id)

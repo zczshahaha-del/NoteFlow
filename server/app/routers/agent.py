@@ -3,10 +3,13 @@ from __future__ import annotations
 import logging
 import re
 import time
-from typing import Any, Optional
+from contextlib import aclosing
+from typing import Any, AsyncGenerator, Optional
 
+import anyio
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from starlette.types import Receive, Scope, Send
 from app.config import cfg
 from app.database import AsyncSessionLocal
 from app.deps import CurrentUser, get_current_user, redis_rate_limit
@@ -70,6 +73,47 @@ from app.services.selection_context import SELECTION_LIMIT, has_selection_scope,
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 logger = logging.getLogger(__name__)
+_active_chat_streams: dict[tuple[str, str], anyio.CancelScope] = {}
+
+
+class _ChatStreamResponse(StreamingResponse):
+    def __init__(self, body: AsyncGenerator[str, None], *, user_id: str, run_id: str):
+        super().__init__(
+            body, media_type="text/event-stream; charset=utf-8",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+        )
+        self.run_key = (user_id, run_id)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        completed = False
+        try:
+            # Watch disconnects even while no model tokens are ready to send.
+            async with anyio.create_task_group() as tasks:
+                _active_chat_streams[self.run_key] = tasks.cancel_scope
+
+                async def stream():
+                    nonlocal completed
+                    try:
+                        async with aclosing(self.body_iterator):
+                            await self.stream_response(send)
+                        completed = True
+                    except OSError:
+                        pass  # The client can disconnect during a send.
+                    finally:
+                        tasks.cancel_scope.cancel()
+
+                tasks.start_soon(stream)
+                await self.listen_for_disconnect(receive)
+                tasks.cancel_scope.cancel()
+        finally:
+            _active_chat_streams.pop(self.run_key, None)
+            if not completed:
+                with anyio.CancelScope(shield=True):
+                    try:
+                        user_id, run_id = self.run_key
+                        await RunService().cancel(user_id, run_id, "client_disconnected", cancel_checkpoints=False)
+                    except Exception:
+                        logger.exception("Could not settle disconnected chat run %s", self.run_key[1])
 
 
 def _event_delta_text(data: dict[str, Any]) -> str:
@@ -108,6 +152,7 @@ def _langgraph_response(
         context_mode: Optional[str] = None
         failed = False
         error_message = ""
+        done_event = _agent_done_event(session_id, run_id)
         with trace_scope(
             trace_id=run_state.get("trace_id") or "",
             session_id=session_id, run_id=run_id, node="langgraph",
@@ -122,8 +167,11 @@ def _langgraph_response(
             )
             yield _sse_format(trace)
             try:
-                async with postgres_checkpointer() as saver:
-                    async for event in stream_readonly_graph(state, checkpointer=saver):
+                async with (
+                    postgres_checkpointer() as saver,
+                    aclosing(stream_readonly_graph(state, checkpointer=saver)) as events,
+                ):
+                    async for event in events:
                         data = event.to_wire()
                         if event.type == "agent_session":
                             data.setdefault("intent", intent)
@@ -137,20 +185,24 @@ def _langgraph_response(
                         elif event.type == "agent_error":
                             failed = True
                             error_message = str(data.get("message") or "LangGraph failed")
+                        elif event.type == "agent_done":
+                            done_event = data
+                            continue
                         yield _sse_format(data)
             except Exception as exc:
                 failed = True
                 error_message = public_error_message(exc)
                 yield _sse_format(_agent_error_event(session_id, run_id, error_message))
-                yield _sse_format(_agent_done_event(session_id, run_id, "failed"))
 
             answer = "".join(answer_parts).strip()
-            await _finish_agent_run(
+            status = "failed" if failed else "completed"
+            committed = await _finish_agent_run(
                 user_id=user_id, session_id=session_id, run_id=run_id,
-                status="failed" if failed else "completed", answer=answer,
+                status=status, answer=answer,
                 context_mode=context_mode, sources=sources,
                 error_message=error_message or None,
             )
+            yield _sse_format({**done_event, "status": status if committed else "cancelled"})
             yield "data: [DONE]\n\n"
 
     return StreamingResponse(
@@ -271,7 +323,7 @@ def _terminal_turn_response(
             yield _sse_format(_agent_error_event(session_id, run_id, answer))
         else:
             yield _sse_format(_choice_delta(answer))
-        await _finish_agent_run(
+        committed = await _finish_agent_run(
             user_id=user_id,
             session_id=session_id,
             run_id=run_id,
@@ -279,7 +331,7 @@ def _terminal_turn_response(
             answer="" if status == "failed" else answer,
             error_message=answer if status == "failed" else None,
         )
-        yield _sse_format(_agent_done_event(session_id, run_id, status))
+        yield _sse_format(_agent_done_event(session_id, run_id, status if committed else "cancelled"))
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(
@@ -507,6 +559,9 @@ async def cancel_run(
     if not await RunService().cancel(user.id, run_id, payload.reason):
         return {"task": None}
 
+    active = _active_chat_streams.get((user.id, run_id))
+    if active is not None:
+        active.cancel()
     return await _agent_task_snapshot(user.id, run_id=run_id)
 
 
@@ -546,12 +601,7 @@ async def resolve_checkpoint(
     return {"checkpoint": checkpoint}
 
 
-@router.post("/chat")
-async def chat(
-    payload: AgentChatPayload,
-    user: CurrentUser = Depends(redis_rate_limit("agent-chat", cfg.AI_RATE_LIMIT)),
-):
-    page_state_dict = _page_state_dict(payload.pageState) or {}
+def _prepare_chat_payload(payload: AgentChatPayload) -> AgentChatPayload:
     if payload.pageState and payload.pageState.contextScope == "none" and payload.mode != "ask_notes":
         payload = payload.model_copy(update={
             "documentTitle": "", "documentContent": "",
@@ -560,7 +610,7 @@ async def chat(
                 "selectionContext": None, "unsavedContent": "", "dirty": False,
             }),
         })
-        page_state_dict = _page_state_dict(payload.pageState) or {}
+    page_state_dict = _page_state_dict(payload.pageState) or {}
     selection_scope = has_selection_scope(page_state_dict)
     if payload.pageState and (selection_scope or whole_note_id(page_state_dict, payload.question)):
         if selection_scope and len(payload.pageState.selectedText.strip()) > SELECTION_LIMIT:
@@ -572,8 +622,38 @@ async def chat(
             "documentContent": "",
             "pageState": payload.pageState.model_copy(update={"unsavedContent": ""}),
         })
-        page_state_dict = _page_state_dict(payload.pageState) or {}
+    return payload
+
+
+@router.post("/chat", name="chat")
+async def stream_chat_turn(
+    payload: AgentChatPayload,
+    user: CurrentUser = Depends(redis_rate_limit("agent-chat", cfg.AI_RATE_LIMIT)),
+):
+    payload = _prepare_chat_payload(payload)
     run_state = await _start_agent_run(payload, user.id, "planning")
+
+    async def stream():
+        try:
+            response = await chat(payload, user, run_state=run_state)
+        except Exception as exc:
+            logger.exception("Chat preparation failed for run %s", run_state["run_id"])
+            response = _terminal_turn_response(
+                user_id=user.id, run_state=run_state, intent="unknown",
+                answer=public_error_message(exc), status="failed",
+            )
+        async with aclosing(response.body_iterator) as body:
+            async for frame in body:
+                yield frame
+
+    return _ChatStreamResponse(stream(), user_id=user.id, run_id=run_state["run_id"])
+
+
+async def chat(payload: AgentChatPayload, user: CurrentUser, *, run_state: dict | None = None):
+    if run_state is None:
+        payload = _prepare_chat_payload(payload)
+        run_state = await _start_agent_run(payload, user.id, "planning")
+    page_state_dict = _page_state_dict(payload.pageState) or {}
     session_id = run_state["session_id"]
     run_id = run_state["run_id"]
     route_step_id = run_state["route_step_id"]
@@ -1002,12 +1082,13 @@ async def chat(
                 )
                 ai_started = time.perf_counter()
                 try:
-                    async for chunk in stream_chat(chat_req):
-                        choice = (chunk.get("choices") or [{}])[0]
-                        delta = ((choice.get("delta") or {}).get("content")) or ""
-                        if delta:
-                            answer_parts.append(delta)
-                        yield _sse_format(chunk)
+                    async with aclosing(stream_chat(chat_req)) as chunks:
+                        async for chunk in chunks:
+                            choice = (chunk.get("choices") or [{}])[0]
+                            delta = ((choice.get("delta") or {}).get("content")) or ""
+                            if delta:
+                                answer_parts.append(delta)
+                            yield _sse_format(chunk)
                 except ValueError as e:
                     if "not configured" not in str(e).lower():
                         raise
@@ -1176,12 +1257,13 @@ async def chat(
                 answer_parts: list[str] = []
                 ai_started = time.perf_counter()
                 try:
-                    async for chunk in stream_chat(chat_req):
-                        choice = (chunk.get("choices") or [{}])[0]
-                        delta = ((choice.get("delta") or {}).get("content")) or ""
-                        if delta:
-                            answer_parts.append(delta)
-                        yield _sse_format(chunk)
+                    async with aclosing(stream_chat(chat_req)) as chunks:
+                        async for chunk in chunks:
+                            choice = (chunk.get("choices") or [{}])[0]
+                            delta = ((choice.get("delta") or {}).get("content")) or ""
+                            if delta:
+                                answer_parts.append(delta)
+                            yield _sse_format(chunk)
                 except ValueError as e:
                     if "not configured" not in str(e).lower():
                         raise
@@ -1531,12 +1613,13 @@ async def chat(
 
             started = time.perf_counter()
             try:
-                async for chunk in stream_chat(chat_req):
-                    choice = (chunk.get("choices") or [{}])[0]
-                    delta = ((choice.get("delta") or {}).get("content")) or ""
-                    if delta:
-                        answer_parts.append(delta)
-                    yield _sse_format(chunk)
+                async with aclosing(stream_chat(chat_req)) as chunks:
+                    async for chunk in chunks:
+                        choice = (chunk.get("choices") or [{}])[0]
+                        delta = ((choice.get("delta") or {}).get("content")) or ""
+                        if delta:
+                            answer_parts.append(delta)
+                        yield _sse_format(chunk)
             except ValueError as e:
                 if "not configured" not in str(e).lower():
                     raise
@@ -1618,8 +1701,9 @@ async def chat(
             run_id=run_id,
             node="agent_stream",
         ):
-            async for frame in _stream_impl():
-                yield frame
+            async with aclosing(_stream_impl()) as frames:
+                async for frame in frames:
+                    yield frame
 
     return StreamingResponse(
         _stream(),

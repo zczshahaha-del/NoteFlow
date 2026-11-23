@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import aclosing, asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional, TypedDict
 from urllib.parse import quote
+
+import anyio
 
 from app.agent.contracts import RuntimeEvent
 from app.config import cfg
@@ -131,8 +133,9 @@ async def _default_answer_stream(state: ReadonlyAgentState) -> AsyncIterator[dic
         history=history,
         strict_note_answer=bool(state.get("requires_sources")),
     )
-    async for chunk in provider.stream(request):
-        yield chunk
+    async with aclosing(provider.stream(request)) as chunks:
+        async for chunk in chunks:
+            yield chunk
 
 
 async def _default_memory_write(state: ReadonlyAgentState) -> int:
@@ -322,15 +325,16 @@ def build_readonly_graph(
             return {"answer": text}
         parts: list[str] = []
         try:
-            async for chunk in deps.answer_stream(state):
-                if chunk.get("type") in {"stream_error", "agent_error"}:
-                    return {
-                        "error_code": str(chunk.get("code") or "ai_stream_failed"),
-                        "error_message": str(chunk.get("message") or "AI 流式回答失败"),
-                        "status": "failed",
-                    }
-                parts.append(_chunk_text(chunk))
-                await deps.emit(RuntimeEvent.from_wire(chunk))
+            async with aclosing(deps.answer_stream(state)) as chunks:
+                async for chunk in chunks:
+                    if chunk.get("type") in {"stream_error", "agent_error"}:
+                        return {
+                            "error_code": str(chunk.get("code") or "ai_stream_failed"),
+                            "error_message": str(chunk.get("message") or "AI 流式回答失败"),
+                            "status": "failed",
+                        }
+                    parts.append(_chunk_text(chunk))
+                    await deps.emit(RuntimeEvent.from_wire(chunk))
             answer_text = "".join(parts)
             if state.get("requires_sources") or state.get("context_mode") == "note_excerpt":
                 cleaned, validation = validate_citation_indexes(
@@ -474,7 +478,10 @@ async def stream_readonly_graph(
                 break
             yield item  # type: ignore[misc]
     finally:
-        await task
+        if not task.done():
+            task.cancel()
+        with anyio.CancelScope(shield=True):
+            await asyncio.gather(task, return_exceptions=True)
 
 
 def postgres_checkpoint_uri() -> str:

@@ -15,6 +15,7 @@ from app.models.db import (
     ChatSession,
 )
 from app.schemas.agent import AgentChatPayload
+from app.repositories.runs import RunRepository
 from app.observability.context import current_trace
 from app.services.observability import record_metric
 
@@ -191,15 +192,16 @@ async def finish_agent_run(
     sources: Optional[list[dict]] = None,
     error_message: Optional[str] = None,
     message_metadata: Optional[dict] = None,
-) -> None:
+) -> bool:
     now = datetime.utcnow()
     async with AsyncSessionLocal() as db:
-        run = await db.get(AgentRun, run_id)
-        if run is not None and run.user_id == user_id and run.status != "cancelled":
-            run.status = status
-            run.output_text = answer
-            run.error_message = error_message
-            run.finished_at = now
+        run = await RunRepository(db).get_run(user_id, run_id, for_update=True)
+        if run is None or run.session_id != session_id or run.status != "running":
+            return False
+        run.status = status
+        run.output_text = answer
+        run.error_message = error_message
+        run.finished_at = now
 
         result = await db.execute(
             select(ChatSession).where(ChatSession.id == session_id, ChatSession.user_id == user_id)
@@ -209,7 +211,7 @@ async def finish_agent_run(
             chat_session.last_message_at = now
             chat_session.updated_at = now
 
-        retry_of_run_id = (run.metadata_json or {}).get("retryOfRunId") if run is not None else None
+        retry_of_run_id = (run.metadata_json or {}).get("retryOfRunId")
         db.add(
             DbChatMessage(
                 id=_new_id(),
@@ -227,3 +229,4 @@ async def finish_agent_run(
         )
         await db.commit()
     record_metric("agent", "run_finished", status=status)
+    return True

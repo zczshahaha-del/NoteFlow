@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import aclosing
 from typing import AsyncIterator
 
 from app.providers.contracts import ChatProviderRequest
@@ -25,5 +26,6 @@ class DeepSeekChatModelProvider:
             temperature=request.temperature,
             strictNoteAnswer=request.strict_note_answer,
         )
-        async for chunk in stream_chat(payload):
-            yield chunk
+        async with aclosing(stream_chat(payload)) as chunks:
+            async for chunk in chunks:
+                yield chunk

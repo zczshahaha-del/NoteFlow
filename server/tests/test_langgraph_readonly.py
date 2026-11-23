@@ -54,6 +54,27 @@ class FakeReadonlyTools:
 
 
 class LangGraphReadonlyTest(unittest.TestCase):
+    def test_closing_runtime_stream_cancels_the_model(self):
+        async def run():
+            closed = asyncio.Event()
+
+            async def answer(_state):
+                try:
+                    yield {"choices": [{"delta": {"content": "partial"}}]}
+                    await asyncio.Event().wait()
+                finally:
+                    closed.set()
+
+            state = new_readonly_state(user_id="owner", question="test", mode="chat", memory_enabled=False)
+            events = stream_readonly_graph(state, dependencies=ReadonlyGraphDependencies(answer_stream=answer))
+            async for event in events:
+                if event.type == "choices":
+                    break
+            await asyncio.wait_for(events.aclose(), timeout=1)
+            self.assertTrue(closed.is_set())
+
+        asyncio.run(run())
+
     def test_removed_note_reference_does_not_run_note_retrieval(self) -> None:
         tools = FakeReadonlyTools()
         state = new_readonly_state(

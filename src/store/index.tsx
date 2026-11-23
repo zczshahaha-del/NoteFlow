@@ -291,6 +291,7 @@ function newChatMessageMetadata(): Pick<ChatMessage, "id" | "createdAt"> {
 }
 let nodeCounter = 0;
 let generationAbortController: AbortController | null = null;
+let generationRunId: string | null = null;
 const noteSaveTimers = new Map<string, ReturnType<typeof window.setTimeout>>();
 const indexJobPollTimers = new Map<string, ReturnType<typeof window.setTimeout>>();
 const noteSavesInFlight = new Map<string, Promise<void>>();
@@ -1899,6 +1900,7 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
     generationAbortController?.abort();
     const abortController = new AbortController();
     generationAbortController = abortController;
+    generationRunId = null;
     const isCurrentReply = () => generationAbortController === abortController && !abortController.signal.aborted;
 
     const userMsg: ChatMessage = {
@@ -1934,6 +1936,7 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
     try {
       const previewId = get().activeEditPreview?.id ?? editPreviewIdFromCheckpoint(get().pendingCheckpoint);
       if (previewId) await get().flushEditPreviewDraft(previewId);
+      abortController.signal.throwIfAborted();
       const latest = get();
       const selectedFile = latest.selectedFileId
         ? findFileById(latest.treeData, latest.selectedFileId)
@@ -2293,6 +2296,7 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
         },
         onAgentSession: (session) => {
           if (!isCurrentReply()) return;
+          generationRunId = session.runId;
           set((current) => ({
             agentSessionId: session.sessionId,
             agentTask: {
@@ -2451,6 +2455,7 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
     } finally {
       if (generationAbortController === abortController) {
         generationAbortController = null;
+        generationRunId = null;
         set((current) => ({
           chatLoading: false,
           chatMessages: current.chatMessages.map(message =>
@@ -2469,11 +2474,9 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
   },
 
   stopGeneration: () => {
-    const current = get();
-    const runId =
-      current.agentTask?.run.id ??
-      [...current.chatMessages].reverse().find((message) => message.agentRunId)?.agentRunId;
+    const runId = generationRunId;
     generationAbortController?.abort();
+    generationRunId = null;
     set((state) => ({
       chatLoading: false,
       chatMessages: state.chatMessages.map(message =>
@@ -2484,7 +2487,7 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
     if (runId) {
       void cancelAgentRun(runId)
         .then((task) => {
-          if (task) {
+          if (task && !get().chatLoading && get().agentTask?.run.id === runId) {
             set({
               agentTask: task,
               pendingCheckpoint: task.checkpoint ?? null,
@@ -2975,6 +2978,7 @@ export function AppProvider({
       active = false;
       generationAbortController?.abort();
       generationAbortController = null;
+      generationRunId = null;
       clearScheduledNoteSave();
     };
   }, [userId]);

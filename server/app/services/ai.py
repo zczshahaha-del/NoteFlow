@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import asyncio
+from contextlib import aclosing
 from dataclasses import dataclass, field
 from typing import AsyncIterator
 
@@ -240,11 +241,12 @@ async def stream_chat(payload: ChatRequest) -> AsyncIterator[dict]:
         parts: list[str] = []
         started = asyncio.get_running_loop().time()
         try:
-            async for chunk in _stream_deepseek(body):
-                text = _delta_text(chunk)
-                if text:
-                    parts.append(text)
-                yield chunk
+            async with aclosing(_stream_deepseek(body)) as chunks:
+                async for chunk in chunks:
+                    text = _delta_text(chunk)
+                    if text:
+                        parts.append(text)
+                    yield chunk
         except Exception:
             record_provider_usage("deepseek", "chat", failed=True)
             record_metric("provider", "chat", status="failed", duration_ms=(asyncio.get_running_loop().time() - started) * 1000)
