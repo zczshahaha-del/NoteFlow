@@ -32,6 +32,7 @@ jobs:
       DB_PASSWORD: noteflow_test_password
       DB_NAME: noteflow_test
       NOTEFLOW_RUN_DB_TESTS: 0
+      NOTEFLOW_BROWSER_EXECUTABLE: /usr/bin/google-chrome
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -44,9 +45,11 @@ jobs:
           cache: pip
           cache-dependency-path: server/requirements-test.txt
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
       - run: python -m pip install -r server/requirements-test.txt
-      - run: python scripts/quality_gate.py --profile core
+      - name: Run the core checks in the runner's Chrome
+        run: |
+          "$NOTEFLOW_BROWSER_EXECUTABLE" --version
+          python scripts/quality_gate.py --profile core
       - name: Verify the background index against PostgreSQL
         env:
           PYTHONPATH: server
