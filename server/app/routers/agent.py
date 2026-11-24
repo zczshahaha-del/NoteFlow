@@ -17,9 +17,10 @@ from app.memory.context import MemoryContextService
 from app.rag.service import RagRequest, configured_rag_service
 from app.repositories.runs import RunRepository
 from app.repositories.drafts import DraftRepository
+from app.repositories.notes import NoteRepository
 from app.services.ai import ChatMessage, ChatRequest, stream_chat
 from app.services.context_planner import ContextPlan
-from app.memory.planning import broad_memory_read_plan, memory_read_plan_from_turn_plan
+from app.memory.planning import memory_read_plan_from_turn_plan
 from app.services.runtime_errors import public_error_message
 from app.services.run_service import RunService
 from app.agent.sse import encode_event
@@ -789,6 +790,34 @@ async def chat(payload: AgentChatPayload, user: CurrentUser, *, run_state: dict 
     active_checkpoint = await _checkpoint_for_plan(user.id, payload.sessionId, intent)
     memory_enabled = await _effective_memory_enabled(user.id, not force_note_answer)
 
+    draft_source_id = None
+    if intent == "note_draft_create":
+        source_title = turn_plan.intent_parameters.source_note_title
+        current_note_id = (page_state_dict or {}).get("currentNoteId")
+        if source_title or (current_note_id and ContextSource.CURRENT_NOTE in turn_plan.context_sources):
+            async with AsyncSessionLocal() as db:
+                notes = NoteRepository(db)
+                if source_title:
+                    if source_title.casefold() in payload.question.casefold():
+                        matches = await notes.match_active_titles(user.id, source_title)
+                        short_title = source_title.removesuffix("笔记").strip()
+                        if not matches and short_title and short_title != source_title:
+                            matches = await notes.match_active_titles(user.id, short_title)
+                        exact = [note_id for note_id, title in matches if title.casefold() == source_title.casefold()]
+                        if len(exact) == 1:
+                            draft_source_id = exact[0]
+                        elif len(matches) == 1:
+                            draft_source_id = matches[0][0]
+                else:
+                    source_note = await notes.get_active(user.id, current_note_id)
+                    if source_note:
+                        draft_source_id = source_note.id
+            if not draft_source_id:
+                return _terminal_turn_response(
+                    user_id=user.id, run_state=run_state, intent=intent, turn_plan=turn_plan,
+                    answer="还不能确定用哪篇笔记。请给出完整标题，或者打开那篇笔记后说「根据当前笔记整理一篇新笔记」。",
+                )
+
     if intent in {"general_chat", "note_search", "note_context_qa"}:
         return _langgraph_response(
             payload=payload,
@@ -1395,21 +1424,15 @@ async def chat(payload: AgentChatPayload, user: CurrentUser, *, run_state: dict 
             if intent == "note_draft_create":
                 draft_runtime = "database"
                 draft_seed = _draft_seed_from_plan(context_plan, payload.question)
+                draft_raw_request = payload.question
+                # A brief based on a source note must not turn old chats into
+                # writing instructions. Generation reads current memory itself.
                 planned_brief = _short(
-                    str((context_plan.draft_request or {}).get("brief") or ""),
+                    draft_raw_request if draft_source_id else str((context_plan.draft_request or {}).get("brief") or ""),
                     2000,
                 ).strip()
-                draft_raw_request = payload.question
-                draft_memory_context = ""
-                draft_memories: list[dict] = []
-                if memory_enabled and context_plan.context_plan.get("read_user_memory"):
-                    _, draft_memories = await _query_memories_for_agent(
-                        user.id, payload.question, payload.history,
-                        read_plan=broad_memory_read_plan(
-                            payload.question, scopes=["note_generation", "learning"], reason="draft_context",
-                        ),
-                    )
-                    draft_memory_context = _memory_context_from_records(draft_memories)
+                source_reference = {"sourceNoteId": draft_source_id} if draft_source_id else {}
+                draft_request = {**context_plan.draft_request, "brief": planned_brief, **source_reference}
                 answer = (
                     f"我会为你整理{draft_seed or '这份笔记'}的大纲。"
                     "你可以先调整卡片里的标题和要求，再开始生成。"
@@ -1423,10 +1446,10 @@ async def chat(payload: AgentChatPayload, user: CurrentUser, *, run_state: dict 
                     payload={
                         "seed": draft_seed,
                         "rawRequest": draft_raw_request,
-                        "draftRequest": context_plan.draft_request,
+                        "draftRequest": draft_request,
+                        **source_reference,
                         "manualOutline": True,
                         "draftBrief": {"title": draft_seed, "requirements": planned_brief, "rawRequest": draft_raw_request},
-                        "memoryContext": draft_memory_context,
                         "runtime": draft_runtime,
                     },
                 )
@@ -1443,8 +1466,7 @@ async def chat(payload: AgentChatPayload, user: CurrentUser, *, run_state: dict 
                     metadata={
                         "seed": draft_seed,
                         "rawRequest": draft_raw_request,
-                        "draftRequest": context_plan.draft_request,
-                        "memoryCount": len(draft_memories),
+                        "draftRequest": draft_request,
                         "runtime": draft_runtime,
                     },
                     message_metadata={
@@ -1467,10 +1489,10 @@ async def chat(payload: AgentChatPayload, user: CurrentUser, *, run_state: dict 
                         {
                             "seed": draft_seed,
                             "rawRequest": draft_raw_request,
-                            "draftRequest": context_plan.draft_request,
+                            "draftRequest": draft_request,
+                            **source_reference,
                             "manualOutline": True,
                             "draftBrief": {"title": draft_seed, "requirements": planned_brief, "rawRequest": draft_raw_request},
-                            "memoryContext": draft_memory_context,
                             "checkpointId": checkpoint["id"],
                             "checkpoint": checkpoint,
                             "runtime": draft_runtime,

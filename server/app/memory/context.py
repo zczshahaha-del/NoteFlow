@@ -39,6 +39,7 @@ class MemoryContextService:
             return await MemoryGateway().read(
                 user_id, query=plan.query, scopes=plan.scopes, memory_types=plan.memory_types,
                 canonical_keys=plan.canonical_keys, layers=plan.layers, limit=plan.limit, historical=plan.historical, direct_read=plan.direct_read,
+                include_scoped_types=plan.include_scoped_types,
             )
 
         async with AsyncSessionLocal() as session:
@@ -99,9 +100,11 @@ class MemoryContextService:
         scopes: list[str],
         memory_types: list[str],
         limit: int = 6,
+        include_scoped_types: tuple[str, ...] = (),
     ) -> str:
         plan = broad_memory_read_plan(query, scopes=scopes, memory_types=memory_types, limit=limit)
         plan.scopes = list(scopes)
+        plan.include_scoped_types = include_scoped_types
         try:
             return format_context(await self.recall(user_id, plan, requested=requested))
         except MemoryUnavailable:

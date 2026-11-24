@@ -18,7 +18,7 @@ import Draft from ${JSON.stringify(workspace)};
 import{useAppStore as store}from ${JSON.stringify(path.join(repo,'src/store/index.tsx'))};
 const original='给我生成一份关于两小儿辩日的一份教案';const seed='《两小儿辩日》教案';
 const f={calls:[],requests:[],hold:false,fail:false,writeFail:false,store,root:null,draft:null,
-checkpoint:{id:'cp-brief',checkpointType:'draft_workspace',status:'waiting_user_confirm',sessionId:'session-brief',runId:'run-brief',payload:{seed,rawRequest:original}},
+checkpoint:{id:'cp-brief',checkpointType:'draft_workspace',status:'waiting_user_confirm',sessionId:'session-brief',runId:'run-brief',payload:{seed,rawRequest:original,sourceNoteId:'source-note'}},
 async generate(p){this.requests.push(p);if(this.hold)await new Promise(r=>this.release=r);if(this.fail){this.fail=false;throw new Error('合成大纲失败，已有内容未改动')}if(p.signal.aborted)throw new DOMException('aborted','AbortError');p.onDelta(p.mode==='outline'?'## 教学目标\\n\\n## 教学过程\\n\\n## 课堂小结':'## 教学目标\\n\\n合成课堂讨论与板书设计。');if(!this.incomplete)p.onFinishReason?.('stop');},
 mount(){this.root=createRoot(document.getElementById('root'));this.root.render(React.createElement(React.StrictMode,null,React.createElement(Panel),React.createElement(Draft)))}};
 window.briefTest=f;
@@ -40,7 +40,19 @@ if(url==='/api/note-drafts/draft-brief/assemble'&&method==='POST'){
  return result({draft:structuredClone(f.draft)});
 }
 if(url==='/api/note-drafts/draft-brief'&&method==='PUT'){f.draft={...f.draft,...body,topic:body.generationBrief?.title||f.draft.topic,draftConfig:{...f.draft.draftConfig,...(body.generationBrief?{generationBrief:body.generationBrief}: {})},sections:body.sections?body.sections.map((s,i)=>({...s,id:'new-section-'+i,content:'',status:'outline_only'})):f.draft.sections};return result({draft:structuredClone(f.draft)});}
-if(url.includes('/note-drafts/draft-brief/sections/')){const id=url.split('/sections/')[1].split('/')[0];Object.assign(f.draft.sections.find(s=>s.id===id),body);return result({draft:structuredClone(f.draft)});}
+if(url.includes('/note-drafts/draft-brief/sections/')){
+ const id=url.split('/sections/')[1].split('/')[0];
+ const section=f.draft.sections.find(s=>s.id===id);
+ if(body?.source==='generate_section'&&body.status==='generating'){
+  section.status='generating';section.generationKey='single:'+f.calls.length;
+  return result({draft:structuredClone(f.draft),generationKey:section.generationKey});
+ }
+ if(url.endsWith('/generate')){
+  if(body.generationKey!==section.generationKey)return result({detail:'这次生成已失效'},409);
+  Object.assign(section,{content:body.content,status:'generated',generationKey:null});
+ }else Object.assign(section,body);
+ return result({draft:structuredClone(f.draft)});
+}
 if(url.includes('/chat-sessions'))return result({sessions:[]});if(url.includes('/checkpoints/latest'))return result({checkpoint:f.checkpoint});if(url.includes('/runs/latest'))return result({task:null});if(url.includes('/runs'))return result({tasks:[]});throw new Error('Unexpected synthetic HTTP '+url);};
 store.setState({hydratedUserId:'synthetic',chatLoading:false,centerMode:'note',treeData:[],fileContents:{},selectedFileId:null,agentSessionId:'session-brief',draftSeed:seed,pendingCheckpoint:structuredClone(f.checkpoint),
 activeDraftContext:{id:'',title:seed,topic:seed,stage:'configuring',busy:false,statusText:'',errorText:'',completedSections:0,totalSections:0},
@@ -95,6 +107,8 @@ try {
     await button(card,'打开草稿').waitFor();
     const initial=await page.evaluate(()=>({request:window.briefTest.requests.at(-1),draft:window.briefTest.draft}));
     assert.equal(initial.request.topic,'《两小儿辩日》教学设计');
+    assert.equal(initial.request.sourceNoteId,'source-note');
+    assert.equal(initial.draft.draftConfig.sourceNoteId,'source-note');
     assert(initial.request.extraRequest.includes('用一课时完成，重点安排课堂讨论。'));
     assert(initial.request.extraRequest.includes('给我生成一份关于两小儿辩日的一份教案'));
     assert.equal(initial.draft.draftConfig.rawRequest,'给我生成一份关于两小儿辩日的一份教案');
@@ -116,6 +130,7 @@ try {
     await button(shell,'生成正文').click();
     await page.waitForFunction(()=>window.briefTest.draft.sections[0].content.includes('板书设计'));
     const sectionRequest=await page.evaluate(()=>window.briefTest.requests.find(r=>r.mode==='section'));
+    assert.equal(sectionRequest.sourceNoteId,'source-note');
     assert(sectionRequest.extraRequest.includes('用一课时完成'));
     assert(sectionRequest.extraRequest.includes('改成两课时，增加板书设计。'));
     assert(sectionRequest.extraRequest.includes('正文采用本次补充'));

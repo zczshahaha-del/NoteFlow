@@ -86,7 +86,7 @@ class MemoryGateway:
             MemorySource.user_id == user_id, MemorySource.status == "stored").execution_options(populate_existing=True))).all()}
 
     async def read(self, user_id, *, query=None, memory_types=(), scopes=(), canonical_keys=(), layers=(),
-                   limit=50, include_archived=True, historical=False, direct_read=False):
+                   limit=50, include_archived=True, historical=False, direct_read=False, include_scoped_types=()):
         async with AsyncSessionLocal() as session:
             settings, initial_state = await control(session, user_id)
             if query is not None and not settings.memory_enabled:
@@ -134,6 +134,16 @@ class MemoryGateway:
                 if current is None or not current[0] or (current[1] or {}).get("memoryControl", {}).get("generation", 0) != initial_state.get("generation", 0):
                     return []
             order = dict.fromkeys(ranked)
+            if query is not None and include_scoped_types:
+                # Scoped defaults can apply even when the topic has no words in
+                # common with them. Use governed claims from this fresh read.
+                defaults = {}
+                for source in sorted(sources.values(), key=lambda row: row.updated_at, reverse=True):
+                    meta = source.metadata_json or {}
+                    if meta.get("claim") and meta.get("scope") in scopes and meta.get("memoryType") in include_scoped_types:
+                        defaults[source.id] = None
+                ranked_defaults = {source_id: None for source_id in order if source_id in defaults}
+                order = ranked_defaults | defaults | order
             for source in sources.values():
                 meta = source.metadata_json or {}
                 if query is None or meta.get("canonicalKey") in canonical_keys:

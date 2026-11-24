@@ -22,6 +22,7 @@ class MemoryReadPlan:
     reason: str = ""
     historical: bool = False
     direct_read: bool = False
+    include_scoped_types: tuple[str, ...] = ()
 
 
 def memory_read_plan_from_turn_plan(

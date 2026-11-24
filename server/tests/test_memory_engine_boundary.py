@@ -151,6 +151,26 @@ class MemoryEngineBoundaryTest(unittest.IsolatedAsyncioTestCase):
                 known, _ = await prior_facts(self.gateway, db, "a", "上次只是测试")
         self.assertEqual(list(known), [first.id])
 
+    async def test_scoped_writing_defaults_follow_corrections_even_without_recall_hits(self):
+        from app.memory.resolution import Change
+
+        original = Change(content="写技术笔记以石墨引子开头", key="writing.note_intro", type="writing_style",
+                          label="技术笔记开头", value="石墨引子", scope="note_generation", evidence="石墨引子")
+        with patch("app.memory.resolution.resolve", AsyncMock(return_value=[original])):
+            await self.publish("a", "写技术笔记以石墨引子开头", metadata={"dialogue": True})
+        before = (await self.gateway.read("a"))[0]
+        corrected = original.model_copy(update={"content": "写技术笔记以青禾导语开头", "evidence": "青禾导语",
+                                               "value": "青禾导语", "replaces": [before.id], "previous": "mistaken"})
+        with patch("app.memory.resolution.resolve", AsyncMock(return_value=[corrected])):
+            await self.publish("a", "写技术笔记改用青禾导语", metadata={"dialogue": True})
+        with patch.object(self.engine, "recall", AsyncMock(return_value=[])):
+            self.assertEqual(await self.gateway.read("a", query="Docker 巡检"), [])
+            options = dict(query="Docker 巡检", scopes=["note_generation"], include_scoped_types=("writing_style",))
+            rows = await self.gateway.read("a", **options)
+            self.assertEqual([row.value for row in rows], ["青禾导语"])
+            await self.gateway.delete("a", rows[0].id)
+            self.assertEqual(await self.gateway.read("a", **options), [])
+
     async def test_existing_correction_reconciles_old_facts_once_without_deleting(self):
         from app.memory.resolution import Change
 

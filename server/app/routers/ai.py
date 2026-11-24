@@ -5,7 +5,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from app.config import cfg
 from app.deps import CurrentUser, redis_rate_limit
 from app.services.ai import stream_note_generate
@@ -31,6 +31,7 @@ class NoteGeneratePayload(BaseModel):
     extraRequest: str = ""
     markdown: str = ""
     outlinePlan: str = ""
+    sourceNoteId: str | None = Field(default=None, max_length=64)
     maxTokens: int = 0
     temperature: Optional[float] = None
     memoryEnabled: bool = True
@@ -55,11 +56,19 @@ async def generate_note(
     user: CurrentUser = Depends(redis_rate_limit("ai-note", cfg.AI_RATE_LIMIT)),
 ):
     try:
-        memory_context = await AIApplicationService().note_generation_memory(
+        service = AIApplicationService()
+        source_context = ""
+        if payload.sourceNoteId:
+            source_context = await service.note_generation_source(
+                user_id=user.id, note_id=payload.sourceNoteId,
+                query=f"{payload.topic}\n{payload.outlinePlan}",
+            )
+        memory_context = await service.note_generation_memory(
             user_id=user.id,
             requested=payload.memoryEnabled,
             topic=payload.topic,
             extra_request=payload.extraRequest,
+            sourced_draft=bool(payload.sourceNoteId),
         )
 
         note_req = NoteGenerateRequest(
@@ -73,6 +82,7 @@ async def generate_note(
             includeExercises=payload.includeExercises,
             extraRequest=payload.extraRequest,
             memoryContext=memory_context,
+            sourceContext=source_context,
             markdown=payload.markdown,
             outlinePlan=payload.outlinePlan,
             maxTokens=payload.maxTokens,

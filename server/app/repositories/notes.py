@@ -28,6 +28,17 @@ class NoteRepository(Repository):
             select(Note).where(Note.id == note_id, Note.user_id == user_id, Note.deleted_at.is_(None))
         )
 
+    async def match_active_titles(self, user_id: str, title: str) -> list[tuple[str, str]]:
+        user_id = require_user_id(user_id)
+        exact_match = func.lower(Note.title) == title.lower()
+        result = await self.session.execute(
+            select(Note.id, Note.title)
+            .where(Note.user_id == user_id, Note.deleted_at.is_(None), Note.title.icontains(title, autoescape=True))
+            .order_by(exact_match.desc(), Note.id)
+            .limit(2)
+        )
+        return [(note_id, name) for note_id, name in result]
+
     async def get(
         self,
         user_id: str,

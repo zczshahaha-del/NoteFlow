@@ -61,12 +61,24 @@ class AgentDraftCreateTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("open_draft_workspace", frames)
 
     async def test_draft_card_metadata_is_persisted_after_checkpoint_creation(self) -> None:
+        await self._check_draft_card(source_title="")
+
+    async def test_sourced_draft_does_not_copy_a_stale_preference_into_requirements(self) -> None:
+        await self._check_draft_card(source_title="Docker 巡检笔记")
+
+    async def _check_draft_card(self, *, source_title: str) -> None:
+        topic = "Docker 巡检" if source_title else "Python"
+        question = (
+            f"查我的{source_title}，按我的写作习惯整理一篇新笔记" if source_title else "帮我生成一份 Python 学习笔记"
+        )
+        planned_requirements = "开头写旧测试标记" if source_title else "生成一份 Python 学习笔记"
         plan = TurnPlan(
             mode=ChatMode.CHAT,
             primary_intent=PrimaryIntent.NOTE_CREATE,
             intent_parameters=IntentParameters(
-                topic="Python",
-                requirements="生成一份 Python 学习笔记",
+                topic=topic,
+                requirements=planned_requirements,
+                source_note_title=source_title,
             ),
             confidence=0.99,
             result=PlanResult.EXECUTE,
@@ -76,6 +88,10 @@ class AgentDraftCreateTest(unittest.IsolatedAsyncioTestCase):
         @asynccontextmanager
         async def fake_checkpointer():
             yield object()
+
+        notes = SimpleNamespace(match_active_titles=AsyncMock(return_value=[
+            ("source-note", source_title), ("similar-note", source_title + "备忘"),
+        ]))
 
         checkpoint = {
             "id": "checkpoint-python",
@@ -96,6 +112,8 @@ class AgentDraftCreateTest(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(agent, "postgres_checkpointer", fake_checkpointer),
+            patch.object(agent, "AsyncSessionLocal", fake_checkpointer),
+            patch.object(agent, "NoteRepository", return_value=notes),
             patch.object(agent, "graph_waiting_for_clarification", AsyncMock(return_value=False)),
             patch.object(
                 agent,
@@ -126,7 +144,7 @@ class AgentDraftCreateTest(unittest.IsolatedAsyncioTestCase):
             patch.object(agent, "_complete_tool_only_run", complete_run),
         ):
             response = await agent.chat(
-                AgentChatPayload(question="帮我生成一份 Python 学习笔记", mode="chat", memoryEnabled=False),
+                AgentChatPayload(question=question, mode="chat", memoryEnabled=False),
                 CurrentUser(id="user-python", email="test@example.com", display_name="Tester"),
             )
             chunks: list[str] = []
@@ -136,15 +154,21 @@ class AgentDraftCreateTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"action": "open_draft_workspace"', "".join(chunks))
         self.assertNotIn("agent_error", "".join(chunks))
         self.assertNotIn("message_metadata", create_checkpoint.await_args.kwargs)
+        expected_requirements = question if source_title else planned_requirements
         self.assertEqual(
             complete_run.await_args.kwargs["message_metadata"],
-            {"draftCard": {"seed": "Python", "checkpointId": "checkpoint-python", "title": "Python",
-                "requirements": "生成一份 Python 学习笔记", "rawRequest": "帮我生成一份 Python 学习笔记", "manualOutline": True}},
+            {"draftCard": {"seed": topic, "checkpointId": "checkpoint-python", "title": topic,
+                "requirements": expected_requirements, "rawRequest": question, "manualOutline": True}},
         )
         checkpoint_payload = create_checkpoint.await_args.kwargs["payload"]
-        self.assertEqual(checkpoint_payload["rawRequest"], "帮我生成一份 Python 学习笔记")
+        self.assertEqual(checkpoint_payload["rawRequest"], question)
         self.assertTrue(checkpoint_payload["manualOutline"])
-        self.assertEqual(checkpoint_payload["draftBrief"]["requirements"], "生成一份 Python 学习笔记")
+        self.assertEqual(checkpoint_payload["draftBrief"]["requirements"], expected_requirements)
+        if source_title:
+            notes.match_active_titles.assert_awaited_once_with("user-python", source_title)
+            self.assertEqual(checkpoint_payload["sourceNoteId"], "source-note")
+            self.assertIn('"sourceNoteId": "source-note"', "".join(chunks))
+            self.assertNotIn(planned_requirements, "".join(chunks))
 
 
 if __name__ == "__main__":

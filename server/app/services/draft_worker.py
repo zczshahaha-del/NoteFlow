@@ -13,6 +13,7 @@ from app.config import cfg
 from app.database import AsyncSessionLocal, engine
 from app.models.db import NoteDraft, NoteDraftSection
 from app.services.ai import ERR_RATE_LIMITED, complete_chat
+from app.services.ai_application import AIApplicationService
 from app.services.prompts import NoteGenerateRequest, build_note_generate_prompt
 from app.services.heading_numbers import draft_numbering_style, number_generated_section, number_markdown_headings
 
@@ -175,6 +176,17 @@ async def _generate_section(draft: NoteDraft, section: NoteDraftSection) -> str:
     body_instruction = _body_instruction(draft)
     from app.services.draft_brief import body_supplement
     generation_request = raw_request + body_supplement(body_instruction)
+    source_note_id = (draft.draft_config or {}).get("sourceNoteId")
+    outline = _section_outline(section)
+    source_context = memory_context = ""
+    if isinstance(source_note_id, str) and source_note_id:
+        service = AIApplicationService()
+        source_context = await service.note_generation_source(
+            user_id=draft.user_id, note_id=source_note_id, query=f"{draft.topic}\n{outline}",
+        )
+        memory_context = await service.note_generation_memory(
+            user_id=draft.user_id, requested=True, topic=draft.topic, extra_request=generation_request, sourced_draft=True,
+        )
     provider_context = (
         render_prompt(
             "drafts/provider-context",
@@ -193,7 +205,9 @@ async def _generate_section(draft: NoteDraft, section: NoteDraftSection) -> str:
             includeCode=draft.include_code,
             includeExercises=draft.include_exercises,
             extraRequest=generation_request,
-            outlinePlan=_section_outline(section),
+            outlinePlan=outline,
+            sourceContext=source_context,
+            memoryContext=memory_context,
         )
     )
     first_pass = await _complete_with_retry(
@@ -212,11 +226,16 @@ async def _generate_section(draft: NoteDraft, section: NoteDraftSection) -> str:
     if not first_pass.strip():
         raise ValueError("模型返回了空内容")
 
+    review_requirements = generation_request
+    if source_context:
+        review_requirements += "\n\n" + render_prompt("notes/source-context", source=source_context)
+    if memory_context:
+        review_requirements += "\n\n" + render_prompt("notes/memory-preference") + memory_context
     review_prompt = render_prompt(
         "drafts/review",
         topic=draft.topic,
-        requirements=generation_request,
-        section_outline=_section_outline(section),
+        requirements=review_requirements,
+        section_outline=outline,
         provider_context=provider_context,
         first_pass=first_pass,
     ).strip()

@@ -78,6 +78,7 @@ class IntentParameters(BaseModel):
 
     topic: str | None = Field(default=None, max_length=160)
     requirements: str = Field(default="", max_length=2000)
+    source_note_title: str = Field(default="", max_length=160)
     note_id: str | None = Field(default=None, max_length=64)
     instruction: str = Field(default="", max_length=600)
     memory_action: MemoryAction = "none"
@@ -272,6 +273,7 @@ def _normalize_planner_payload(payload: dict[str, Any]) -> dict[str, Any]:
     memory_key = str(parameters.get("memory_key") or "").strip()
     parameters["memory_key"] = key_aliases.get(memory_key.lower(), memory_key or None)
     parameters["requirements"] = str(parameters.get("requirements") or "")
+    parameters["source_note_title"] = str(parameters.get("source_note_title") or "")
     parameters["instruction"] = str(parameters.get("instruction") or "")
     parameters["memory_query"] = str(parameters.get("memory_query") or "")
     parameters["topic"] = parameters.get("topic") or None
