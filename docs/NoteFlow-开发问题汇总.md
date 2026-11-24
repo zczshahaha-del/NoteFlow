@@ -824,6 +824,8 @@ UI-17 局部实施：顶部新建换成方框铅笔图标，保留提示与原�
 
 回归：build、test:frontend（新增表格作用域检查，43 组组件 / 10 项 store）、test:editor-ui、test:chat-presentation、test:chat-ui 和 check:dev-ports 通过。状态：🟡 部分解决；局部修复已隔离运行验证，用户原会话刷新后的实际审美、Safari / Firefox 与实体设备仍待验收，不把其他区域滚动条或 SEC-01 等历史问题判为已解决。随 `fix: 精简聊天滚动条并收纳宽内容滚动`；相关文件 src/components/ai-conversation.css、src/components/AIPanel.tsx、src/utils/chatMarkdown.ts 及三个前端回归 / 诊断脚本。
 
+2026-11-25 更新：聊天记录主区的竖条仍过于显眼。只在 `ai-conversation.css` 隐藏聊天记录容器的原生滚动条，滚轮和键盘滚动仍可用，宽表格和代码块的内部滚动条保留。构建以及桌面、窄屏 Edge 的正式聊天组件回归通过，包括长对话滚动、表格键盘滚动和强制颜色。Safari、Firefox 和实体触屏未验收。
+
 ### UI-25：历史菜单输入法组合期 Escape 会误关（部分解决）
 
 现象：2026-10-10 修正历史搜索焦点内框时，独立诊断在搜索输入中派发 `keydown Escape` 且 `isComposing=true`，历史菜单仍关闭；真实输入法取消候选时也可能丢掉当前搜索上下文。根因：SoftMenu 自身虽然跳过组合期 Escape，但 AIPanel 的 `historyOpen` effect 另有 document 级 `closeOnEscape`，只检查 key，没有检查 isComposing；未被 SoftMenu 停止的组合事件继续冒泡至此。不是焦点描边、复制 tooltip 或后端问题，也不能用共享 SoftMenu 的单组件 IME 通过证明整个历史层正确。

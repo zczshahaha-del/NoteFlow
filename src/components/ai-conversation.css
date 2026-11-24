@@ -27,6 +27,10 @@
   min-width: 0;
   min-height: 0;
   overflow-x: hidden;
+  scrollbar-width: none;
+}
+.nf-ai-conversation .ai-message-list::-webkit-scrollbar {
+  display: none;
 }
 .nf-ai-conversation .nf-chat-message-row + .nf-chat-message-row { margin-top: 12px; }
 .nf-ai-conversation .nf-chat-message-row + .nf-chat-message-row[data-role="user"] { margin-top: 28px; }
@@ -99,7 +103,7 @@
   .nf-ai-conversation .nf-chat-copy, .nf-ai-conversation .nf-chat-jump-button { width: 44px; height: 44px; }
   .nf-ai-conversation .nf-chat-message-actions { min-height: 44px; }
 }
-/* Narrow, transparent tracks; do not hide the native scrolling affordance. */
+/* Keep narrow tracks on nested scrollers such as tables and code blocks. */
 .nf-ai-conversation,
 .nf-ai-conversation * {
   scrollbar-width: thin;
