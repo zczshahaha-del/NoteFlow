@@ -82,6 +82,7 @@ class IntentParameters(BaseModel):
     note_id: str | None = Field(default=None, max_length=64)
     instruction: str = Field(default="", max_length=600)
     memory_action: MemoryAction = "none"
+    requires_personal_data: bool = False
     memory_scope: MemoryScope | None = None
     memory_layers: list[MemoryLayer] = Field(default_factory=list, max_length=2)
     memory_types: list[MemoryType] = Field(default_factory=list, max_length=8)
@@ -344,6 +345,16 @@ def validate_turn_plan(
             ContextSource.CURRENT_NOTE, ContextSource.SELECTED_TEXT,
         }]
     selection_scope = has_selection_scope(state)
+    if (
+        validated.mode == ChatMode.CHAT
+        and validated.primary_intent == PrimaryIntent.GENERAL_CHAT
+        and parameters.requires_personal_data
+        and not selection_scope
+        and not {ContextSource.CURRENT_NOTE, ContextSource.SELECTED_TEXT}.intersection(validated.context_sources)
+    ):
+        # The output format does not change where personal facts come from.
+        validated.primary_intent = PrimaryIntent.MEMORY
+        parameters.memory_action = "read"
     if selection_scope and validated.primary_intent in {PrimaryIntent.GENERAL_CHAT, PrimaryIntent.NOTE_EDIT}:
         validated.context_sources = [ContextSource.SELECTED_TEXT]
     if validated.primary_intent == PrimaryIntent.NOTE_CREATE:
@@ -363,6 +374,8 @@ def validate_turn_plan(
         if not parameters.instruction:
             missing.append("instruction")
     elif validated.primary_intent == PrimaryIntent.MEMORY:
+        if parameters.requires_personal_data and parameters.memory_action == "none":
+            parameters.memory_action = "read"
         if parameters.memory_action == "none":
             missing.append("memory_action")
         if parameters.memory_scope is None:

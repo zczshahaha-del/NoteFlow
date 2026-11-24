@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -1223,15 +1224,18 @@ async def chat(payload: AgentChatPayload, user: CurrentUser, *, run_state: dict 
                     action = "list_memories"
                     output_summary = f"读取 {len(memories)} 条长期记忆"
                 elif memory_action == "read":
-                    tool_summary, memories = await _query_memories_for_agent(
-                        user.id,
-                        payload.question,
-                        payload.history,
-                        read_plan=memory_read_plan_from_turn_plan(
-                            turn_plan,
-                            question=payload.question,
-                        ),
-                    )
+                    try:
+                        async with asyncio.timeout(8):
+                            tool_summary, memories = await _query_memories_for_agent(
+                                user.id,
+                                payload.question,
+                                payload.history,
+                                read_plan=memory_read_plan_from_turn_plan(
+                                    turn_plan, question=payload.question,
+                                ),
+                            )
+                    except TimeoutError:
+                        raise ValueError("暂时查不到你的个人资料，请稍后重试。") from None
                     action = "list_memories"
                     output_summary = f"读取 {len(memories)} 条长期记忆"
                 elif memory_action == "delete":

@@ -45,6 +45,18 @@ async def fallback_resume(_state, plan: TurnPlan, answer: str) -> TurnPlan:
 
 
 class TurnPlannerTest(unittest.TestCase):
+    def test_personal_fact_dependency_routes_chat_writing_through_current_records(self) -> None:
+        plan = validate_turn_plan(TurnPlan(
+            primary_intent=PrimaryIntent.GENERAL_CHAT,
+            intent_parameters=IntentParameters(requires_personal_data=True, memory_query="常住城市"),
+        ))
+        self.assertEqual(plan.primary_intent, PrimaryIntent.MEMORY)
+        self.assertEqual(plan.intent_parameters.memory_action, "read")
+        self.assertEqual(plan.context_sources, [ContextSource.USER_MEMORY])
+
+        follow_up = validate_turn_plan(TurnPlan(primary_intent=PrimaryIntent.GENERAL_CHAT))
+        self.assertEqual(follow_up.primary_intent, PrimaryIntent.GENERAL_CHAT)
+
     def test_document_title_preserves_internal_book_punctuation(self) -> None:
         for title in ("《两小儿辩日》教案", "《两小儿辩日》 教案", "比较《甲》和《乙》"):
             with self.subTest(title=title):
