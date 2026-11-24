@@ -77,6 +77,7 @@
     "test:performance-baseline": "node scripts/run-python.mjs scripts/run_performance_baseline.py",
     "test:release-acceptance": "node scripts/run-python.mjs scripts/run_release_acceptance.py",
     "test:quality:fast": "node scripts/run-python.mjs scripts/quality_gate.py --profile fast",
+    "test:quality:core": "node scripts/run-python.mjs scripts/quality_gate.py --profile core",
     "test:quality": "node scripts/run-python.mjs scripts/quality_gate.py --profile full",
     "test:quality:live": "node scripts/run-python.mjs scripts/quality_gate.py --profile full --include-live-ai",
     "build": "tsc -b && vite build",
@@ -114,6 +115,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
     "jsdom": "^29.1.1",
+    "playwright": "1.65.1",
     "tailwindcss": "^4.2.4",
     "typescript": "^6.0.3",
     "vite": "^8.0.10"

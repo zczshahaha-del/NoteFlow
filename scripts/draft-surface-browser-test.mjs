@@ -20,7 +20,11 @@ const makeDraft=(status='outline_ready')=>({id:'synthetic-draft',topic:'Redis �
 sections:[{id:'s1',title:'认识 Redis',sortOrder:0,level:2,outlineText:'## 认识 Redis',content:'## 缓存的基础\\n\\n这是用于离线组件检查的合成正文。',status:status==='generating'?'generating':'generated'},
 {id:'s2',title:'数据类型与常用命令',sortOrder:1,level:2,outlineText:'## 数据类型与常用命令',content:'## 常用命令\\n\\n字符串、列表与集合。',status:'generated'},
 {id:'s3',title:'过期策略与持久化',sortOrder:2,level:2,outlineText:'## 过期策略与持久化',content:'',status:'outline_only'}]});
-const api={calls:[],draft:makeDraft(),failNext:null,holdNext:null,render(){root.render(React.createElement(Draft,{key:revision}))},reopen(){slice.centerMode='draft';this.render()},show(status){this.draft=makeDraft(status);slice.centerMode='draft';revision++;this.render()},async call(name,args){this.calls.push({name,args});if(this.holdNext===name){this.holdNext=null;await new Promise(resolve=>this.release=resolve)}if(this.failNext===name){this.failNext=null;throw new Error('合成失败，请重试')}const section=this.draft.sections.find(s=>s.id===args[1]);
+const api={calls:[],draft:makeDraft(),failNext:null,holdNext:null,render(){root.render(React.createElement(Draft,{key:revision}))},reopen(){slice.centerMode='draft';this.render()},show(status){this.draft=makeDraft(status);slice.centerMode='draft';revision++;this.render()},async call(name,args){this.calls.push({name,args});
+if(window.chapterRace && ['getNoteDraft','startDraftSectionGeneration','generateDraftSection'].includes(name)){
+  return window.chapterRace(name,args,this.draft);
+}
+if(this.holdNext===name){this.holdNext=null;await new Promise(resolve=>this.release=resolve)}if(this.failNext===name){this.failNext=null;throw new Error('合成失败，请重试')}const section=this.draft.sections.find(s=>s.id===args[1]);
 if(name==='updateDraftSection')Object.assign(section,args[2]);
 if(name==='confirmDraftSection')section.status='confirmed';
 if(name==='deleteDraftSection')section.status='deleted';
@@ -46,9 +50,15 @@ const bundled = await build({configFile:false,logLevel:'silent',plugins:[{
   load(id){
     if(id==='\0offline-draft')return entry;
     if(id==='\0draft-store')return 'export const useDraftSlice=()=>window.draftTest.slice; export const useWorkspaceSlice=()=>window.draftTest.workspace;';
-    if(id==='\0draft-mock:../services/drafts')return serviceNames.map(name=>
-      'export const '+name+'=(...args)=>window.draftTest.api.call('+JSON.stringify(name)+',args);').concat('export class DraftSectionConflictError extends Error {}').join('\n');
-    if(id==='\0draft-mock:../services/aiStream')return 'export const generateNoteStream=()=>{throw new Error("unexpected generation")}';
+    if(id==='\0draft-mock:../services/drafts')return serviceNames.filter(name=>name!=='generateDraftSection').map(name=>
+      'export const '+name+'=(...args)=>window.draftTest.api.call('+JSON.stringify(name)+',args);').concat(
+        'export class DraftSectionConflictError extends Error {}',
+        'export const generateDraftSection=async (...args)=>{const result=await window.draftTest.api.call("generateDraftSection",args);if(result?.conflict)throw new DraftSectionConflictError("这次生成已失效，请查看最新章节。");return result};',
+      ).join('\n');
+    if(id==='\0draft-mock:../services/aiStream')return `export const generateNoteStream=async ({outlinePlan,onDelta})=>{
+      if(!window.chapterRace)throw new Error("unexpected generation");
+      onDelta(outlinePlan.includes("先发的修改")?"旧结果":"最新结果");
+    };`;
     if(id==='\0draft-mock:../services/agent')return 'export const bindAgentCheckpoint=async()=>null; export const resolveAgentCheckpoint=async()=>null;';
     if(id==='\0draft-mock:../services/memories')return 'export const isMemoryEnabled=()=>false;';
   },
@@ -57,12 +67,13 @@ const scripts=bundled.output.filter(item=>item.type==='chunk');assert.equal(scri
 const source=scripts[0].code.replaceAll('</script','<\\/script');
 const browser=await chromium.launch({executablePath:process.env.NOTEFLOW_BROWSER_EXECUTABLE || undefined,headless:true});
 const errors=[],requests=[],reports=[];
+const html='<html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>'+css+'</style></head><body><div id="root"></div><script type="module">'+source+'</script></body></html>';
 try {
   for(const {width,height,mobile} of [{width:1440,height:1000,mobile:false},{width:960,height:900,mobile:false},{width:736,height:900,mobile:true},{width:320,height:800,mobile:true}]) {
     const context=await browser.newContext({viewport:{width,height},isMobile:mobile,hasTouch:mobile,deviceScaleFactor:1});
     await context.route('**/*',route=>{requests.push(route.request().url());return route.abort()});
     const page=await context.newPage();page.on('pageerror',err=>{errors.push(String(err));console.error('offline draft pageerror:',String(err))});
-    await page.setContent('<html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>'+css+'</style></head><body><div id="root"></div><script type="module">'+source+'</script></body></html>');
+    await page.setContent(html);
     await page.waitForFunction(()=>Boolean(window.draftTest));
     if(process.env.NOTEFLOW_TEST_TRACE==='1'){await page.waitForTimeout(300);console.error(await page.evaluate(()=>({calls:window.draftTest.api.calls,body:document.body.innerText.slice(0,600)})))}
     const shell=page.locator('.nf-draft-shell');
@@ -265,6 +276,49 @@ try {
     await shell.locator('.nf-draft-close').click();await shell.waitFor({state:'detached'});assert.ok(await page.evaluate(()=>window.draftTest.api.calls.some(c=>c.name==='dismissDraftWorkspace')));
     reports.push({width,mobile,initial,alignment,centered,compactHeader:true,sharedReadingColumn:true,footerSingleDesktopRow:true,directoryByOutline:true,manualEditRemoved:true,confirmation:!mobile,directoryCRUD:!mobile,failureRetry:!mobile,dismissReopenPreservesInput:true,saveFailureRetry:true,savingDistinct:true,discardFailureRetry:!mobile,terminalOutcome:true,saveMock:true,stopMock:true,dark:true,reducedMotion:true});await context.close();
   }
+  const raceContext=await browser.newContext({viewport:{width:1280,height:850}});
+  await raceContext.route('**/*',route=>{requests.push(route.request().url());return route.abort()});
+  let sharedDraft, currentKey, nextKey=0;
+  let releaseOld;
+  const oldWrite=new Promise(resolve=>{releaseOld=resolve});
+  await raceContext.exposeBinding('chapterRace',async (_source,name,args,initial)=>{
+    sharedDraft??=initial;
+    if(name==='getNoteDraft')return sharedDraft;
+    if(name==='startDraftSectionGeneration'){
+      currentKey='key-'+(++nextKey);
+      return currentKey;
+    }
+    const {generationKey,content}=args[2];
+    if(content==='旧结果')await oldWrite;
+    if(generationKey!==currentKey)return {conflict:true};
+    const section=sharedDraft.sections.find(item=>item.id===args[1]);
+    section.content=content;
+    section.status='generated';
+    currentKey=null;
+    return sharedDraft;
+  });
+  try {
+    const [oldTab,newTab]=await Promise.all([raceContext.newPage(),raceContext.newPage()]);
+    for(const page of [oldTab,newTab])page.on('pageerror',err=>errors.push(String(err)));
+    await Promise.all([oldTab.setContent(html),newTab.setContent(html)]);
+    const modify=async (page,text)=>{
+      await page.getByRole('textbox',{name:'告诉 AI 如何修改'}).fill(text);
+      await page.getByRole('button',{name:'按要求修改'}).click();
+    };
+    await modify(oldTab,'先发的修改');
+    await oldTab.waitForFunction(()=>window.draftTest.api.calls.some(call=>call.name==='generateDraftSection'));
+    await modify(newTab,'后发的修改');
+    await newTab.getByText('最新结果',{exact:true}).waitFor();
+    await newTab.getByRole('textbox',{name:'告诉 AI 如何修改'}).waitFor();
+    releaseOld();
+    await oldTab.getByRole('alert').filter({hasText:'这次生成已失效'}).waitFor();
+    await oldTab.getByText('最新结果',{exact:true}).waitFor();
+    assert.equal(sharedDraft.sections[0].content,'最新结果');
+    assert.equal(nextKey,2);
+  } finally {
+    releaseOld();
+    await raceContext.close();
+  }
   assert.deepEqual(errors,[]);assert.deepEqual(requests,[]);
-  console.log(JSON.stringify({ok:true,offlineProductionComponent:true,syntheticServices:true,networkBlocked:true,reports,errors},null,2));
+  console.log(JSON.stringify({ok:true,offlineProductionComponent:true,syntheticServices:true,networkBlocked:true,twoTabChapterConflict:true,reports,errors},null,2));
 }finally{await browser.close()}
