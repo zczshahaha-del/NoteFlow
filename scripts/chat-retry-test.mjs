@@ -35,6 +35,21 @@ try {
     fileContents: { 'note-a': '原正文' }, chatSelection: null, centerMode: 'note', noteSaveState: { status: 'saved' } });
   const last = () => store.getState().chatMessages.slice(-1)[0];
   seed();
+  const history = [
+    { id: 'ordinary-user', role: 'user', text: '我们先聊聊部署' },
+    { id: 'ordinary-answer', role: 'assistant', text: '一般先检查配置' },
+    { id: 'note-user', role: 'user', text: '笔记里的编号是什么？' },
+    { id: 'note-answer', role: 'assistant', text: '笔记编号 MT0BC44BF0', contextMode: 'rag_v2_note' },
+    { id: 'selection-answer', role: 'assistant', text: '从选区读到的编号', contextMode: 'selection' },
+    { id: 'older-answer', role: 'assistant', text: '带引用的旧回答', sources: [{ noteId: 'note-a' }] },
+  ];
+  store.setState({ chatMessages: history });
+  replies.push(() => stream([session('general_chat'), delta('收到'), done, '[DONE]']));
+  await store.getState().sendMessage('继续聊天', { contextScope: 'none' });
+  assert.deepEqual(requests[0].history, history.slice(0, 3).map(({ role, text }) => ({ role, text })));
+  assert.deepEqual(store.getState().chatMessages.slice(0, history.length), history);
+  requests.length = 0;
+  seed();
   replies.push(() => stream([session('general_chat'), delta('已收到的部分回答')]));
   await store.getState().sendMessage('原问题', { selectedText: '原选中文字', contextScope: 'selection' });
   assert.equal(last().streamState, 'failed', 'EOF without completion must be recoverable');
@@ -88,5 +103,5 @@ try {
   store.setState({pendingCheckpoint:null});
   replies.push(()=>stream([session('general_chat'),{type:'tool_action',toolName:'note_draft_tool',action:'open_draft_workspace',payload:{seed:'不得执行'}}]));
   store.getState().retryChatReply(last().id);await until(()=>!store.getState().chatLoading);assert.equal(store.getState().activeDraftContext,null);assert.equal(last().retryBlocked,true);assert.equal(last().text,'部分内容');
-  console.log(JSON.stringify({ok:true,actualStoreAndSSE:true,syntheticOnly:true,checks:['partial EOF','original snapshot','duplicate click','successful replacement','503 and retry failure','agent error','manual stop','stop during planning','writing task guard','checkpoint guard','unexpected tool guard']}));
+  console.log(JSON.stringify({ok:true,actualStoreAndSSE:true,syntheticOnly:true,checks:['detached note history','partial EOF','original snapshot','duplicate click','successful replacement','503 and retry failure','agent error','manual stop','stop during planning','writing task guard','checkpoint guard','unexpected tool guard']}));
 } finally { await vite.close();dom.window.close(); }

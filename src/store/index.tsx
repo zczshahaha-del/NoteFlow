@@ -289,6 +289,15 @@ let chatMsgCounter = 0;
 function newChatMessageMetadata(): Pick<ChatMessage, "id" | "createdAt"> {
   return { id: `msg-${++chatMsgCounter}`, createdAt: new Date().toISOString() };
 }
+
+const noteReplyContextModes = new Set(["selection", "note_excerpt", "editor_transient", "rag_v2_note", "rag_v2_library"]);
+
+function isNoteSourcedReply(message: ChatMessage): boolean {
+  return message.role === "assistant" && (
+    Boolean(message.sources?.length) || noteReplyContextModes.has(message.contextMode ?? "")
+  );
+}
+
 let nodeCounter = 0;
 let generationAbortController: AbortController | null = null;
 let generationRunId: string | null = null;
@@ -1973,7 +1982,9 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
         documentTitle: selectionScope ? state.chatSelection?.noteTitle ?? "" : useCurrentNote ? selectedFile?.name.replace(/\.md$/, "") ?? "" : "",
         documentContent,
         pageState: requestPageState,
-        history: state.chatMessages.map(({ role, text }) => ({ role, text })),
+        history: state.chatMessages
+          .filter(message => requestPageState.contextScope !== "none" || !isNoteSourcedReply(message))
+          .map(({ role, text }) => ({ role, text })),
         memoryEnabled: isMemoryEnabled(),
       };
       set(current => ({ chatMessages: current.chatMessages.map(message =>
