@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from app.database import AsyncSessionLocal
-from app.services.agent_checkpoints import settle_linked_checkpoints
+from app.services.agent_checkpoints import bind_created_draft, settle_linked_checkpoints
 from app.deps import CurrentUser, get_current_user
 from app.models.db import (
     Note,
@@ -19,8 +20,10 @@ from app.models.db import (
 )
 from app.repositories.drafts import DraftRepository
 from app.repositories.notes import NoteRepository
+from app.repositories.runs import RunRepository
 from app.services.draft_content import assemble_draft_content, clean_draft_title
 from app.services.draft_save import DraftSaveError, save_confirmed_draft
+from app.services.draft_trace import DraftRunLink, draft_run_link, draft_stage
 from app.services.draft_brief import DraftBrief, generation_request
 from app.services.heading_numbers import draft_numbering_style, number_generated_section, number_markdown_headings
 from app.utils import random_id
@@ -76,6 +79,7 @@ class DraftCreatePayload(BaseModel):
     outline: str = ""
     sections: list[DraftSectionPayload] = []
     idempotencyKey: Optional[str] = None
+    checkpointId: str | None = Field(default=None, max_length=64)
     bodyInstruction: str = ""
 
 
@@ -380,11 +384,35 @@ async def create_draft(
     payload: DraftCreatePayload,
     user: CurrentUser = Depends(get_current_user),
 ):
+    started = time.perf_counter()
+    link = None
     async with AsyncSessionLocal() as session:
+        drafts = DraftRepository(session)
+        checkpoint = None
+        config = dict(payload.draftConfig)
+        if payload.checkpointId:
+            checkpoint = await RunRepository(session).get_checkpoint(user.id, payload.checkpointId, for_update=True)
+            if checkpoint is None or checkpoint.checkpoint_type != "draft_workspace":
+                raise HTTPException(404, detail="草稿任务不存在。")
+            bound_id = (checkpoint.payload or {}).get("draftId")
+            if bound_id:
+                existing = await drafts.get(user.id, bound_id)
+                if existing is None:
+                    raise HTTPException(409, detail="任务关联的草稿已不可用。")
+                return {"draft": _draft_out(existing, await _get_sections(session, user.id, existing.id)),
+                        "idempotentReplay": True}
+            if checkpoint.status != "waiting_user_confirm":
+                raise HTTPException(409, detail="草稿任务已结束。")
+            config.pop("sourceNoteId", None)
+            if source := (checkpoint.payload or {}).get("sourceNoteId"):
+                config["sourceNoteId"] = source
+            link = await DraftRunLink.from_checkpoint(session, checkpoint)
         idempotency_key = (payload.idempotencyKey or "").strip()
         if idempotency_key:
-            existing = await DraftRepository(session).get_by_idempotency_key(user.id, idempotency_key)
+            existing = await drafts.get_by_idempotency_key(user.id, idempotency_key)
             if existing is not None:
+                if checkpoint:
+                    raise HTTPException(409, detail="该保存请求已用于另一份草稿。")
                 return {
                     "draft": _draft_out(existing, await _get_sections(session, user.id, existing.id)),
                     "idempotentReplay": True,
@@ -407,7 +435,7 @@ async def create_draft(
             include_exercises=payload.includeExercises,
             extra_request=payload.extraRequest,
             draft_config={
-                **payload.draftConfig,
+                **config,
                 "bodyInstruction": (
                     payload.bodyInstruction
                     or str((payload.draftConfig or {}).get("bodyInstruction") or "")
@@ -427,9 +455,14 @@ async def create_draft(
         await session.flush()
         await _replace_sections(session, draft, sections)
         draft.outline = number_markdown_headings(outline, draft.title, style=draft_numbering_style(draft)) if outline else _outline_from_sections(draft, await _get_sections(session, user.id, draft.id))
+        if checkpoint:
+            bind_created_draft(checkpoint, draft.id)
         await session.commit()
         await session.refresh(draft)
-        return {"draft": _draft_out(draft, await _get_sections(session, user.id, draft.id))}
+        response = {"draft": _draft_out(draft, await _get_sections(session, user.id, draft.id))}
+        draft_id = draft.id
+    async with draft_stage(link, "create_draft", started=started, draftId=draft_id):
+        return response
 
 
 @router.get("/note-drafts/{draft_id}")
@@ -677,9 +710,11 @@ async def generate_draft_section(
     payload: DraftSectionUpdatePayload,
     user: CurrentUser = Depends(get_current_user),
 ):
-    return await update_draft_section(
-        draft_id, section_id, payload.model_copy(update={"status": "generated", "source": "generate_section"}), user
-    )
+    link = await draft_run_link(user.id, draft_id, sessions=AsyncSessionLocal)
+    async with draft_stage(link, "save_section", draftId=draft_id, sectionId=section_id, entry="single"):
+        return await update_draft_section(
+            draft_id, section_id, payload.model_copy(update={"status": "generated", "source": "generate_section"}), user
+        )
 
 
 @router.post("/note-drafts/{draft_id}/sections/{section_id}/confirm")
@@ -827,25 +862,29 @@ async def save_draft_to_notes(
     payload: DraftSavePayload,
     user: CurrentUser = Depends(get_current_user),
 ):
-    try:
-        result = await save_confirmed_draft(
-            user_id=user.id,
-            draft_id=draft_id,
-            confirmed=payload.confirm,
-            title=payload.title,
-            category_id=payload.categoryId,
-            use_draft_category="categoryId" not in payload.model_fields_set,
-        )
-    except DraftSaveError as exc:
-        status, detail = {
-            "confirmation_required": (400, "save confirmation is required"),
-            "draft_missing": (404, "draft not found"),
-            "saved_note_missing": (409, "draft saved note is unavailable"),
-            "category_missing": (404, "category not found"),
-            "empty_draft": (400, "draft content is empty"),
-            "draft_canceled": (409, "canceled draft cannot be saved"),
-        }[str(exc)]
-        raise HTTPException(status_code=status, detail=detail) from exc
+    link = await draft_run_link(user.id, draft_id, sessions=AsyncSessionLocal)
+    async with draft_stage(link, "save_note", draftId=draft_id) as trace:
+        try:
+            result = await save_confirmed_draft(
+                user_id=user.id,
+                draft_id=draft_id,
+                confirmed=payload.confirm,
+                title=payload.title,
+                category_id=payload.categoryId,
+                use_draft_category="categoryId" not in payload.model_fields_set,
+            )
+        except DraftSaveError as exc:
+            status, detail = {
+                "confirmation_required": (400, "save confirmation is required"),
+                "draft_missing": (404, "draft not found"),
+                "saved_note_missing": (409, "draft saved note is unavailable"),
+                "category_missing": (404, "category not found"),
+                "empty_draft": (400, "draft content is empty"),
+                "draft_canceled": (409, "canceled draft cannot be saved"),
+            }[str(exc)]
+            trace["reason"] = str(exc)
+            raise HTTPException(status_code=status, detail=detail) from exc
+        trace.update(noteId=result.note.id, replayed=result.replayed)
 
     response = {
         "draft": _draft_out(result.draft, result.sections),

@@ -106,7 +106,10 @@ class DraftBriefTests(unittest.IsolatedAsyncioTestCase):
             draft.draft_config = {"generationBrief": {"title": draft.topic, "requirements": "一课时，课堂讨论", "rawRequest": "原话"}, "bodyInstruction": "改成两课时，附板书设计"}
             section = await db.get(NoteDraftSection, "old-section")
             model = AsyncMock(side_effect=["## 教学过程\n教师引导学生讨论。", "## 教学过程\n学生讨论并归纳观点。"])
-            with patch.object(draft_worker, "_complete_with_retry", model):
+            with (
+                patch.object(draft_worker, "_complete_with_retry", model),
+                patch("app.services.ai_application.MemoryContextService.enabled", AsyncMock(return_value=False)),
+            ):
                 result = await draft_worker._generate_section(draft, section)
             self.assertIn("学生讨论", result)
             for call in model.await_args_list:

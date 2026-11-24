@@ -114,6 +114,7 @@ class AgentDraftCreateTest(unittest.IsolatedAsyncioTestCase):
             patch.object(agent, "postgres_checkpointer", fake_checkpointer),
             patch.object(agent, "AsyncSessionLocal", fake_checkpointer),
             patch.object(agent, "NoteRepository", return_value=notes),
+            patch("app.services.draft_trace.record_tool_trace", AsyncMock()),
             patch.object(agent, "graph_waiting_for_clarification", AsyncMock(return_value=False)),
             patch.object(
                 agent,

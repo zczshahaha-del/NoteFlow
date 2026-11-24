@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from contextlib import nullcontext
 from datetime import datetime
 from uuid import uuid4
 
@@ -14,6 +15,7 @@ from app.database import AsyncSessionLocal, engine
 from app.models.db import NoteDraft, NoteDraftSection
 from app.services.ai import ERR_RATE_LIMITED, complete_chat
 from app.services.ai_application import AIApplicationService
+from app.services.draft_trace import DraftRunLink, draft_run_link, draft_stage
 from app.services.prompts import NoteGenerateRequest, build_note_generate_prompt
 from app.services.heading_numbers import draft_numbering_style, number_generated_section, number_markdown_headings
 
@@ -154,16 +156,19 @@ def _assemble(draft: NoteDraft, sections: list[NoteDraftSection]) -> str:
     return number_markdown_headings("\n\n".join(parts).strip(), draft.title, style=draft_numbering_style(draft))
 
 
-async def _complete_with_retry(messages: list[dict], *, max_tokens: int, temperature: float) -> str:
+async def _complete_with_retry(messages: list[dict], *, max_tokens: int, temperature: float,
+                               link: DraftRunLink | None, action: str, **details) -> str:
     delays = [4.0, 10.0, 20.0]
     for attempt in range(len(delays) + 1):
         try:
-            return await complete_chat(
-                messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                thinking="disabled",
-            )
+            async with draft_stage(link, action, **details, attempt=attempt + 1, model=cfg.DEEPSEEK_MODEL) as trace:
+                content = await complete_chat(
+                    messages, max_tokens=max_tokens, temperature=temperature, thinking="disabled",
+                )
+                trace["outputChars"] = len(content or "")
+                if not (content or "").strip():
+                    trace["errorType"] = "EmptyModelResponse"
+                return content
         except ValueError as error:
             if str(error) != ERR_RATE_LIMITED or attempt >= len(delays):
                 raise
@@ -171,84 +176,58 @@ async def _complete_with_retry(messages: list[dict], *, max_tokens: int, tempera
     return ""
 
 
-async def _generate_section(draft: NoteDraft, section: NoteDraftSection) -> str:
+async def _generate_section(draft: NoteDraft, section: NoteDraftSection, *, link: DraftRunLink | None = None) -> str:
     raw_request = _raw_request(draft)
     body_instruction = _body_instruction(draft)
     from app.services.draft_brief import body_supplement
     generation_request = raw_request + body_supplement(body_instruction)
     source_note_id = (draft.draft_config or {}).get("sourceNoteId")
     outline = _section_outline(section)
-    source_context = memory_context = ""
-    if isinstance(source_note_id, str) and source_note_id:
-        service = AIApplicationService()
-        source_context = await service.note_generation_source(
-            user_id=draft.user_id, note_id=source_note_id, query=f"{draft.topic}\n{outline}",
-        )
-        memory_context = await service.note_generation_memory(
-            user_id=draft.user_id, requested=True, topic=draft.topic, extra_request=generation_request, sourced_draft=True,
-        )
-    provider_context = (
-        render_prompt(
-            "drafts/provider-context",
-            base_url=cfg.DEEPSEEK_BASE_URL,
-            model=cfg.DEEPSEEK_MODEL,
-        )
-    )
-    prompt = build_note_generate_prompt(
+    details = {"mode": "section", "draftId": draft.id, "sectionId": section.id, "entry": "batch"}
+    request = await AIApplicationService().prepare_note_generation(
         NoteGenerateRequest(
-            mode="section",
-            topic=draft.topic,
-            noteType=draft.note_type,
-            writingTone=draft.writing_tone,
-            noteFormat=draft.note_format,
-            headingLevel=draft.heading_level,
-            includeCode=draft.include_code,
-            includeExercises=draft.include_exercises,
-            extraRequest=generation_request,
-            outlinePlan=outline,
-            sourceContext=source_context,
-            memoryContext=memory_context,
-        )
+            mode="section", topic=draft.topic, noteType=draft.note_type, writingTone=draft.writing_tone,
+            noteFormat=draft.note_format, headingLevel=draft.heading_level, includeCode=draft.include_code,
+            includeExercises=draft.include_exercises, extraRequest=generation_request, outlinePlan=outline,
+        ),
+        user_id=draft.user_id, source_note_id=source_note_id if isinstance(source_note_id, str) else None,
+        memory_requested=True, link=link, **details,
     )
+    with link.scope() if link else nullcontext():
+        provider_context = render_prompt("drafts/provider-context", base_url=cfg.DEEPSEEK_BASE_URL, model=cfg.DEEPSEEK_MODEL)
+        prompt = build_note_generate_prompt(request)
+        generation_system = render_prompt("drafts/section-system")
     first_pass = await _complete_with_retry(
         [
-            {
-                "role": "system",
-                "content": (
-                    render_prompt("drafts/section-system")
-                ),
-            },
+            {"role": "system", "content": generation_system},
             {"role": "user", "content": f"{provider_context}\n\n{prompt}"},
         ],
         max_tokens=7000,
         temperature=0.55,
+        link=link, action="generate", **details,
     )
     if not first_pass.strip():
         raise ValueError("模型返回了空内容")
 
     review_requirements = generation_request
-    if source_context:
-        review_requirements += "\n\n" + render_prompt("notes/source-context", source=source_context)
-    if memory_context:
-        review_requirements += "\n\n" + render_prompt("notes/memory-preference") + memory_context
-    review_prompt = render_prompt(
-        "drafts/review",
-        topic=draft.topic,
-        requirements=review_requirements,
-        section_outline=outline,
-        provider_context=provider_context,
-        first_pass=first_pass,
-    ).strip()
+    with link.scope() if link else nullcontext():
+        if request.sourceContext:
+            review_requirements += "\n\n" + render_prompt("notes/source-context", source=request.sourceContext)
+        if request.memoryContext:
+            review_requirements += "\n\n" + render_prompt("notes/memory-preference") + request.memoryContext
+        review_prompt = render_prompt(
+            "drafts/review", topic=draft.topic, requirements=review_requirements, section_outline=outline,
+            provider_context=provider_context, first_pass=first_pass,
+        ).strip()
+        review_system = render_prompt("drafts/review-system")
     reviewed = await _complete_with_retry(
         [
-            {
-                "role": "system",
-                "content": render_prompt("drafts/review-system"),
-            },
+            {"role": "system", "content": review_system},
             {"role": "user", "content": review_prompt},
         ],
         max_tokens=7600,
         temperature=0.25,
+        link=link, action="review", **details,
     )
     from app.services.heading_numbers import unnumber_generated_headings
     return unnumber_generated_headings(reviewed.strip() or first_pass.strip())
@@ -427,57 +406,64 @@ async def _run_claim(draft_id: str, section_id: str, generation_key: str | None 
                 return
             if generation_key and (section.generation_key != generation_key or draft.status != "generating"):
                 return
-            try:
-                content = await _generate_section(draft, section)
-                error_text = ""
-            except Exception as error:
-                logger.exception("draft section generation failed draft=%s section=%s", draft_id, section_id)
-                content = ""
-                error_text = str(error)[:1000]
+        link = await draft_run_link(draft.user_id, draft_id, sessions=AsyncSessionLocal)
+        try:
+            content = await _generate_section(draft, section, link=link)
+            error_text = ""
+        except Exception as error:
+            logger.exception("draft section generation failed draft=%s section=%s", draft_id, section_id)
+            content = ""
+            error_text = str(error)[:1000]
     except asyncio.CancelledError:
         await _mark_claim_cancelled(draft_id, section_id)
         raise
 
-    async with AsyncSessionLocal() as session:
-        async with session.begin():
-            draft = (
-                await session.execute(select(NoteDraft).where(NoteDraft.id == draft_id).with_for_update())
-            ).scalar_one_or_none()
-            section = (
-                await session.execute(
-                    select(NoteDraftSection).where(
-                        NoteDraftSection.id == section_id,
-                        NoteDraftSection.draft_id == draft_id,
-                    ).with_for_update()
-                )
-            ).scalar_one_or_none()
-            if draft is None or section is None:
-                return
-            if generation_key and (section.generation_key != generation_key or draft.status != "generating" or section.status != "generating"):
-                return
-            job = _job_config(draft)
-            if job.get("cancelRequested"):
-                reset_interrupted_sections([section])
-                draft.status = "outline_ready"
-                job["status"] = "stopped"
-                job.pop("currentSectionId", None)
-                job.pop("currentSectionTitle", None)
-            elif content:
-                siblings = list((await session.execute(select(NoteDraftSection).where(NoteDraftSection.draft_id == draft.id, NoteDraftSection.user_id == draft.user_id))).scalars().all())
-                try:
-                    numbered = number_generated_section(draft, section, siblings, content)
-                except ValueError as error:
-                    section.status = "failed"
-                    job["error"] = str(error)
+    async with draft_stage(link, "save_section", draftId=draft_id, sectionId=section_id, entry="batch") as trace:
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                draft = (
+                    await session.execute(select(NoteDraft).where(NoteDraft.id == draft_id).with_for_update())
+                ).scalar_one_or_none()
+                section = (
+                    await session.execute(
+                        select(NoteDraftSection).where(
+                            NoteDraftSection.id == section_id,
+                            NoteDraftSection.draft_id == draft_id,
+                        ).with_for_update()
+                    )
+                ).scalar_one_or_none()
+                if draft is None or section is None:
+                    trace["skipped"] = "draft_or_section_removed"
+                    return
+                if generation_key and (section.generation_key != generation_key or draft.status != "generating" or section.status != "generating"):
+                    trace["skipped"] = "stale_generation"
+                    return
+                job = _job_config(draft)
+                if job.get("cancelRequested"):
+                    trace["skipped"] = "cancel_requested"
+                    reset_interrupted_sections([section])
+                    draft.status = "outline_ready"
+                    job["status"] = "stopped"
+                    job.pop("currentSectionId", None)
+                    job.pop("currentSectionTitle", None)
+                elif content:
+                    siblings = list((await session.execute(select(NoteDraftSection).where(NoteDraftSection.draft_id == draft.id, NoteDraftSection.user_id == draft.user_id))).scalars().all())
+                    try:
+                        numbered = number_generated_section(draft, section, siblings, content)
+                    except ValueError as error:
+                        trace["errorType"] = type(error).__name__
+                        section.status = "failed"
+                        job["error"] = str(error)
+                    else:
+                        section.content = numbered
+                        section.status = "generated"
+                        job["error"] = ""
                 else:
-                    section.content = numbered
-                    section.status = "generated"
-                    job["error"] = ""
-            else:
-                section.status = "failed"
-                job["error"] = error_text or "本节生成失败"
-            job["updatedAt"] = _now().isoformat()
-            _persist_job_config(draft, job)
+                    trace["errorType"] = "GenerationFailed"
+                    section.status = "failed"
+                    job["error"] = error_text or "本节生成失败"
+                job["updatedAt"] = _now().isoformat()
+                _persist_job_config(draft, job)
 
 
 async def _worker_loop() -> None:

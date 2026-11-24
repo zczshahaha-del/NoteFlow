@@ -24,7 +24,7 @@ async def child(schema: str, lock_key: int, should_hang: bool) -> None:
     draft_worker.AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
     draft_worker._DRAFT_WORKER_LOCK = lock_key
 
-    async def generate(draft, section):
+    async def generate(draft, section, *, link=None):
         assert section.id == "second", "Committed chapter must not regenerate"
         print(f"claimed {section.id}", flush=True)
         if should_hang:

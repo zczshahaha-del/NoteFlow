@@ -373,8 +373,7 @@ export default function AIDraftWorkspace() {
     const payload = checkpointMatchesCurrentSeed ? pendingCheckpoint?.payload : null;
     return typeof payload?.rawRequest === "string" ? payload.rawRequest.trim() : "";
   }, [checkpointMatchesCurrentSeed, pendingCheckpoint]);
-  const checkpointSourceNoteId = checkpointMatchesCurrentSeed && typeof pendingCheckpoint?.payload?.sourceNoteId === "string"
-    ? pendingCheckpoint.payload.sourceNoteId : undefined;
+  const checkpointId = checkpointMatchesCurrentSeed ? pendingCheckpoint?.id : undefined;
   const [topic, setTopic] = useState(initialTopic);
   const [categoryId, setCategoryId] = useState<string | null>(null);
   const [draft, setDraft] = useState<NoteDraftRecord | null>(null);
@@ -692,8 +691,6 @@ export default function AIDraftWorkspace() {
 
     try {
       let outline = "";
-      const draftSource = draft ? draft.draftConfig?.sourceNoteId : checkpointSourceNoteId;
-      const sourceNoteId = typeof draftSource === "string" ? draftSource : undefined;
       const persistedRawRequest = rawRequestFromDraft(
         draft,
         checkpointRawRequest || draftSeed || topicOverride || cleanTopicValue
@@ -721,7 +718,7 @@ export default function AIDraftWorkspace() {
         includeCode,
         includeExercises,
         extraRequest: smartRequirement,
-        sourceNoteId,
+        ...(draft ? { draftId: draft.id } : { checkpointId }),
         memoryEnabled: isMemoryEnabled(),
         maxTokens: getMaxTokens(effectiveRequirements),
         temperature: 0.35,
@@ -759,11 +756,11 @@ export default function AIDraftWorkspace() {
             includeCode,
             includeExercises,
             extraRequest: smartRequirement,
+            checkpointId,
             draftConfig: {
               source: "note_draft_tool",
               trigger: draftSeed,
               rawRequest,
-              ...(sourceNoteId ? {sourceNoteId} : {}),
               ...(generationBrief ? {generationBrief} : {}),
               includeCode,
               includeExercises,
@@ -798,13 +795,12 @@ export default function AIDraftWorkspace() {
   }, [
     categoryId,
     checkpointRawRequest,
-    checkpointSourceNoteId,
+    checkpointId,
     draftSeed,
     draft?.title,
     draft?.id,
     draft?.outline,
     draft?.topic,
-    draft?.draftConfig?.sourceNoteId,
     isBusy,
     replaceDraft,
     streamingOutline,
@@ -828,7 +824,7 @@ export default function AIDraftWorkspace() {
     let finishReason = "";
     try {
       await generateNoteStream({
-        mode: "revise", topic: base.title, markdown: base.assembledContent,
+        mode: "revise", draftId: base.id, topic: base.title, markdown: base.assembledContent,
         noteType: base.noteType, writingTone: base.writingTone, noteFormat: base.noteFormat,
         headingLevel: base.headingLevel, includeCode: base.includeCode, includeExercises: base.includeExercises,
         extraRequest: instruction, memoryEnabled: isMemoryEnabled(), maxTokens: getMaxTokens(instruction),
@@ -956,7 +952,8 @@ export default function AIDraftWorkspace() {
           includeCode,
           includeExercises,
           extraRequest: `${baseDraft.draftConfig?.generationBrief ? buildDraftGenerationRequest(baseDraft.draftConfig.generationBrief as DraftBrief) : buildSmartRequirement(baseDraft.topic || topic, "", "", rawRequest)}${bodyInstructionContext}${revisionContext}`,
-          sourceNoteId: typeof baseDraft.draftConfig?.sourceNoteId === "string" ? baseDraft.draftConfig.sourceNoteId : undefined,
+          draftId: baseDraft.id,
+          sectionId: section.id,
           memoryEnabled: isMemoryEnabled(),
           outlinePlan: `${buildSectionOutline(section)}${revisionContext}`,
           maxTokens: getMaxTokens(rawRequest || baseDraft.topic || topic),

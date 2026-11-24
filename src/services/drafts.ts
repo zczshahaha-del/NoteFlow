@@ -83,6 +83,7 @@ export interface DraftCreatePayload {
   includeExercises: boolean;
   extraRequest: string;
   draftConfig?: Record<string, unknown>;
+  checkpointId?: string;
   outline?: string;
   sections?: DraftSectionPayload[];
   bodyInstruction?: string;

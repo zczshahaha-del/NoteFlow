@@ -20,6 +20,7 @@ from app.repositories.drafts import DraftRepository
 from app.repositories.notes import NoteRepository
 from app.services.ai import ChatMessage, ChatRequest, stream_chat
 from app.services.context_planner import ContextPlan
+from app.services.draft_trace import DraftRunLink, draft_stage
 from app.memory.planning import memory_read_plan_from_turn_plan
 from app.services.runtime_errors import public_error_message
 from app.services.run_service import RunService
@@ -551,6 +552,14 @@ async def list_runs(
     return await _agent_run_history(user.id, sessionId, limit)
 
 
+@router.get("/runs/{run_id}")
+async def get_run(run_id: str, user: CurrentUser = Depends(get_current_user)):
+    snapshot = await _agent_task_snapshot(user.id, run_id=run_id)
+    if snapshot["task"] is None:
+        raise HTTPException(404, detail="任务不存在。")
+    return snapshot
+
+
 @router.post("/runs/{run_id}/cancel")
 async def cancel_run(
     run_id: str,
@@ -795,6 +804,7 @@ async def chat(payload: AgentChatPayload, user: CurrentUser, *, run_state: dict 
         source_title = turn_plan.intent_parameters.source_note_title
         current_note_id = (page_state_dict or {}).get("currentNoteId")
         if source_title or (current_note_id and ContextSource.CURRENT_NOTE in turn_plan.context_sources):
+            source_started = time.perf_counter()
             async with AsyncSessionLocal() as db:
                 notes = NoteRepository(db)
                 if source_title:
@@ -812,6 +822,10 @@ async def chat(payload: AgentChatPayload, user: CurrentUser, *, run_state: dict 
                     source_note = await notes.get_active(user.id, current_note_id)
                     if source_note:
                         draft_source_id = source_note.id
+            link = DraftRunLink(user.id, run_id, session_id, run_state.get("trace_id") or run_id)
+            async with draft_stage(link, "select_source_note", started=source_started, sourceNoteId=draft_source_id) as trace:
+                if not draft_source_id:
+                    trace["errorType"] = "SourceNotResolved"
             if not draft_source_id:
                 return _terminal_turn_response(
                     user_id=user.id, run_state=run_state, intent=intent, turn_plan=turn_plan,

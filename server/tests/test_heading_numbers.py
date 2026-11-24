@@ -30,10 +30,13 @@ class HeadingNumbersTest(unittest.TestCase):
 
 class GeneratedSectionNumbersTest(unittest.IsolatedAsyncioTestCase):
     async def test_reviewed_model_response_cannot_reintroduce_chapter_numbers(self):
-        draft = SimpleNamespace(topic="Docker", title="Docker", draft_config={}, extra_request="通俗", note_type="笔记", writing_tone="自然", note_format="Markdown", heading_level="二级", include_code=True, include_exercises=False)
-        section = SimpleNamespace(level=2, title="Docker 是什么", outline_text="## Docker 是什么")
+        draft = SimpleNamespace(id="draft", user_id="owner", topic="Docker", title="Docker", draft_config={}, extra_request="通俗", note_type="笔记", writing_tone="自然", note_format="Markdown", heading_level="二级", include_code=True, include_exercises=False)
+        section = SimpleNamespace(id="section", level=2, title="Docker 是什么", outline_text="## Docker 是什么")
         model = AsyncMock(side_effect=["## 1. Docker", "## 一、Docker\n\n### （一）定义\n\n```md\n## 1. 示例\n```"])
-        with patch.object(draft_worker, "_complete_with_retry", model):
+        with (
+            patch.object(draft_worker, "_complete_with_retry", model),
+            patch("app.services.ai_application.MemoryContextService.enabled", AsyncMock(return_value=False)),
+        ):
             content = await draft_worker._generate_section(draft, section)
         self.assertEqual(content, "## Docker\n\n### 定义\n\n```md\n## 1. 示例\n```")
 

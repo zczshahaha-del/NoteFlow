@@ -37,6 +37,7 @@ def _tool_trace_out(trace: AgentToolTrace) -> dict:
     return {
         "id": trace.id,
         "runId": trace.run_id,
+        "traceId": trace.trace_id,
         "toolName": trace.tool_name,
         "action": trace.action,
         "status": trace.status,
@@ -53,6 +54,7 @@ def _run_out(run: AgentRun, traces: list[AgentToolTrace], checkpoint: Optional[d
     return {
         "id": run.id,
         "sessionId": run.session_id,
+        "traceId": run.trace_id or run.id,
         "intent": run.intent,
         "status": status,
         "rawStatus": run.status,
@@ -142,6 +144,10 @@ def _update_checkpoint(checkpoint: AgentCheckpoint, status: str, payload_patch: 
     checkpoint.updated_at = now
 
 
+def bind_created_draft(checkpoint: AgentCheckpoint, draft_id: str) -> None:
+    _update_checkpoint(checkpoint, "waiting_user_confirm", {"draftId": draft_id})
+
+
 async def _linked_outcome(session, checkpoint: AgentCheckpoint, payload: dict) -> tuple[str | None, str | None]:
     if checkpoint.checkpoint_type == "draft_workspace" and payload.get("draftId"):
         draft = await session.get(NoteDraft, payload["draftId"])
@@ -172,6 +178,10 @@ async def resolve_checkpoint_by_id(
         ):
             return checkpoint_out(checkpoint)
         payload = {**(checkpoint.payload or {}), **(payload_patch or {})}
+        if checkpoint.checkpoint_type == "draft_workspace":
+            payload.pop("sourceNoteId", None)
+            if (checkpoint.payload or {}).get("sourceNoteId"):
+                payload["sourceNoteId"] = checkpoint.payload["sourceNoteId"]
         object_key = {"draft_workspace": "draftId", "edit_preview": "editPreviewId"}.get(checkpoint.checkpoint_type)
         if object_key and (checkpoint.payload or {}).get(object_key):
             payload[object_key] = checkpoint.payload[object_key]

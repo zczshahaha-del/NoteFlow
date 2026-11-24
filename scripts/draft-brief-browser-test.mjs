@@ -24,7 +24,7 @@ mount(){this.root=createRoot(document.getElementById('root'));this.root.render(R
 window.briefTest=f;
 window.fetch=async(input,options={})=>{const url=String(input),method=options.method||'GET',body=options.body?JSON.parse(options.body):null;f.calls.push({url,method,body});const result=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json'}});
 if(url.includes('/bind')){Object.assign(f.checkpoint.payload,body.payload||{});if(body.draftId)f.checkpoint.payload.draftId=body.draftId;return result({checkpoint:structuredClone(f.checkpoint)});}
-if(url==='/api/note-drafts'&&method==='POST'){if(f.writeFail){f.writeFail=false;return result({error:{message:'合成保存失败'}},503);}f.draft={...body,id:'draft-brief',status:'outline_ready',bodyInstruction:'',assembledContent:'',sections:body.sections.map((s,i)=>({...s,id:'section-'+i,content:'',status:'outline_only'}))};return result({draft:structuredClone(f.draft)});}
+if(url==='/api/note-drafts'&&method==='POST'){if(f.writeFail){f.writeFail=false;return result({error:{message:'合成保存失败'}},503);}f.draft={...body,id:'draft-brief',status:'outline_ready',bodyInstruction:'',assembledContent:'',sections:body.sections.map((s,i)=>({...s,id:'section-'+i,content:'',status:'outline_only'}))};if(body.checkpointId===f.checkpoint.id){f.draft.draftConfig.sourceNoteId=f.checkpoint.payload.sourceNoteId;f.checkpoint.payload.draftId=f.draft.id;}return result({draft:structuredClone(f.draft)});}
 if(url==='/api/note-drafts/draft-brief'&&method==='GET'){
  if(f.progressReadFails){f.progressReadFails=false;return result({},503);}
  return result({draft:structuredClone(f.draft)});
@@ -107,7 +107,8 @@ try {
     await button(card,'打开草稿').waitFor();
     const initial=await page.evaluate(()=>({request:window.briefTest.requests.at(-1),draft:window.briefTest.draft}));
     assert.equal(initial.request.topic,'《两小儿辩日》教学设计');
-    assert.equal(initial.request.sourceNoteId,'source-note');
+    assert.equal(initial.request.checkpointId,'cp-brief');
+    assert.equal(initial.request.sourceNoteId,undefined);
     assert.equal(initial.draft.draftConfig.sourceNoteId,'source-note');
     assert(initial.request.extraRequest.includes('用一课时完成，重点安排课堂讨论。'));
     assert(initial.request.extraRequest.includes('给我生成一份关于两小儿辩日的一份教案'));
@@ -130,7 +131,9 @@ try {
     await button(shell,'生成正文').click();
     await page.waitForFunction(()=>window.briefTest.draft.sections[0].content.includes('板书设计'));
     const sectionRequest=await page.evaluate(()=>window.briefTest.requests.find(r=>r.mode==='section'));
-    assert.equal(sectionRequest.sourceNoteId,'source-note');
+    assert.equal(sectionRequest.draftId,'draft-brief');
+    assert.equal(sectionRequest.sectionId,'section-0');
+    assert.equal(sectionRequest.sourceNoteId,undefined);
     assert(sectionRequest.extraRequest.includes('用一课时完成'));
     assert(sectionRequest.extraRequest.includes('改成两课时，增加板书设计。'));
     assert(sectionRequest.extraRequest.includes('正文采用本次补充'));
