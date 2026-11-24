@@ -21,6 +21,7 @@ from app.models.db import (
     ChatSession,
     Note,
     NoteAttachment,
+    NoteChunk,
     NoteDraft,
     NoteEditPreview,
     NoteIndexJob,
@@ -44,6 +45,10 @@ from app.services.markdown_index import create_index_job, run_index_job
 from app.services.note_library import understand_note_query
 from app.memory.service import MemoryService
 from app.services.run_service import RunService
+from app.services import index_worker
+from app.services.embeddings import EmbeddingBatchResult, content_hash
+from app.deps import CurrentUser
+from app.routers.notes import NoteUpdatePayload, update_note
 from app.agent.write_runtime import (
     authorize_draft_save,
     initialize_draft_graph,
@@ -617,6 +622,122 @@ class DatabaseIntegrationTest(unittest.TestCase):
 
     def test_draft_save_concurrency_returns_one_note_and_one_version(self) -> None:
         asyncio.run(_exercise_concurrent_draft_save())
+
+    def test_background_index_releases_connection_and_fences_stale_results(self) -> None:
+        async def exercise(rag: bool) -> None:
+            suffix = uuid.uuid4().hex
+            owner = CurrentUser(id=f"index-{suffix}", email=f"{suffix}@example.invalid", display_name="Index test")
+            note_id = f"note-{suffix}"
+            create_job = create_rag_index_job if rag else create_index_job
+            started = asyncio.Event()
+            release = asyncio.Event()
+            checked_out = []
+
+            async def embed(texts):
+                checked_out.append(engine.pool.checkedout())
+                started.set()
+                await asyncio.wait_for(release.wait(), 5)
+                return EmbeddingBatchResult(
+                    [[0.01] * cfg.EMBEDDING_DIMENSIONS for _ in texts],
+                    cfg.EMBEDDING_PROVIDER, cfg.EMBEDDING_MODEL, cfg.EMBEDDING_DIMENSIONS,
+                )
+
+            async def claim(session, job):
+                job.status = "running"
+                job.claim_owner = index_worker._worker_id
+                job.claimed_at = job.heartbeat_at = datetime.utcnow()
+                await session.flush()
+                return job.id
+
+            worker_task = None
+            try:
+                async with AsyncSessionLocal() as session, session.begin():
+                    session.add(User(id=owner.id, email=owner.email, display_name=owner.display_name))
+                    await session.flush()
+                    note = Note(id=note_id, user_id=owner.id, title="隔离索引", content="## 测试\n\n旧正文")
+                    session.add(note)
+                    await session.flush()
+                    original = await claim(session, await create_job(session, note))
+                with (
+                    patch.object(cfg, "EMBEDDING_PROVIDER", "test"),
+                    patch.object(cfg, "EMBEDDING_API_KEY", "synthetic"),
+                    patch("app.services.embedding_index.embed_texts", new=embed),
+                ):
+                    worker_task = asyncio.create_task(index_worker._run_claimed(original))
+                    await asyncio.wait_for(started.wait(), 5)
+                    async with AsyncSessionLocal() as session, session.begin():
+                        # A second worker could take this lock while the model is waiting.
+                        await session.get(NoteIndexJob, original, with_for_update={"nowait": True})
+                    new_body = "## 测试\n\n新正文"
+                    await asyncio.wait_for(
+                        update_note(note_id, NoteUpdatePayload(content=new_body), owner), 5,
+                    )
+                    release.set()
+                    self.assertTrue(await worker_task)
+                    async with AsyncSessionLocal() as session, session.begin():
+                        old = await session.get(NoteIndexJob, original)
+                        self.assertEqual((old.status, old.error_code), ("cancelled", "STALE_SOURCE_VERSION"))
+                        condition = NoteIndexJob.graph_version == "rag-v2" if rag else NoteIndexJob.graph_version.is_(None)
+                        fresh = await session.scalar(
+                            select(NoteIndexJob).where(
+                                NoteIndexJob.note_id == note_id, NoteIndexJob.source_version == content_hash(new_body), condition,
+                            )
+                        )
+                        latest = await claim(session, fresh)
+                    self.assertTrue(await index_worker._run_claimed(latest))
+                self.assertEqual(checked_out, [0, 0])
+                async with AsyncSessionLocal() as session:
+                    job = await session.get(NoteIndexJob, latest)
+                    self.assertEqual(job.status, "success")
+                    if rag:
+                        state = await session.get(RagIndexState, note_id)
+                        self.assertEqual(state.source_version, content_hash(new_body))
+                        parts = await session.scalars(select(RagNode.content).where(RagNode.note_id == note_id, RagNode.active.is_(True)))
+                    else:
+                        note = await session.get(Note, note_id)
+                        self.assertEqual(note.index_version, content_hash(new_body))
+                        parts = await session.scalars(select(NoteChunk.content).where(NoteChunk.note_id == note_id))
+                    joined = "\n".join(parts)
+                    self.assertIn("新正文", joined)
+                    self.assertNotIn("旧正文", joined)
+
+                failing_body = "## 测试\n\n等待索引的新版本"
+                await update_note(note_id, NoteUpdatePayload(content=failing_body), owner)
+                async with AsyncSessionLocal() as session, session.begin():
+                    fresh = await session.scalar(
+                        select(NoteIndexJob).where(
+                            NoteIndexJob.note_id == note_id, NoteIndexJob.source_version == content_hash(failing_body), condition,
+                        )
+                    )
+                    failing = await claim(session, fresh)
+                with (
+                    patch.object(cfg, "EMBEDDING_PROVIDER", "test"),
+                    patch.object(cfg, "EMBEDDING_API_KEY", "synthetic"),
+                    patch.object(cfg, "EMBEDDING_FAIL_INDEX_ON_ERROR", True),
+                    patch("app.services.embedding_index.embed_texts", new=AsyncMock(side_effect=TimeoutError)),
+                ):
+                    self.assertTrue(await index_worker._run_claimed(failing))
+                async with AsyncSessionLocal() as session:
+                    retry = await session.get(NoteIndexJob, failing)
+                    self.assertEqual((retry.status, retry.retry_count, retry.error_code), ("pending", 1, "TimeoutError"))
+                    self.assertIsNotNone(retry.next_attempt_at)
+                    if rag:
+                        state = await session.get(RagIndexState, note_id)
+                        self.assertEqual((state.status, state.source_version), ("indexed", content_hash(new_body)))
+                    else:
+                        note = await session.get(Note, note_id)
+                        self.assertEqual(note.index_version, content_hash(new_body))
+            finally:
+                if worker_task is not None and not worker_task.done():
+                    worker_task.cancel()
+                    await asyncio.gather(worker_task, return_exceptions=True)
+                async with AsyncSessionLocal() as session, session.begin():
+                    await session.execute(delete(User).where(User.id == owner.id))
+                await engine.dispose()
+
+        for rag in (False, True):
+            with self.subTest(rag=rag):
+                asyncio.run(exercise(rag))
 
     def test_runtime_tables_match_sqlalchemy_metadata(self) -> None:
         library_owned = {
