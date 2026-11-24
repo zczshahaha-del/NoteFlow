@@ -9,7 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.db import IntegrationOutbox
 from app.utils import random_id
 
-MANAGED_MEMORY_TOPICS = frozenset({"memory.retain.requested", "memory.source.delete"})
+MANAGED_MEMORY_TOPICS = frozenset({
+    "memory.retain.requested", "memory.source.delete", "memory.legacy.review", "memory.chat.learn",
+})
 
 
 class OutboxRepository:

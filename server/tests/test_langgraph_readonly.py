@@ -21,7 +21,6 @@ class FakeReadonlyTools:
         self.rag_calls = 0
         self.memory_calls = 0
         self.answer_calls = 0
-        self.memory_write_calls = 0
         self.sources = sources if sources is not None else [{"noteId": "note-1", "noteTitle": "Note"}]
         self.answer_text = answer_text
         self.events = []
@@ -41,15 +40,10 @@ class FakeReadonlyTools:
         self.answer_calls += 1
         yield {"choices": [{"delta": {"content": self.answer_text}, "finish_reason": None}]}
 
-    async def memory_write(self, _state):
-        self.memory_write_calls += 1
-        return 1
-
     def dependencies(self):
         return ReadonlyGraphDependencies(
             emit=self.emit, memory_recall=self.memory,
             rag_search=self.rag, answer_stream=self.answer,
-            memory_write=self.memory_write,
         )
 
 
@@ -165,7 +159,6 @@ class LangGraphReadonlyTest(unittest.TestCase):
         self.assertEqual(result["answer"], "answer")
         self.assertEqual(captured, [""])
         self.assertEqual(tools.answer_calls, 1)
-        self.assertEqual(tools.memory_write_calls, 0)
         self.assertEqual(result["error_code"], "")
         traces = [event for event in tools.events if event.get("toolName") == "memory_recall"]
         self.assertEqual(len(traces), 1)
@@ -173,41 +166,35 @@ class LangGraphReadonlyTest(unittest.TestCase):
         self.assertEqual(traces[0]["metadata"], {"degraded": True, "reason": "TimeoutError"})
         self.assertNotIn("synthetic-secret", str(tools.events))
 
-    def test_stalled_optional_memory_does_not_keep_the_turn_open(self) -> None:
+    def test_stalled_optional_memory_read_does_not_keep_the_turn_open(self) -> None:
         async def exercise():
-            for stall_stage in ("read", "write"):
-                with self.subTest(stall_stage=stall_stage):
-                    tools = FakeReadonlyTools()
-                    cancelled = asyncio.Event()
+            tools = FakeReadonlyTools()
+            cancelled = asyncio.Event()
 
-                    async def stalled(_state):
-                        try:
-                            await asyncio.Event().wait()
-                        finally:
-                            cancelled.set()
+            async def stalled(_state):
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    cancelled.set()
 
-                    dependencies = tools.dependencies()
-                    if stall_stage == "read":
-                        dependencies.memory_recall = stalled
-                    else:
-                        dependencies.memory_write = stalled
-                    state = new_readonly_state(
-                        user_id="u", question="我是硕士", mode="chat",
-                        turn_plan={"context_sources": ["user_memory"]},
-                    )
-                    result = await asyncio.wait_for(
-                        invoke_readonly_graph(state, dependencies=dependencies), timeout=2,
-                    )
-                    self.assertTrue(cancelled.is_set())
-                    self.assertEqual(result["status"], "success")
-                    self.assertEqual(result["answer"], "answer")
-                    self.assertEqual(result["memory_write_count"], 0)
-                    self.assertTrue(any(event.get("type") == "agent_done" for event in tools.events))
+            dependencies = tools.dependencies()
+            dependencies.memory_recall = stalled
+            state = new_readonly_state(
+                user_id="u", question="我是硕士", mode="chat",
+                turn_plan={"context_sources": ["user_memory"]},
+            )
+            result = await asyncio.wait_for(
+                invoke_readonly_graph(state, dependencies=dependencies), timeout=2,
+            )
+            self.assertTrue(cancelled.is_set())
+            self.assertEqual(result["status"], "success")
+            self.assertEqual(result["answer"], "answer")
+            self.assertTrue(any(event.get("type") == "agent_done" for event in tools.events))
 
         with patch("app.agent.langgraph_readonly.OPTIONAL_MEMORY_TIMEOUT_SECONDS", 0.05):
             asyncio.run(exercise())
 
-    def test_disabled_memory_never_calls_recall_or_writer(self) -> None:
+    def test_disabled_memory_never_calls_recall(self) -> None:
         tools = FakeReadonlyTools()
         result = asyncio.run(invoke_readonly_graph(
             new_readonly_state(
@@ -218,15 +205,6 @@ class LangGraphReadonlyTest(unittest.TestCase):
         ))
         self.assertEqual(result["status"], "success")
         self.assertEqual(tools.memory_calls, 0)
-        self.assertEqual(tools.memory_write_calls, 0)
-
-    def test_reply_retry_keeps_recall_but_skips_memory_write(self) -> None:
-        tools = FakeReadonlyTools()
-        state = new_readonly_state(user_id="u", question="原问题", mode="chat", memory_enabled=True)
-        state["suppress_memory_write"] = True
-        result = asyncio.run(invoke_readonly_graph(state, dependencies=tools.dependencies()))
-        self.assertEqual(result["answer"], "answer")
-        self.assertEqual(tools.memory_write_calls, 0)
 
     def test_library_search_does_not_leak_editor_content_or_fall_back(self) -> None:
         captured = []
@@ -328,21 +306,6 @@ class LangGraphReadonlyTest(unittest.TestCase):
         self.assertEqual(frames[-1], DONE_FRAME)
         self.assertEqual(sum(frame == DONE_FRAME for frame in frames), 1)
         self.assertIn('"type": "agent_session"', frames[0])
-
-    def test_memory_writer_runs_after_primary_answer(self) -> None:
-        tools = FakeReadonlyTools()
-        result = asyncio.run(invoke_readonly_graph(
-            new_readonly_state(
-                user_id="u",
-                question="我叫张成",
-                mode="chat",
-                memory_enabled=True,
-            ),
-            dependencies=tools.dependencies(),
-        ))
-        self.assertEqual(result["answer"], "answer")
-        self.assertEqual(result["memory_write_count"], 1)
-        self.assertEqual(tools.memory_write_calls, 1)
 
     def test_checkpoint_can_resume_after_planner_interrupt(self) -> None:
         try:

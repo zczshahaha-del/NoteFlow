@@ -18,6 +18,7 @@ from app.models.db import (
     AgentRun,
     AgentCheckpoint,
     Base,
+    ChatMessage,
     ChatSession,
     Note,
     NoteAttachment,
@@ -32,6 +33,7 @@ from app.models.db import (
     User,
     UserMemory,
     IntegrationOutbox,
+    MemorySource,
 )
 from app.repositories.outbox import OutboxRepository
 from app.repositories.attachments import AttachmentRepository
@@ -648,6 +650,45 @@ class DatabaseIntegrationTest(unittest.TestCase):
                 await engine.dispose()
 
         asyncio.run(exercise())
+
+    def test_chat_completion_queues_learning_without_waiting_for_memory_lock(self) -> None:
+        from app.schemas.agent import AgentChatPayload
+        from app.services.agent_runtime import finish_agent_run, start_agent_run
+
+        async def exercise() -> None:
+            owner = uuid.uuid4().hex
+            async with AsyncSessionLocal() as session:
+                session.add(User(id=owner, email=f"{owner}@example.invalid", display_name="Chat test"))
+                await session.commit()
+            try:
+                first = await start_agent_run(AgentChatPayload(question="我是硕士"), owner, "general_chat")
+                stopped = await start_agent_run(AgentChatPayload(question="我每天写笔记"), owner, "general_chat")
+                retry = await start_agent_run(AgentChatPayload(question="我是硕士", retryAnswerOnly=True,
+                    retryOfRunId=first["run_id"]), owner, "general_chat")
+                await RunService().cancel(owner, stopped["run_id"], "test")
+                async with AsyncSessionLocal() as holder:
+                    await lock_owner(holder, owner)
+                    for run, expected in ((first, True), (stopped, False), (retry, True)):
+                        committed = await asyncio.wait_for(finish_agent_run(
+                            user_id=owner, session_id=run["session_id"], run_id=run["run_id"],
+                            status="completed", answer="收到", learn_from_chat=True,
+                        ), timeout=2)
+                        self.assertEqual(committed, expected)
+                    async with AsyncSessionLocal() as session:
+                        queued = (await session.scalars(select(MemorySource).where(MemorySource.user_id == owner))).all()
+                        self.assertEqual([row.metadata_json["runId"] for row in queued], [first["run_id"]])
+                        reply = await session.scalar(select(ChatMessage).where(
+                            ChatMessage.run_id == first["run_id"], ChatMessage.role == "assistant"))
+                        self.assertEqual(reply.text, "收到")
+            finally:
+                async with AsyncSessionLocal() as session:
+                    await session.execute(delete(IntegrationOutbox).where(IntegrationOutbox.user_id == owner))
+                    await session.execute(delete(User).where(User.id == owner))
+                    await session.commit()
+                await engine.dispose()
+
+        with patch.object(cfg, "MEMORY_ENGINE", "hindsight"):
+            asyncio.run(exercise())
 
     def test_selection_only_expands_to_the_attached_long_note(self) -> None:
         asyncio.run(_exercise_long_note_selection())

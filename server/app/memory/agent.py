@@ -179,6 +179,7 @@ async def save_memory_from_question(
     history: list[AgentChatMessageIn] | None = None,
     *,
     explicit: bool = True,
+    expected_revision: tuple[int, int] | None = None,
 ) -> tuple[str, list[dict]]:
     from app.memory.control import control, effective_mission, lock_owner, uses_engine
     if await uses_engine(user_id):
@@ -203,6 +204,10 @@ async def save_memory_from_question(
         settings, original_state = await control(db, user_id)
         if not settings.memory_enabled:
             return "长期记忆已关闭。", []
+        if expected_revision is not None and expected_revision != (
+            original_state.get("generation", 0), original_state.get("ruleVersion", 1),
+        ):
+            return "记忆设置已更新，请重新保存。", []
     candidates = await extract_memory_candidates_smart(
         question, "global", chat_history_for_memory(history), mission=effective_mission(original_state),
     )

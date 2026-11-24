@@ -43,6 +43,18 @@ async def dispatch_outbox(session: AsyncSession, item: IntegrationOutbox) -> Non
         if source and source.user_id == item.user_id:
             await MemoryGateway(configured_engine(source.engine)).process(session, item)
         return
+    if item.topic == "memory.legacy.review":
+        from app.memory.gateway import MemoryGateway
+        from app.models.db import MemorySource
+        from app.providers.memory_registry import configured_engine, uses_legacy_index
+        source = await session.get(MemorySource, item.aggregate_id)
+        if source and source.user_id == item.user_id and not uses_legacy_index():
+            await MemoryGateway(configured_engine(source.engine)).process_legacy_review(session, item.user_id)
+        return
+    if item.topic == "memory.chat.learn":
+        from app.memory.chat_learning import learn_legacy_chat
+        await learn_legacy_chat(session, item)
+        return
     if item.topic == "memory.source.delete":
         from app.providers.memory_registry import configured_engine
         from app.models.db import MemorySource

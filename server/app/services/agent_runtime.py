@@ -192,8 +192,10 @@ async def finish_agent_run(
     sources: Optional[list[dict]] = None,
     error_message: Optional[str] = None,
     message_metadata: Optional[dict] = None,
+    learn_from_chat: bool = False,
 ) -> bool:
     now = datetime.utcnow()
+    memory_queued = False
     async with AsyncSessionLocal() as db:
         run = await RunRepository(db).get_run(user_id, run_id, for_update=True)
         if run is None or run.session_id != session_id or run.status != "running":
@@ -227,6 +229,16 @@ async def finish_agent_run(
                 created_at=now,
             )
         )
+        if learn_from_chat and status == "completed" and answer and not retry_of_run_id:
+            from app.memory.chat_learning import enqueue_chat_learning
+            try:
+                async with db.begin_nested():
+                    memory_queued = await enqueue_chat_learning(db, run)
+            except Exception:
+                record_metric("memory", "chat_enqueue", status="failed")
         await db.commit()
+    if memory_queued:
+        from app.workers.outbox_worker import notify_outbox_worker
+        notify_outbox_worker()
     record_metric("agent", "run_finished", status=status)
     return True

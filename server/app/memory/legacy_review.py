@@ -4,9 +4,13 @@ from datetime import datetime, timezone
 from typing import Literal
 
 from pydantic import BaseModel, ValidationError
+from sqlalchemy import func, select
+from sqlalchemy.orm import aliased
 
 from app.memory.engine import MemoryUnavailable
 from app.memory.policy import classify_memory_content
+from app.models.db import IntegrationOutbox, MemorySource, UserSettings
+from app.repositories.outbox import OutboxRepository
 from app.services.ai import complete_chat
 from app.services.prompt_templates import render_prompt
 
@@ -44,6 +48,40 @@ def needs_review(meta):
     claim = meta.get("claim") or {}
     return (claim.get("active", True) and claim.get("id") and claim["id"] not in meta.get("hiddenIds", [])
             and meta.get("evidence") and meta.get("effectiveAt") and not meta.get("legacyReviewed"))
+
+
+async def enqueue_pending_reviews(session):
+    """Discover saved corrections from any release, without a chat request."""
+    legacy = aliased(MemorySource)
+    meta = MemorySource.metadata_json
+    key = func.concat(
+        "legacy-review:", MemorySource.id, ":", meta["effectiveAt"].as_string(), ":",
+        func.coalesce(UserSettings.preferences["memoryControl"]["generation"].as_integer(), 0),
+    )
+    rows = (await session.execute(select(MemorySource, key)
+        .outerjoin(UserSettings, UserSettings.user_id == MemorySource.user_id)
+        .where(
+            MemorySource.status == "stored",
+            UserSettings.memory_enabled.is_not(False),
+            meta["effectiveAt"].as_string().is_not(None),
+            meta["evidence"].as_string().is_not(None),
+            meta["claim"]["id"].as_string().is_not(None),
+            meta["claim"]["active"].as_boolean().is_not(False),
+            meta["legacyReviewed"].as_boolean().is_not(True),
+            select(legacy.id).where(
+                legacy.user_id == MemorySource.user_id,
+                legacy.status == "stored", legacy.metadata_json["claim"]["id"].as_string().is_(None),
+            ).exists(),
+            ~select(IntegrationOutbox.id).where(IntegrationOutbox.idempotency_key == key).exists(),
+        )
+        .order_by(MemorySource.created_at)
+        .limit(20))).all()
+    for source, job_key in rows:
+        await OutboxRepository(session).enqueue(
+            topic="memory.legacy.review", aggregate_type="memory_source",
+            aggregate_id=source.id, user_id=source.user_id, payload={},
+            idempotency_key=job_key, max_attempts=3,
+        )
 
 
 async def reconcile_legacy(engine, owner, sources, claims):

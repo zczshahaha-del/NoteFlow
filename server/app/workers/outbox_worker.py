@@ -54,8 +54,17 @@ async def _process_one() -> bool:
 
 async def _loop() -> None:
     assert _stop is not None and _wake is not None
+    loop = asyncio.get_running_loop()
+    next_review_scan = 0.0
     while not _stop.is_set():
         try:
+            if loop.time() >= next_review_scan:
+                next_review_scan = loop.time() + 15
+                from app.providers.memory_registry import uses_legacy_index
+                if not uses_legacy_index():
+                    from app.memory.legacy_review import enqueue_pending_reviews
+                    async with AsyncSessionLocal() as session, session.begin():
+                        await enqueue_pending_reviews(session)
             if await _process_one():
                 continue
         except asyncio.CancelledError:

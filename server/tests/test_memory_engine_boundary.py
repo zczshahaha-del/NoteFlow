@@ -188,6 +188,13 @@ class MemoryEngineBoundaryTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("测试", evidence)
             return ["mistaken" if "海蓝" in item else "keep" for item in earlier]
         with patch("app.memory.legacy_review.compare_legacy", AsyncMock(side_effect=compare)) as model:
+            # An answer can use the confirmed value while legacy review is queued.
+            rows = await self.gateway.read("a", query="标签")
+            self.assertEqual([r.content for r in rows], ["默认标签为松针"])
+            model.assert_not_awaited()
+            async with self.sessions() as session:
+                await self.gateway.process_legacy_review(session, "a")
+                await session.commit()
             for query in ("标签", None, "标签"):
                 rows = await self.gateway.read("a", query=query)
                 self.assertEqual({r.content for r in rows}, {"默认标签为松针", "常住苏州", "喜欢读推理小说"})
@@ -199,6 +206,21 @@ class MemoryEngineBoundaryTest(unittest.IsolatedAsyncioTestCase):
             model.assert_awaited_once()
         self.assertIn("默认标签是海蓝", [f.content for f in await self.engine.list("a")])
         self.assertEqual([r.content for r in await self.gateway.read("b")], ["默认标签是海蓝"])
+
+    async def test_deleting_a_correction_before_legacy_review_does_not_restore_the_old_value(self):
+        from app.memory.resolution import Change
+
+        await self.publish("a", "我常住苏州。", key="legacy-address")
+        change = Change(content="常住宁波", key="profile.city", type="personal_info", label="城市",
+                        value="宁波", evidence="我现在住宁波")
+        with patch("app.memory.resolution.resolve", AsyncMock(return_value=[change])):
+            await self.publish("a", "我现在住宁波", key="confirmed-address", metadata={"dialogue": True})
+        current, = await self.gateway.read("a", query="常住城市")
+        self.assertEqual(current.value, "宁波")
+        with patch("app.memory.legacy_review.compare_legacy", AsyncMock(return_value=["historical"])):
+            await self.gateway.delete("a", current.id)
+        self.assertEqual(await self.gateway.read("a", query="常住城市"), [])
+        self.assertTrue(any("苏州" in row.content for row in await self.engine.list("a")))
 
     async def test_contextual_revision_replay_and_owner_isolation(self):
         from app.memory.resolution import Change
@@ -444,13 +466,19 @@ class MemoryEngineBoundaryTest(unittest.IsolatedAsyncioTestCase):
         source = await self.publish('a', '我喜欢简短例子。', key='stable-source')
         memory = (await self.gateway.read('a'))[0]
         self.engine.delete_fails = True
-        with self.assertRaises(MemoryUnavailable):
-            await self.gateway.delete('a', memory.id)
+        self.assertEqual((await self.gateway.delete('a', memory.id)).status, 'deleted')
         self.assertEqual(await self.gateway.read('a'), [])
         self.assertIsNone(await self.gateway.submit('a', '我喜欢简短例子。', source_key='stable-source'))
         async with self.sessions() as session:
             self.assertEqual((await session.get(MemorySource, source)).status, 'deleted')
-        self.assertTrue(await self.engine.list('a'))  # external data can outlive the barrier
+            from app.services.outbox import dispatch_outbox
+            cleanup = await session.scalar(select(IntegrationOutbox).where(
+                IntegrationOutbox.aggregate_id == source, IntegrationOutbox.topic == "memory.source.delete"))
+            with self.assertRaises(MemoryUnavailable):
+                await dispatch_outbox(session, cleanup)
+            self.engine.delete_fails = False
+            await dispatch_outbox(session, cleanup)
+        self.assertEqual(await self.engine.list('a'), [])
 
     async def test_closed_or_changed_generation_skips_queued_work(self):
         source = await self.gateway.submit('a', '我喜欢简短例子。')

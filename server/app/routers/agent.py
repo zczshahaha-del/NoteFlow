@@ -146,7 +146,6 @@ def _langgraph_response(
         trace_id=run_state.get("trace_id") or "",
         thread_id=session_id,
     )
-    state["suppress_memory_write"] = payload.retryAnswerOnly
 
     async def stream():
         answer_parts: list[str] = []
@@ -203,6 +202,7 @@ def _langgraph_response(
                 status=status, answer=answer,
                 context_mode=context_mode, sources=sources,
                 error_message=error_message or None,
+                learn_from_chat=memory_enabled and not payload.retryAnswerOnly,
             )
             yield _sse_format({**done_event, "status": status if committed else "cancelled"})
             yield "data: [DONE]\n\n"
