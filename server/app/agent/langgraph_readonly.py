@@ -16,6 +16,9 @@ from app.rag.pipeline.context import validate_citation_indexes
 from app.services.selection_context import has_selection_scope, selection_context_text, whole_note_id
 
 
+OPTIONAL_MEMORY_TIMEOUT_SECONDS = 8
+
+
 class ReadonlyAgentState(TypedDict, total=False):
     user_id: str
     session_id: str
@@ -281,7 +284,8 @@ def build_readonly_graph(
         ):
             return {"memory_context": ""}
         try:
-            return {"memory_context": await deps.memory_recall(state)}
+            async with asyncio.timeout(OPTIONAL_MEMORY_TIMEOUT_SECONDS):
+                return {"memory_context": await deps.memory_recall(state)}
         except Exception as exc:
             # Personalization is optional in this read-only answer flow. Keep
             # explicit memory-management failures on their separate tool path.
@@ -358,7 +362,8 @@ def build_readonly_graph(
         if not state.get("memory_enabled") or state.get("suppress_memory_write"):
             return {"memory_write_count": 0}
         try:
-            count = await deps.memory_write(state)
+            async with asyncio.timeout(OPTIONAL_MEMORY_TIMEOUT_SECONDS):
+                count = await deps.memory_write(state)
             if count:
                 await deps.emit(RuntimeEvent(
                     type="tool_trace",

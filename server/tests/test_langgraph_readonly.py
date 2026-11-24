@@ -173,6 +173,40 @@ class LangGraphReadonlyTest(unittest.TestCase):
         self.assertEqual(traces[0]["metadata"], {"degraded": True, "reason": "TimeoutError"})
         self.assertNotIn("synthetic-secret", str(tools.events))
 
+    def test_stalled_optional_memory_does_not_keep_the_turn_open(self) -> None:
+        async def exercise():
+            for stall_stage in ("read", "write"):
+                with self.subTest(stall_stage=stall_stage):
+                    tools = FakeReadonlyTools()
+                    cancelled = asyncio.Event()
+
+                    async def stalled(_state):
+                        try:
+                            await asyncio.Event().wait()
+                        finally:
+                            cancelled.set()
+
+                    dependencies = tools.dependencies()
+                    if stall_stage == "read":
+                        dependencies.memory_recall = stalled
+                    else:
+                        dependencies.memory_write = stalled
+                    state = new_readonly_state(
+                        user_id="u", question="我是硕士", mode="chat",
+                        turn_plan={"context_sources": ["user_memory"]},
+                    )
+                    result = await asyncio.wait_for(
+                        invoke_readonly_graph(state, dependencies=dependencies), timeout=2,
+                    )
+                    self.assertTrue(cancelled.is_set())
+                    self.assertEqual(result["status"], "success")
+                    self.assertEqual(result["answer"], "answer")
+                    self.assertEqual(result["memory_write_count"], 0)
+                    self.assertTrue(any(event.get("type") == "agent_done" for event in tools.events))
+
+        with patch("app.agent.langgraph_readonly.OPTIONAL_MEMORY_TIMEOUT_SECONDS", 0.05):
+            asyncio.run(exercise())
+
     def test_disabled_memory_never_calls_recall_or_writer(self) -> None:
         tools = FakeReadonlyTools()
         result = asyncio.run(invoke_readonly_graph(

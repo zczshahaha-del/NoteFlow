@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import asyncpg
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, select, text, update
 
 from app.config import cfg
 from app.database import AsyncSessionLocal, engine
@@ -43,6 +43,8 @@ from app.repositories.notes import NoteRepository
 from app.repositories.runs import RunRepository
 from app.services.markdown_index import create_index_job, run_index_job
 from app.services.note_library import understand_note_query
+from app.memory.control import lock_owner
+from app.memory.engine import MemoryUnavailable
 from app.memory.service import MemoryService
 from app.services.run_service import RunService
 from app.services import index_worker
@@ -616,6 +618,36 @@ class DatabaseIntegrationTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.snapshot = asyncio.run(_database_snapshot())
+
+    def test_memory_lock_contention_is_bounded_and_cancellable(self) -> None:
+        async def exercise() -> None:
+            owner = uuid.uuid4().hex
+            try:
+                async with AsyncSessionLocal() as holder:
+                    await lock_owner(holder, owner)
+                    async with AsyncSessionLocal() as waiter:
+                        with self.assertRaises(MemoryUnavailable):
+                            await asyncio.wait_for(lock_owner(waiter, owner), timeout=6)
+                    async with AsyncSessionLocal() as waiter:
+                        pid = await waiter.scalar(text("SELECT pg_backend_pid()"))
+                        task = asyncio.create_task(lock_owner(waiter, owner))
+                        try:
+                            await asyncio.sleep(0.3)
+                            self.assertFalse(task.done())
+                            pending = await holder.scalar(text(
+                                "SELECT count(*) FROM pg_locks WHERE pid = :pid AND locktype = 'advisory'",
+                            ), {"pid": pid})
+                            self.assertEqual(pending, 0)
+                        finally:
+                            task.cancel()
+                            with self.assertRaises(asyncio.CancelledError):
+                                await task
+                async with AsyncSessionLocal() as retry:
+                    await asyncio.wait_for(lock_owner(retry, owner), timeout=1)
+            finally:
+                await engine.dispose()
+
+        asyncio.run(exercise())
 
     def test_selection_only_expands_to_the_attached_long_note(self) -> None:
         asyncio.run(_exercise_long_note_selection())
