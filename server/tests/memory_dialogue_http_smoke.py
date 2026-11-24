@@ -65,6 +65,12 @@ async def exercise(client, owner):
     city = await containing("宁波")
     current = await say(fourth, "我现在常住哪个城市？")
     assert "宁波" in current and "苏州" not in current, current
+    fill_city = "帮我填一项个人资料，只输出「常住城市：<我的当前常住城市>」。如果没有记录就写未记录。"
+    current_in_old_chat = await say(second, fill_city)
+    assert "宁波" in current_in_old_chat and "苏州" not in current_in_old_chat, current_in_old_chat
+    introduce = "写一句发到同事群的自我介绍，带上我现在常住的城市，没资料就留空。只在这里回复，不创建笔记。"
+    introduction = await say(second, introduce)
+    assert "宁波" in introduction and "苏州" not in introduction, introduction
     assert "苏州" in await say(fifth, "我搬家前常住哪个城市，你还记得吗？")
     assert all("苏州" not in m["content"] for m in await active())
 
@@ -84,6 +90,10 @@ async def exercise(client, owner):
     async with AsyncSessionLocal() as session:
         assert (await session.get(MemorySource, replay)).status in {"empty", "skipped"}
 
+    deleted_in_old_chat = await say(second, fill_city)
+    assert "苏州" not in deleted_in_old_chat and "宁波" not in deleted_in_old_chat, deleted_in_old_chat
+    deleted_introduction = await say(second, introduce)
+    assert "苏州" not in deleted_introduction and "宁波" not in deleted_introduction, deleted_introduction
     await say(third, "用一句话概括刚才的讨论。")
     await say(fifth, "我平常写技术笔记会先画流程图。这个习惯我保持了好几年。")
     await containing("流程图")

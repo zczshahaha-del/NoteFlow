@@ -1246,11 +1246,16 @@ async def chat(payload: AgentChatPayload, user: CurrentUser, *, run_state: dict 
                     yield "data: [DONE]\n\n"
                     return
                 memory_result_context = _memory_tool_context(action, memories, payload.question)
+                # Planning can use the conversation to resolve the question. The
+                # answer must use the resolved records, since old turns can contain
+                # values that have since been corrected or deleted.
                 chat_req = ChatRequest(
                     question=payload.question,
                     documentTitle="NoteFlow 长期记忆工具结果",
                     documentContent=memory_result_context,
-                    history=[ChatMessage(role=m.role, text=m.text) for m in payload.history],
+                    history=[] if action == "list_memories" else [
+                        ChatMessage(role=m.role, text=m.text) for m in payload.history
+                    ],
                     maxTokens=payload.maxTokens or 900,
                     temperature=payload.temperature,
                 )
