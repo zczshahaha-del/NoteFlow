@@ -17,7 +17,6 @@ export function useAIContextSlice() {
     treeData: navigationTree(state.treeData),
     reloadWorkspace: state.reloadWorkspace,
     activeEditPreview: state.activeEditPreview,
-    createEditPreviewRequest: state.createEditPreviewRequest,
     applyEditPreviewRequest: state.applyEditPreviewRequest,
     cancelEditPreviewRequest: state.cancelEditPreviewRequest,
     focusChatSource: state.focusChatSource,

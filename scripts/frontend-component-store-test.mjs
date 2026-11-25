@@ -386,7 +386,7 @@ try {
   assert.ok(conversationContainer.querySelector('.nf-chat-message--user p.max-h-44'));
   const supplementButton = () => Array.from(conversationContainer.querySelectorAll('button'))
     .find(button => button.textContent.trim() === "补充理解");
-  assert.ok(supplementButton(), "selected-text answers can still be added to the note");
+  assert.equal(supplementButton(), undefined, "selected-text answers do not expose the supplement shortcut");
   const editNotices = [
     { text: "我正在生成修改预览，不会直接改正式笔记。" },
     { text: "无法准确定位所选原文。", kind: "edit_preview_status" },
