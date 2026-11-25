@@ -123,6 +123,7 @@ async function checkCopyHint(page, block, screenshotName) {
     return {display:s.display,opacity:s.opacity,text:el.textContent,
       noCodeOverlap:r.bottom <= code.top || r.top >= code.bottom || r.right <= code.left || r.left >= code.right};
   });
+  await block.hover();
   await copy.hover();
   await settleStyles(copy);
   const hovered = await hint();
@@ -148,6 +149,35 @@ async function checkCopyHint(page, block, screenshotName) {
   const reset = await hint();
   assert.equal(reset.text, '拷贝');
   assert.equal(reset.opacity, '0', 'Leaving the button and resetting success must hide the hint');
+}
+
+async function checkCodeToolbar(page, block) {
+  const toolbar = block.locator('.code-toolbar-actions');
+  const mouse = await page.evaluate(() => matchMedia('(hover: hover) and (pointer: fine)').matches);
+  const appearance = () => toolbar.evaluate(el => {
+    const style = getComputedStyle(el);
+    return {opacity: style.opacity, pointerEvents: style.pointerEvents};
+  });
+  await page.mouse.move(0, 0);
+  await settleStyles(toolbar);
+  const hidden = {opacity: '0', pointerEvents: 'none'};
+  const visible = {opacity: '1', pointerEvents: 'auto'};
+  assert.deepEqual(await appearance(), mouse ? hidden : visible);
+  await block.hover();
+  await settleStyles(toolbar);
+  assert.deepEqual(await appearance(), visible);
+  if (mouse) {
+    await page.mouse.move(0, 0);
+    await settleStyles(toolbar);
+    assert.deepEqual(await appearance(), hidden);
+    await page.keyboard.press('Tab');
+    const language = block.locator('.code-language-trigger');
+    await language.focus();
+    assert(await language.evaluate(el => el.matches(':focus-visible')));
+    await settleStyles(toolbar);
+    assert.deepEqual(await appearance(), visible);
+    await language.evaluate(el => el.blur());
+  }
 }
 async function freshCodeLifecycle(page) {
   const checks = [];
@@ -202,6 +232,7 @@ async function freshCodeLifecycle(page) {
     await page.waitForFunction(() => document.querySelector('.note-content .code-block')?.dataset.languageMode === 'manual');
     assert.equal(await block.locator('code [class^="token-"]').count(), 0);
     assert.equal(await block.locator('code').textContent(), edited);
+    await block.hover();
     await block.locator('.code-language-trigger').click();
     await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === '搜索代码语言');
     await page.getByRole('option', { name: '自动识别', exact: true }).click();
@@ -245,10 +276,13 @@ async function sharedGrammar(page) {
     await settleStyles(page.locator('.nf-reading-prose'));
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth),await page.evaluate(()=>innerWidth));
     if(surface==='preview') {
-      await checkCopyHint(page,page.locator('.nf-reading-prose .code-block').first(),'preview-copy-hint-'+await page.evaluate(()=>innerWidth));
+      const block=page.locator('.nf-reading-prose .code-block').first();
+      await checkCodeToolbar(page,block);
+      await checkCopyHint(page,block,'preview-copy-hint-'+await page.evaluate(()=>innerWidth));
     }
     if(surface==='rendered') {
       const block=page.locator('.rendered-code-block').first();
+      await checkCodeToolbar(page,block);
       await block.hover();await block.locator('.code-copy-button').click();
       assert.equal(await page.evaluate(()=>window.proseTest.api.copied.at(-1)),await block.locator('code').textContent());
       await block.locator('.code-language-trigger').click();
@@ -323,7 +357,6 @@ try {
     assert.equal(after.prePadding, width === 320 ? '64px 14px' : '44px 18px', 'Balance the space above and below code without adding source lines');
     assert.equal(after.language.size, '14px', 'Restore the original readable language control');
     assert.equal(after.controls.borderWidth, '1px');
-    assert.equal(after.language.opacity, '1', 'Language select stays visible without hover');
     assert(after.language.height >= (width === 320 ? 44 : 28));
     assert.equal(after.controls.top, 7, 'Language/copy group must return to the original top inset');
     assert.equal(after.controls.right, 8, 'Language/copy group must be anchored to the right, not the left');
@@ -364,15 +397,19 @@ try {
     // Exercise real retained controls, with clipboard writes captured in memory.
     const block = editor.locator('.code-block').first();
     await block.scrollIntoViewIfNeeded();
-    await block.hover();
+    await checkCodeToolbar(page,block);
     const copy = block.locator('.code-copy-button');
     await checkCopyHint(page,block,'copy-hint-'+width);
     assert.equal(await page.evaluate(() => window.proseTest.api.copied[0]), before.codeText[0]);
     const language = block.locator('.code-language-trigger');
+    await block.hover();
     await page.screenshot({ path: join(output, 'language-' + width + '.png') });
     await language.click();
     await page.getByRole('listbox', { name: '代码语言', exact: true }).waitFor();
     await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === '搜索代码语言');
+    await page.mouse.move(0, 0);
+    await settleStyles(block);
+    assert.equal(await block.locator('.code-toolbar-actions').evaluate(el => getComputedStyle(el).opacity), '1');
     await page.screenshot({ path: join(output, 'language-menu-' + width + '.png') });
     await page.keyboard.press('Escape');
     await page.getByRole('listbox', { name: '代码语言', exact: true }).waitFor({ state: 'detached' });
