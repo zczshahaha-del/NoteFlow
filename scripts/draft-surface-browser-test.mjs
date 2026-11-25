@@ -11,13 +11,18 @@ const assets = new URL('../dist/assets/', import.meta.url);
 const cssFile = readdirSync(assets).find(name => /^index-.*\.css$/.test(name));
 assert.ok(cssFile, 'run npm run build first');
 const css = readFileSync(new URL(cssFile, assets), 'utf8');
+const sectionWithCode = [
+  '## 缓存的基础', '', '这是用于离线组件检查的合成正文。', '',
+  '```', 'docker images', '```', '',
+  '```text', 'REPOSITORY    TAG', 'nginx         1.25', '```',
+].join('\n');
 const serviceNames = ['assembleNoteDraft','cancelNoteDraft','confirmDraftSection','createDraftSection','createNoteDraft','deleteDraftSection','generateAllDraftSections','generateDraftSection','getNoteDraft','restoreDraftSection','saveDraftToNotes','startDraftSectionGeneration','stopAllDraftSections','updateNoteDraft','updateDraftSection'];
 const entry = `import React from 'react'; import {createRoot} from 'react-dom/client';
 import Draft from ${JSON.stringify(component)};
 const root=createRoot(document.getElementById('root'));
 let revision=0;
 const makeDraft=(status='outline_ready')=>({id:'synthetic-draft',topic:'Redis 学习笔记',title:'Redis 学习笔记',categoryId:null,bodyInstruction:'',draftConfig:{generationBrief:{title:'Redis 学习笔记',requirements:'面向初学者，重点讲缓存场景',rawRequest:'生成 Redis 学习笔记'}},outline:'## 认识 Redis',assembledContent:status==='assembled'?'# Redis 学习笔记\\n合成正文':'',status,
-sections:[{id:'s1',title:'认识 Redis',sortOrder:0,level:2,outlineText:'## 认识 Redis',content:'## 缓存的基础\\n\\n这是用于离线组件检查的合成正文。',status:status==='generating'?'generating':'generated'},
+sections:[{id:'s1',title:'认识 Redis',sortOrder:0,level:2,outlineText:'## 认识 Redis',content:${JSON.stringify(sectionWithCode)},status:status==='generating'?'generating':'generated'},
 {id:'s2',title:'数据类型与常用命令',sortOrder:1,level:2,outlineText:'## 数据类型与常用命令',content:'## 常用命令\\n\\n字符串、列表与集合。',status:'generated'},
 {id:'s3',title:'过期策略与持久化',sortOrder:2,level:2,outlineText:'## 过期策略与持久化',content:'',status:'outline_only'}]});
 const api={calls:[],draft:makeDraft(),failNext:null,holdNext:null,render(){root.render(React.createElement(Draft,{key:revision}))},reopen(){slice.centerMode='draft';this.render()},show(status){this.draft=makeDraft(status);slice.centerMode='draft';revision++;this.render()},async call(name,args){this.calls.push({name,args});
@@ -80,7 +85,27 @@ try {
     await shell.locator('.nf-draft-revision').waitFor();await page.waitForTimeout(220);
     const measure=()=>shell.evaluate(n=>{const r=n.getBoundingClientRect(),s=getComputedStyle(n),close=n.querySelector('.nf-draft-close'),c=getComputedStyle(close),outline=n.querySelector('aside');return {width:r.width,height:r.height,docWidth:document.documentElement.scrollWidth,border:s.borderWidth,background:s.backgroundColor,sidebarWidth:outline.getBoundingClientRect().width,close:{width:close.getBoundingClientRect().width,height:close.getBoundingClientRect().height,background:c.backgroundColor,radius:c.borderRadius,icon:getComputedStyle(close.querySelector('svg')).width},toolbar:getComputedStyle(n.querySelector('.nf-draft-toolbar')).display,lines:[n.querySelector('header'),outline,n.querySelector('.nf-draft-section-bar'),n.querySelector('footer')].map(e=>getComputedStyle(e).borderWidth)}});
     const initial=await measure();assert.equal(initial.docWidth,width);assert.equal(initial.width,Math.min(1240,width-(width>=640?48:32)));assert.equal(initial.height,Math.min(880,height-(width>=640?48:32)));assert.equal(initial.border,'0px');assert.ok(initial.lines.every(x=>x==='0px'));assert.equal(initial.close.background,'rgba(0, 0, 0, 0)');assert.equal(initial.close.icon,'18px');assert.equal(initial.close.radius,'10px');assert.equal(initial.close.width,mobile?44:34);assert.equal(initial.toolbar,'flex');if(!mobile)assert.equal(initial.sidebarWidth,282);
-    const buttons=await shell.locator('button').evaluateAll(nodes=>nodes.filter(n=>n.getBoundingClientRect().width>0).map(n=>{const r=n.getBoundingClientRect(),p=n.closest('main').getBoundingClientRect();return {width:r.width,height:r.height,inside:r.left>=p.left && r.right<=p.right && r.top>=p.top && r.bottom<=p.bottom}}));
+    const generatedCode = shell.locator('.draft-note-content .rendered-code-block');
+    await generatedCode.first().waitFor();
+    assert.equal(await generatedCode.count(), 2);
+    assert.equal((await generatedCode.first().locator('code').textContent()).trim(), 'docker images');
+    const measureCodeBoxes = () => generatedCode.evaluateAll(blocks => blocks.map(block => {
+      const style = getComputedStyle(block);
+      const paper = getComputedStyle(block.closest('.nf-draft-main')).backgroundColor;
+      return {background: style.backgroundColor, paper, outline: style.outlineWidth, outlineStyle: style.outlineStyle, line: style.outlineColor};
+    }));
+    const lightCode = await measureCodeBoxes();
+    await page.evaluate(() => document.documentElement.classList.add('theme-dark'));
+    const darkCode = await measureCodeBoxes();
+    await page.evaluate(() => document.documentElement.classList.remove('theme-dark'));
+    for (const box of [...lightCode, ...darkCode]) {
+      assert.equal(box.outlineStyle, 'solid', JSON.stringify(box));
+      assert.equal(box.outline, '1px', JSON.stringify(box));
+      assert.notEqual(box.background, box.paper);
+      assert.notEqual(box.line, box.background);
+    }
+    assert.notEqual(lightCode[0].background, darkCode[0].background);
+    const buttons=await shell.locator('button:not(.draft-note-content button)').evaluateAll(nodes=>nodes.filter(n=>n.getBoundingClientRect().width>0).map(n=>{const r=n.getBoundingClientRect(),p=n.closest('main').getBoundingClientRect();return {width:r.width,height:r.height,inside:r.left>=p.left && r.right<=p.right && r.top>=p.top && r.bottom<=p.bottom}}));
     assert.ok(buttons.every(b=>b.inside));if(mobile)assert.ok(buttons.every(b=>b.height>=44));
     assert.equal(await shell.getByRole('button',{name:'编辑',exact:true}).count(),0);
     await shell.getByRole('button',{name:'重新生成',exact:true}).focus();await page.keyboard.press('Tab');assert.ok(await shell.getByRole('button',{name:'确认',exact:true}).evaluate(n=>n.matches(':focus-visible') && getComputedStyle(n).outlineStyle==='solid'));
