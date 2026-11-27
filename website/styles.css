@@ -214,11 +214,15 @@ a.screen:hover { border-color: #779db5; }
 }
 .login-scene {
   display: grid;
-  grid-template-columns: minmax(11rem, .64fr) minmax(0, 2.2fr);
+  grid-template-columns: minmax(0, 2.2fr) minmax(11rem, .64fr);
   align-items: center;
   gap: clamp(1.65rem, 5vw, 4.2rem);
+  padding-bottom: 2.75rem;
 }
-.login-shot { min-width: 0; }
+.login-scene h2 { grid-area: 1 / 2; }
+.login-film { grid-area: 1 / 1; }
+.login-film video { aspect-ratio: auto; }
+.login-film--mobile { display: none; }
 
 .edit-section {
   background: radial-gradient(ellipse at 81% 0, #304e63, transparent 65%), #182d3d;
@@ -262,6 +266,7 @@ a.screen:hover { border-color: #779db5; }
   .writing-demo { width: min(100%, 42rem); }
   .outline-scene, .memory-scene { grid-template-columns: 1fr; }
   .login-scene { grid-template-columns: 1fr; }
+  .login-scene h2, .login-film { grid-area: auto; }
   .outline-scene h2, .outline-stage { grid-area: auto; }
   .outline-scene h2 br { display: none; }
 }
@@ -275,6 +280,8 @@ a.screen:hover { border-color: #779db5; }
   .site-header nav { gap: .65rem; }
   .site-header nav a { font-size: .816rem; }
   .write-intro-inner { padding-block: 2.75rem 3.2rem; }
+  .login-film--desktop { display: none; }
+  .login-film--mobile { display: block; width: min(100%, 25rem); }
   .outline-stage { padding-right: 1rem; }
   .outline-detail { width: 53%; }
   .edit-primary { width: 100%; }
