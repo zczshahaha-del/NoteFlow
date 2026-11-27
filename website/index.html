@@ -11,6 +11,7 @@
   <title>知流 NoteFlow｜说一句话，写成一篇笔记</title>
   <link rel="icon" href="./assets/zhiliu.svg" type="image/svg+xml">
   <link rel="stylesheet" href="./styles.css">
+  <script src="./film.js" defer></script>
 </head>
 <body id="top">
   <a class="skip-link" href="#main">跳到正文</a>
@@ -33,22 +34,31 @@
         <div class="hero-copy">
           <h1 id="hero-title">说一句话，<span>写成一篇笔记。</span></h1>
           <p>告诉知流想写什么。先拟大纲，再分章写，确认后存到知识库。</p>
-          <a class="button" href="#create">看笔记怎么生成</a>
+          <a class="button" id="watch-film" href="#create">播放 4K 实录</a>
         </div>
-        <div class="create-stage" id="create">
-          <figure class="prompt-figure">
-            <figcaption>用自己的话交代写作要求</figcaption>
-            <a class="screen" href="./assets/draft-prompt.webp" aria-label="放大自然语言创建笔记的界面截图">
-              <img src="./assets/draft-prompt.webp" width="900" height="954" alt="知流对话中输入创建 Docker 端口映射入门笔记的要求，AI 草稿卡提取了标题和写作要求。" fetchpriority="high">
-            </a>
-          </figure>
-          <figure class="draft-figure">
-            <figcaption>先生成大纲，再写正文</figcaption>
-            <a class="screen" href="./assets/draft.webp" aria-label="放大草稿大纲和正文的界面截图">
-              <img src="./assets/draft.webp" width="1792" height="713" alt="知流草稿工作台左侧显示生成的大纲目录，右侧显示按大纲生成的章节正文。" fetchpriority="high">
-            </a>
-          </figure>
-        </div>
+        <figure class="product-film" id="create">
+          <div class="screen film-screen">
+            <video id="product-film" controls playsinline preload="none" poster="./assets/film-poster.webp"
+              width="3840" height="2160" aria-label="知流 4K 操作实录，从一句话到一篇笔记" aria-describedby="film-caption">
+              <source src="./assets/create-note-4k.mp4" type="video/mp4">
+              <a href="./assets/create-note-4k.mp4">打开知流 4K 操作录屏</a>
+            </video>
+            <button class="film-play" type="button" aria-label="播放操作录屏" aria-controls="product-film" hidden></button>
+          </div>
+          <figcaption id="film-caption">
+            <span>知流实际操作 · 4K · 27 秒</span>
+            <span>模型等待已剪短</span>
+          </figcaption>
+          <details class="film-transcript">
+            <summary>查看文字步骤</summary>
+            <ol>
+              <li>在 AI 助手里输入要求。示例是请知流给初学者写一篇分两章的 Docker 端口映射笔记。</li>
+              <li>草稿卡提取了标题和要求。点击「生成大纲」，再打开草稿，左侧会列出两个章节。</li>
+              <li>点击「全部生成」，查看逐章生成的正文。</li>
+              <li>点击「保存为笔记」，确认标题和位置。正文会出现在知识库里。</li>
+            </ol>
+          </details>
+        </figure>
       </div>
     </section>
 

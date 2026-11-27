@@ -63,9 +63,38 @@ h1, h2, h3 { line-height: 1.25; letter-spacing: -.055em; text-wrap: balance; }
 }
 .button:hover { background: #21465d; }
 
-.create-stage { display: grid; grid-template-columns: minmax(13rem, .92fr) minmax(0, 2.55fr); align-items: start; gap: clamp(1rem, 2.55vw, 2rem); margin-top: clamp(2.35rem, 5vw, 4rem); }
-.create-stage figcaption, .memory-stage figcaption { margin: 0 0 .6rem; color: var(--ink); font-weight: 650; }
-.prompt-figure { align-self: center; }
+.product-film { width: min(65rem, 100%); margin: clamp(2.1rem, 4.5vw, 3.6rem) auto 0; }
+.screen.film-screen { position: relative; border-color: #bccddb; background: #edf3f7; }
+.film-screen video { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; background: #edf3f7; }
+.film-play {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  display: grid;
+  place-items: center;
+  width: clamp(3rem, 6vw, 4.4rem);
+  height: clamp(3rem, 6vw, 4.4rem);
+  padding: 0;
+  transform: translate(-50%, -50%);
+  border: 1px solid #dbebf4;
+  border-radius: 50%;
+  background: #244a63;
+  box-shadow: 0 .45rem 1.45rem #1639514d;
+  cursor: pointer;
+}
+.film-play::before {
+  content: "";
+  margin-left: .2rem;
+  border-block: .52rem solid transparent;
+  border-left: .78rem solid #fff;
+}
+.film-play:hover { background: #183b52; }
+.film-play[hidden] { display: none; }
+.product-film figcaption { display: flex; justify-content: space-between; gap: .55rem 1.2rem; flex-wrap: wrap; }
+.film-transcript { margin-top: .55rem; color: var(--text); font-size: .875rem; }
+.film-transcript summary { width: fit-content; cursor: pointer; }
+.film-transcript summary:focus-visible { outline: 3px solid #4e84ad; outline-offset: 4px; }
+.film-transcript ol { max-width: 39rem; padding-left: 1.4rem; margin: .55rem 0 0; }
+.memory-stage figcaption { margin: 0 0 .6rem; color: var(--ink); font-weight: 650; }
 .screen {
   display: block;
   overflow: hidden;
@@ -112,8 +141,7 @@ figcaption { margin-top: .7rem; color: var(--text); font-size: .875rem; }
   .hero h1 { font-size: clamp(2.35rem, 8vw, 3.35rem); }
   .hero h1 span { display: block; }
   .hero p { max-width: 24rem; }
-  .create-stage, .feature-inner, .edit-scene, .memory-stage { grid-template-columns: 1fr; gap: 1.35rem; }
-  .prompt-figure { max-width: 29rem; }
+  .feature-inner, .edit-scene, .memory-stage { grid-template-columns: 1fr; gap: 1.35rem; }
   .selection-scene .feature-copy, .selection-scene .feature-figure { grid-area: auto; }
   .feature p, .edit-scene p { max-width: 32rem; margin-top: .75rem; }
   .site-footer p { order: 1; width: 100%; }
