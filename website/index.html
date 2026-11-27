@@ -24,18 +24,13 @@
         <a href="#edit">AI 修改</a>
         <a href="#memory">长期记忆</a>
       </nav>
-      <a class="repository" href="https://github.com/zczshahaha-del/NoteFlow">GitHub</a>
     </div>
   </header>
 
   <main id="main">
     <section class="hero" id="workspace" aria-labelledby="hero-title">
       <div class="shell">
-        <div class="hero-copy">
-          <h1 id="hero-title">说一句话，<span>写成一篇笔记。</span></h1>
-          <p>告诉知流想写什么。先拟大纲，再分章写，确认后存到知识库。</p>
-          <a class="button" id="watch-film" href="#create">播放 4K 实录</a>
-        </div>
+        <h1 id="hero-title">说一句话，<span>写成一篇笔记。</span></h1>
         <figure class="product-film" id="create">
           <div class="screen film-screen">
             <video id="product-film" controls playsinline preload="none" poster="./assets/film-poster.webp"
@@ -45,87 +40,65 @@
             </video>
             <button class="film-play" type="button" aria-label="播放操作录屏" aria-controls="product-film" hidden></button>
           </div>
-          <figcaption id="film-caption">
-            <span>知流实际操作 · 4K · 27 秒</span>
-            <span>模型等待已剪短</span>
+          <figcaption class="film-meta">
+            <span id="film-caption">4K · 27 秒</span>
+            <details class="film-transcript">
+              <summary>文字版</summary>
+              <ol>
+                <li>请知流写一篇给初学者的 Docker 端口映射笔记。</li>
+                <li>点击「生成大纲」，打开草稿查看章节。</li>
+                <li>点击「全部生成」，查看逐章生成的正文。</li>
+                <li>点击「保存为笔记」，确认后在知识库打开。</li>
+              </ol>
+            </details>
           </figcaption>
-          <details class="film-transcript">
-            <summary>查看文字步骤</summary>
-            <ol>
-              <li>在 AI 助手里输入要求。示例是请知流给初学者写一篇分两章的 Docker 端口映射笔记。</li>
-              <li>草稿卡提取了标题和要求。点击「生成大纲」，再打开草稿，左侧会列出两个章节。</li>
-              <li>点击「全部生成」，查看逐章生成的正文。</li>
-              <li>点击「保存为笔记」，确认标题和位置。正文会出现在知识库里。</li>
-            </ol>
-          </details>
         </figure>
       </div>
     </section>
 
     <section class="feature outline-feature" id="outline" aria-labelledby="outline-title">
-      <div class="shell feature-inner">
-        <div class="feature-copy">
-          <h2 id="outline-title">长笔记，<br>按章节读。</h2>
-          <p>草稿的大纲可以加章节、改名、调整顺序。读笔记时，展开右侧章节目录，就能直接跳到想看的地方。</p>
-        </div>
-        <figure class="feature-figure">
-          <a class="screen" href="./assets/outline.webp" aria-label="放大笔记章节目录的界面截图">
-            <img src="./assets/outline.webp" width="1550" height="1089" alt="知流编辑器展开了右侧章节目录，目录列出章节和小节。" loading="lazy">
-          </a>
-          <figcaption>阅读笔记时的章节目录</figcaption>
-        </figure>
+      <div class="shell visual-section">
+        <h2 id="outline-title">章节目录</h2>
+        <a class="screen" href="./assets/outline.webp" aria-label="放大笔记章节目录的界面截图">
+          <img src="./assets/outline.webp" width="1550" height="1089" alt="知流编辑器展开了右侧章节目录，点击章节可以跳到正文对应位置。" loading="lazy">
+        </a>
       </div>
     </section>
 
-    <section class="edit-section" id="edit" aria-labelledby="edit-title">
-      <div class="shell">
-        <div class="section-intro">
-          <h2 id="edit-title">想怎么改，直接告诉 AI。</h2>
-        </div>
-        <article class="edit-scene">
-          <div class="feature-copy">
-            <h3>整篇修改，先看对照。</h3>
-            <p>例如让全文更适合初学者。打开「原文对照」，看清原来怎么写、改完是什么样，再决定是否应用到笔记。</p>
-          </div>
-          <figure class="feature-figure">
+    <section class="feature edit-section" id="edit" aria-labelledby="edit-title">
+      <div class="shell visual-section">
+        <h2 id="edit-title">AI 修改</h2>
+        <div class="gallery edit-gallery">
+          <figure>
+            <figcaption>整篇修改</figcaption>
             <a class="screen" href="./assets/edit.webp" aria-label="放大整篇修改的原文对照截图">
-              <img src="./assets/edit.webp" width="1920" height="947" alt="知流修改预览的原文对照。左边显示原文，右边显示修改稿，下方可应用到笔记。" loading="lazy">
+              <img src="./assets/edit.webp" width="1920" height="947" alt="知流修改预览左边显示原文，右边显示修改稿，确认后可应用到笔记。" loading="lazy">
             </a>
-            <figcaption>修改预览 · 原文对照</figcaption>
           </figure>
-        </article>
-        <article class="edit-scene selection-scene">
-          <div class="feature-copy">
-            <h3>就改这一段。</h3>
-            <p>在编辑器里选中文字，点「AI 改一下」。可以直接润色，也能交代怎么改。看过结果后，再替换选中的文字。</p>
-          </div>
-          <figure class="feature-figure">
+          <figure>
+            <figcaption>AI 改一下</figcaption>
             <a class="screen" href="./assets/selection.webp" aria-label="放大 AI 改一下的选区改写截图">
-              <img src="./assets/selection.webp" width="1431" height="873" alt="知流编辑器中的 AI 改一下弹窗，显示对选中文字的改写结果和替换按钮。" loading="lazy">
+              <img src="./assets/selection.webp" width="1431" height="873" alt="知流编辑器内的 AI 改一下弹窗，显示选区的改写结果和替换按钮。" loading="lazy">
             </a>
-            <figcaption>编辑器 · AI 改一下</figcaption>
           </figure>
-        </article>
+        </div>
       </div>
     </section>
 
     <section class="feature memory-feature" id="memory" aria-labelledby="memory-title">
-      <div class="shell">
-        <div class="section-intro">
-          <h2 id="memory-title">写作偏好，下次还能用。</h2>
-          <p>例如先给一个能跑的例子，再解释原理。开启长期记忆后，知流可以在后续对话中参考这类偏好。记住的内容可以在「记忆摘要」里查看和管理。</p>
-        </div>
-        <div class="memory-stage">
+      <div class="shell visual-section">
+        <h2 id="memory-title">长期记忆</h2>
+        <div class="gallery">
           <figure>
-            <figcaption>管理记住的内容</figcaption>
+            <figcaption>记忆摘要</figcaption>
             <a class="screen" href="./assets/memory.webp" aria-label="放大记忆摘要的界面截图">
               <img src="./assets/memory.webp" width="1424" height="592" alt="知流的记忆摘要显示保存的技术笔记写作偏好。" loading="lazy">
             </a>
           </figure>
           <figure>
-            <figcaption>新对话里接着用</figcaption>
+            <figcaption>新对话</figcaption>
             <a class="screen" href="./assets/recall.webp" aria-label="放大使用长期记忆的对话截图">
-              <img src="./assets/recall.webp" width="900" height="639" alt="在新的知流对话里询问写作偏好，AI 从长期记忆中回答先给可运行示例、命令用 Bash。" loading="lazy">
+              <img src="./assets/recall.webp" width="900" height="639" alt="知流在新对话中从长期记忆找回写作偏好，先给可运行示例，命令用 Bash。" loading="lazy">
             </a>
           </figure>
         </div>
@@ -136,7 +109,6 @@
   <footer class="site-footer">
     <div class="shell footer-inner">
       <a class="brand" href="#top" aria-label="知流 NoteFlow 首页">知流<span>.</span></a>
-      <p>页面展示的是知流实际界面，使用测试资料。</p>
       <nav aria-label="相关链接">
         <a href="https://github.com/zczshahaha-del/NoteFlow">项目仓库</a>
         <a href="https://chengspace.cn/">张成的个人空间</a>
