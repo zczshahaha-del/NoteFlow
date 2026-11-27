@@ -9,7 +9,7 @@
 - `create-note-4k.mp4` 来自完整的一次产品操作。Chrome 源画面为 4320×2430，成片为 3840×2160、26.6 秒、H.264。保留真实界面和生成过程，剪短等待，添加分段标题与操作指示。`film-poster.webp` 取自该次录制的正文画面。
 - `outline.webp` 是阅读笔记时展开的章节目录，`outline-detail.webp` 裁自同一张实录。
 - `edit.webp` 是 AI 生成整篇修改后的原文对照。`selection.webp` 是编辑器内「AI 改一下」的实际输出，`selection-detail.webp` 是放大的原始面板。
-- `memory.webp`、`recall.webp` 展示通过实际 API 保存的测试偏好，以及在新对话中读回这条偏好。使用项目的本机记忆引擎进行隔离验证。
+- `memory-4k.mp4` 从空的测试记忆开始录制：在实际对话中请知流保存柠檬茶举例偏好，打开记忆摘要确认，再建新对话解释 API 限流。核对了两次对话 ID、保存记录和最近使用时间；新问题没有复述偏好。使用项目的本机记忆引擎、实际模型和测试账号。`memory-poster.webp` 来自最后一段真实对话。
 - `zhiliu.svg` 取自项目的 `public/favicon.svg`。
 
 ## 本地预览和托管

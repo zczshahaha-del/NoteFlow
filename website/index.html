@@ -82,22 +82,25 @@
     </section>
 
     <section class="feature memory-feature" id="memory" aria-labelledby="memory-title">
-      <div class="shell visual-section">
-        <h2 id="memory-title">长期记忆</h2>
-        <div class="gallery">
-          <figure>
-            <figcaption>记忆摘要</figcaption>
-            <a class="screen" href="./assets/memory.webp" aria-label="放大记忆摘要的界面截图">
-              <img src="./assets/memory.webp" width="1424" height="592" alt="知流的记忆摘要显示保存的技术笔记写作偏好。" loading="lazy">
-            </a>
-          </figure>
-          <figure>
-            <figcaption>新对话</figcaption>
-            <a class="screen" href="./assets/recall.webp" aria-label="放大使用长期记忆的对话截图">
-              <img src="./assets/recall.webp" width="900" height="639" alt="知流在新对话中从长期记忆找回写作偏好，先给可运行示例，命令用 Bash。" loading="lazy">
-            </a>
-          </figure>
-        </div>
+      <div class="shell memory-scene">
+        <h2 id="memory-title">说一次，<span>下次还记得。</span></h2>
+        <figure class="memory-film">
+          <div class="screen film-screen">
+            <video id="memory-film" controls playsinline preload="none" poster="./assets/memory-poster.webp"
+              width="3840" height="2160" aria-label="知流操作实录，记住偏好并用在新对话" aria-describedby="memory-transcript">
+              <source src="./assets/memory-4k.mp4" type="video/mp4">
+              <a href="./assets/memory-4k.mp4">打开知流长期记忆实录</a>
+            </video>
+            <button class="film-play" type="button" aria-label="播放长期记忆实录" aria-controls="memory-film" hidden></button>
+          </div>
+          <figcaption id="memory-transcript" class="sr-only">
+            <ol>
+              <li>告诉知流，解释技术概念时先举一个和柠檬茶有关的生活例子，再用一句话讲原理。</li>
+              <li>在记忆摘要里看到已保存的偏好，然后新建对话。</li>
+              <li>请知流按平时喜欢的方式解释 API 限流。它用柠檬茶的例子说明限流，再讲原理。</li>
+            </ol>
+          </figcaption>
+        </figure>
       </div>
     </section>
   </main>

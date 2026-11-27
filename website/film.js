@@ -1,15 +1,23 @@
-const productFilm = document.querySelector("#product-film");
-const filmPlay = document.querySelector(".film-play");
+const films = [...document.querySelectorAll(".film-screen video")];
 
-function playFilm() {
-  productFilm.controls = true;
-  filmPlay.hidden = true;
-  productFilm.focus({ preventScroll: true });
-  productFilm.play().catch(() => {
-    filmPlay.hidden = false;
+for (const film of films) {
+  const playButton = film.parentElement.querySelector(".film-play");
+
+  playButton.addEventListener("click", () => {
+    film.controls = true;
+    playButton.hidden = true;
+    film.focus({ preventScroll: true });
+    film.play().catch(() => {
+      playButton.hidden = false;
+    });
   });
-}
 
-filmPlay.addEventListener("click", playFilm);
-productFilm.controls = false;
-filmPlay.hidden = false;
+  film.addEventListener("play", () => {
+    for (const otherFilm of films) {
+      if (otherFilm !== film && !otherFilm.paused) otherFilm.pause();
+    }
+  });
+
+  film.controls = false;
+  playButton.hidden = false;
+}
