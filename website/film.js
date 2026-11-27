@@ -12,6 +12,10 @@ for (const film of films) {
     });
   });
 
+  film.closest("details")?.addEventListener("toggle", event => {
+    if (!event.currentTarget.open) film.pause();
+  });
+
   film.addEventListener("play", () => {
     for (const otherFilm of films) {
       if (otherFilm !== film && !otherFilm.paused) otherFilm.pause();
