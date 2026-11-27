@@ -7,6 +7,7 @@ const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 let frameRequest = 0;
 let activeStep = 0;
 let mediaFailed = false;
+let loadingFilm = false;
 
 function updateFrame() {
   frameRequest = 0;
@@ -48,18 +49,39 @@ function updateMode() {
   const current = bounds.top <= 0 && bounds.bottom > 0 ? steps[activeStep] : null;
   player.hidden = !enable;
   journey.toggleAttribute("data-scrubbing", enable);
-  if (enable && !film.hasAttribute("src")) film.src = film.dataset.src;
+  if (enable) prepareFilm();
   const linked = document.getElementById(location.hash.slice(1));
   (current ?? linked)?.scrollIntoView({ block: "start", behavior: "instant" });
   requestFrame();
 }
 
-film.addEventListener("loadedmetadata", requestFrame);
-film.addEventListener("seeked", requestFrame);
-film.addEventListener("error", () => {
+function showFallback() {
   mediaFailed = true;
   updateMode();
-});
+}
+
+async function prepareFilm() {
+  if (loadingFilm) return;
+  loadingFilm = true;
+
+  try {
+    const response = await fetch(film.dataset.src);
+    if (!response.ok) {
+      showFallback();
+      return;
+    }
+    // The static host can send a whole response to a byte-range request.
+    // A local blob lets the browser seek after the complete file arrives.
+    const footage = await response.blob();
+    film.src = URL.createObjectURL(footage.slice(0, footage.size, "video/mp4"));
+  } catch {
+    showFallback();
+  }
+}
+
+film.addEventListener("loadedmetadata", requestFrame);
+film.addEventListener("seeked", requestFrame);
+film.addEventListener("error", showFallback);
 window.addEventListener("scroll", requestFrame, { passive: true });
 window.addEventListener("resize", requestFrame);
 window.addEventListener("pageshow", requestFrame);
