@@ -1,15 +1,16 @@
 # 知流 NoteFlow 官网
 
-官网用同一篇 Docker 示例笔记介绍知流的工作台、笔记搜索和 AI 助手。页面中的产品界面均来自真实知流前端（`34396e7`）和本机隔离的 FastAPI / PostgreSQL 实例。笔记和账号为此次截图新建的测试资料。AI 使用项目已有的模型配置实际回答，并从当前笔记给出两处原文引用。网页展示截图，点击可查看大图。
+官网主线是用自然语言生成笔记。示例贯穿草稿大纲与正文、阅读目录、整篇修改、选区改写和长期记忆。
 
 ## 截图来源
 
-- `assets/workspace.webp`、`assets/mobile.webp` 来自同一篇笔记的桌面和手机布局。
-- `assets/search.webp` 来自「搜索全部笔记」中查询「容器」的实际结果，裁切至搜索窗口周围。
-- `assets/assistant.webp` 是在同一篇笔记旁发问的真实界面。`assets/assistant-detail.webp` 从同一图裁出供小屏阅读的回答和引用区域。
-- `assets/zhiliu.svg` 取自项目的 `public/favicon.svg`。
+所有截图均来自知流前端 `34396e7` 在本机隔离的 FastAPI / PostgreSQL 环境中运行的界面。使用测试账号、Docker 示例笔记和测试写作偏好。截图只做裁切、缩放和 WebP 压缩。
 
-WebP 仅裁切、缩放和压缩。截图未使用实际用户的笔记、账号或会话。
+- `draft-prompt.webp`、`draft.webp` 展示自然语言请求、实际 AI 草稿卡、生成的大纲和章节正文。实测完成后可确认保存，并在笔记列表读取保存的正文。
+- `outline.webp` 是阅读笔记时展开的章节目录。
+- `edit.webp` 是 AI 生成整篇修改后的原文对照。`selection.webp` 是编辑器内「AI 改一下」的实际输出。
+- `memory.webp`、`recall.webp` 展示通过实际 API 保存的测试偏好，以及在新对话中读回这条偏好。使用项目的本机记忆引擎进行隔离验证。
+- `zhiliu.svg` 取自项目的 `public/favicon.svg`。
 
 ## 本地预览和托管
 
