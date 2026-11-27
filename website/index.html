@@ -4,11 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="用自然语言在知流创建笔记。先生成大纲，再写正文。可以预览整篇修改、改写选中文字，并在后续对话参考长期记忆。">
-  <meta name="theme-color" content="#f5f7fa">
-  <meta property="og:title" content="知流 NoteFlow｜说一句话，写成一篇笔记">
+  <meta name="theme-color" content="#f9f9f6">
+  <meta property="og:title" content="知流 NoteFlow｜AI 笔记工作台">
   <meta property="og:description" content="生成笔记，梳理大纲，修改全文或选中的一段。让知流记住你的写作偏好。">
   <meta property="og:type" content="website">
-  <title>知流 NoteFlow｜说一句话，写成一篇笔记</title>
+  <title>知流 NoteFlow｜AI 笔记工作台</title>
   <link rel="icon" href="./assets/zhiliu.svg" type="image/svg+xml">
   <link rel="stylesheet" href="./styles.css">
   <script src="./film.js" defer></script>
@@ -17,20 +17,26 @@
   <a class="skip-link" href="#main">跳到正文</a>
   <header class="site-header">
     <div class="shell header-inner">
-      <a class="brand" href="#top" aria-label="知流 NoteFlow 首页">知流<span>.</span></a>
+      <a class="brand" href="#top" aria-label="知流 NoteFlow 首页">
+        <img src="./assets/zhiliu.svg" width="40" height="40" alt="">
+        <span>知流</span><small lang="en">NoteFlow</small>
+      </a>
       <nav aria-label="主导航">
-        <a href="#create">生成笔记</a>
+        <a href="#create">写作</a>
         <a href="#outline">大纲</a>
-        <a href="#edit">AI 修改</a>
-        <a href="#memory">长期记忆</a>
+        <a href="#edit">修改</a>
+        <a href="#memory">记忆</a>
       </nav>
     </div>
   </header>
 
   <main id="main">
     <section class="hero" id="workspace" aria-labelledby="hero-title">
-      <div class="shell">
-        <h1 id="hero-title">说一句话，<span>写成一篇笔记。</span></h1>
+      <div class="shell hero-inner">
+        <div class="hero-copy">
+          <p class="product-kind">AI 笔记工作台</p>
+          <h1 id="hero-title">说一句话，<br><span>写成笔记。</span></h1>
+        </div>
         <figure class="product-film" id="create">
           <div class="screen film-screen">
             <video id="product-film" controls playsinline preload="none" poster="./assets/film-poster.webp"
@@ -38,8 +44,9 @@
               <source src="./assets/create-note-4k.mp4" type="video/mp4">
               <a href="./assets/create-note-4k.mp4">打开知流 4K 操作录屏</a>
             </video>
-            <button class="film-play" type="button" aria-label="播放操作录屏" aria-controls="product-film" hidden></button>
+            <button class="film-play hero-play" type="button" aria-controls="product-film" hidden>观看写作演示</button>
           </div>
+          <img class="hero-draft" src="./assets/hero-draft.webp" width="710" height="331" alt="">
           <figcaption class="sr-only" id="film-transcript">
             <ol>
               <li>请知流写一篇给初学者的 Docker 端口映射笔记。</li>
@@ -54,7 +61,7 @@
 
     <section class="feature outline-feature" id="outline" aria-labelledby="outline-title">
       <div class="shell outline-scene">
-        <h2 id="outline-title">想读<br>哪一节？</h2>
+        <h2 id="outline-title">长笔记，<br>按章读。</h2>
         <figure class="outline-stage">
           <a class="screen outline-page" href="./assets/outline.webp" aria-label="放大笔记章节目录的界面截图">
             <img src="./assets/outline.webp" width="1550" height="1089" alt="知流笔记里展开了右侧章节目录，点击章节可跳转到正文。" loading="lazy">
@@ -107,7 +114,10 @@
 
   <footer class="site-footer">
     <div class="shell footer-inner">
-      <a class="brand" href="#top" aria-label="知流 NoteFlow 首页">知流<span>.</span></a>
+      <a class="brand" href="#top" aria-label="知流 NoteFlow 首页">
+        <img src="./assets/zhiliu.svg" width="40" height="40" alt="">
+        <span>知流</span><small lang="en">NoteFlow</small>
+      </a>
       <nav aria-label="相关链接">
         <a href="https://github.com/zczshahaha-del/NoteFlow">项目仓库</a>
         <a href="https://chengspace.cn/">张成的个人空间</a>
