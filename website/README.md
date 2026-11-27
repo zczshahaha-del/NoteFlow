@@ -9,7 +9,7 @@
 - `writing-demo.mp4`（1920×1080，13.35 秒）、`writing-demo.webp`（首帧封面）及 `create-note-4k.mp4`（3840×2160，18.25 秒）源自同一次实际工作台录制。原画面为 4320×2430，所有视频帧均保留完整视口。短片进一步压缩等待，从输入到保存为同一篇笔记。
 - `outline.webp` 是阅读笔记时展开的章节目录，`outline-detail.webp` 裁自同一张实录。
 - `directory-demo.mp4` 和 `directory-poster.webp` 来自同一知流前端。浏览器为本次演示提供隔离的文件夹和笔记示例数据，实际点击文件夹、打开笔记、展开章节目录并跳到相应正文。画面中的圆圈标记真实点击。
-- `login-motion-desktop.mp4` 和 `login-motion-mobile.mp4` 是实际登录页的完整动态录屏。分别按 1440×900 和 390×760 记录小人拉着布面入场、布面落稳，以及一次轻拉和松手。两段约 11 秒，播放时保留完整视口。录制使用空白登录表单。`login-desktop.webp` 和 `login-mobile.webp` 为对应设备完整画面的封面。
+- `login-motion-desktop-4k.mp4` 和 `login-motion-mobile-hd.mp4` 从实际登录页的 3 倍像素密度视口重新采集，分别为 3840×2160 和 1170×2280。两段约 8 秒，保留完整视口，展示小人拉着布面入场、布面落稳和一次轻拉后的回弹。录制使用空白登录表单。`login-desktop-4k.webp` 和 `login-mobile-hd.webp` 分别取自录制中布面落稳后的完整画面。
 - `edit.webp` 是 AI 生成整篇修改后的原文对照。`selection.webp` 是编辑器内「AI 改一下」的实际输出，`selection-detail.webp` 是放大的原始面板。
 - `memory-4k.mp4` 从空的测试记忆开始录制：在实际对话中请知流保存柠檬茶举例偏好，打开记忆摘要确认，再建新对话解释 API 限流。核对了两次对话 ID、保存记录和最近使用时间；新问题没有复述偏好。使用项目的本机记忆引擎、实际模型和测试账号。`memory-poster.webp` 来自最后一段真实对话。
 - `zhiliu.svg` 取自项目的 `public/favicon.svg`。
