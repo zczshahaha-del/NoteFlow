@@ -12,7 +12,6 @@
   <link rel="icon" href="./assets/zhiliu.svg" type="image/svg+xml">
   <link rel="stylesheet" href="./styles.css">
   <script src="./film.js" defer></script>
-  <script src="./journey.js" defer></script>
 </head>
 <body id="top">
   <a class="skip-link" href="#main">跳到正文</a>
@@ -33,69 +32,35 @@
 
   <main id="main">
     <section class="write-intro" id="create" aria-labelledby="hero-title">
-      <div class="shell">
-        <p class="product-kind">AI 笔记工作台</p>
-        <h1 id="hero-title">说一句话，<span>写成笔记。</span></h1>
+      <div class="shell write-intro-inner">
+        <div class="write-copy">
+          <p class="product-kind">AI 笔记工作台</p>
+          <h1 id="hero-title">说一句话，<br><span>写成笔记。</span></h1>
+        </div>
+        <figure class="writing-demo" id="input">
+          <figcaption class="demo-bar">
+            <span>知流实录</span>
+            <div class="demo-actions">
+              <button class="demo-toggle" type="button" aria-controls="product-film" hidden>播放</button>
+              <a href="./assets/create-note-4k.mp4">4K 实录</a>
+            </div>
+          </figcaption>
+          <div class="screen demo-screen">
+            <video id="product-film" controls playsinline muted preload="none" poster="./assets/writing-demo.webp"
+              width="1920" height="1080" aria-label="知流写作实录" aria-describedby="film-transcript">
+              <source src="./assets/writing-demo.mp4" type="video/mp4">
+              <a href="./assets/create-note-4k.mp4">打开知流 4K 操作录屏</a>
+            </video>
+          </div>
+          <p class="sr-only" id="film-transcript">
+            在知流输入写作要求，生成 Docker 端口映射笔记的大纲，再分章生成正文并保存到知识库。
+          </p>
+        </figure>
       </div>
     </section>
 
-    <div class="write-journey" data-journey>
-      <div class="journey-player" hidden>
-        <nav class="journey-nav" aria-label="写作过程">
-          <a href="#input" aria-current="step">输入</a>
-          <a href="#outline">大纲</a>
-          <a href="#draft">正文</a>
-          <a href="#saved">保存</a>
-        </nav>
-        <div class="screen journey-screen">
-          <video width="1920" height="1080" playsinline muted preload="auto" aria-hidden="true" tabindex="-1"
-            poster="./assets/journey-input.webp" data-src="./assets/write-scroll.mp4"></video>
-        </div>
-      </div>
-
-      <ol class="journey-steps">
-        <li id="input" data-time="0">
-          <h2>输入一句话</h2>
-          <img class="screen" src="./assets/journey-input.webp" width="1920" height="1080" fetchpriority="high"
-            alt="完整的知流工作台。右侧输入写作要求，请知流为初学者写一篇两章的 Docker 端口映射笔记。">
-        </li>
-        <li id="outline" data-time="6.60">
-          <h2>生成大纲</h2>
-          <img class="screen" src="./assets/journey-outline.webp" width="1920" height="1080" loading="lazy"
-            alt="完整的工作台内打开草稿，大纲包含「主机端口与容器端口」和「用 Nginx 跑一个可访问的端口映射示例」。">
-        </li>
-        <li id="draft" data-time="8.55">
-          <h2>按章写正文</h2>
-          <img class="screen" src="./assets/journey-body.webp" width="1920" height="1080" loading="lazy"
-            alt="两章都已生成。草稿左边保留章节大纲，右边打开第二章，显示运行 Nginx 的命令和端口解释。">
-        </li>
-        <li id="saved" data-time="14.35">
-          <h2>保存到知识库</h2>
-          <img class="screen" src="./assets/journey-saved.webp" width="1920" height="1080" loading="lazy"
-            alt="确认保存后，同一篇笔记出现在工作台左侧的知识库，右边可读到完整的两章。">
-        </li>
-      </ol>
-    </div>
-
-    <details class="shell write-replay">
-      <summary>观看完整实录</summary>
-      <figure>
-        <div class="screen film-screen">
-          <video id="product-film" controls playsinline preload="none" poster="./assets/journey-input.webp"
-            width="3840" height="2160" aria-label="知流 4K 操作实录，从一句话到一篇笔记" aria-describedby="film-transcript">
-            <source src="./assets/create-note-4k.mp4" type="video/mp4">
-            <a href="./assets/create-note-4k.mp4">打开知流 4K 操作录屏</a>
-          </video>
-          <button class="film-play" type="button" aria-label="播放写作实录" aria-controls="product-film" hidden></button>
-        </div>
-        <figcaption class="sr-only" id="film-transcript">
-          一次真实对话，从输入写作要求到生成两章并保存为正式笔记。
-        </figcaption>
-      </figure>
-    </details>
-
-    <section class="feature outline-feature" id="read" aria-labelledby="outline-title">
-      <div class="shell outline-scene">
+    <section class="feature outline-feature" id="outline" aria-labelledby="outline-title">
+      <div class="shell outline-scene" id="read">
         <h2 id="outline-title">长笔记，<br>按章读。</h2>
         <figure class="outline-stage">
           <a class="screen outline-page" href="./assets/outline.webp" aria-label="放大笔记章节目录的界面截图">

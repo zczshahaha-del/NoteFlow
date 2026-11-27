@@ -77,24 +77,58 @@ h1, h2 { line-height: 1.12; letter-spacing: -.056em; }
 .site-header nav a:hover, .site-footer nav a:hover { color: var(--blue); text-decoration: underline; text-underline-offset: .33em; }
 
 .write-intro {
-  padding-block: clamp(1.15rem, 3.2vh, 2rem) clamp(.8rem, 2vh, 1.45rem);
-  text-align: center;
-  background: radial-gradient(ellipse at 52% 125%, #e5eff5, transparent 72%);
+  border-bottom: 1px solid var(--border);
+  background: radial-gradient(ellipse at 75% 45%, #e4eff5, transparent 62%), var(--page);
+}
+.write-intro-inner {
+  display: grid;
+  grid-template-columns: minmax(16rem, .78fr) minmax(0, 1.6fr);
+  gap: clamp(1.65rem, 5vw, 4.5rem);
+  align-items: center;
+  padding-block: clamp(3rem, 7vw, 6.3rem);
 }
 .product-kind {
   display: flex;
   align-items: center;
-  gap: .72rem;
-  margin: 0 0 clamp(.7rem, 2.1vw, 1.65rem);
+  gap: .7rem;
+  margin: 0 0 .9rem;
   color: var(--blue);
-  font-size: clamp(.9rem, 1.15vw, 1rem);
-  font-weight: 660;
+  font-size: .95rem;
+  font-weight: 650;
 }
-.product-kind::before { width: 1.8rem; height: 1px; background: #6695b4; content: ""; }
-.write-intro .product-kind { justify-content: center; margin-bottom: .5rem; line-height: 1.4; }
-.write-intro h1 { font-size: clamp(2.8rem, 4.55vw, 4.2rem); font-weight: 760; }
+.product-kind::before { width: 1.65rem; height: 1px; background: #6695b4; content: ""; }
+.write-intro h1 { font-size: clamp(2.8rem, 4.7vw, 4.5rem); font-weight: 760; }
 .write-intro h1 span, .memory-scene h2 span { color: var(--blue); }
-.write-intro h1 span { display: inline-block; }
+.writing-demo { min-width: 0; }
+.demo-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: .5rem;
+  margin-bottom: .55rem;
+  color: var(--quiet);
+  font-size: .875rem;
+  font-weight: 620;
+}
+.demo-actions { display: flex; align-items: center; gap: .6rem; }
+.demo-toggle, .demo-actions a {
+  display: inline-flex;
+  min-height: 2.5rem;
+  align-items: center;
+  justify-content: center;
+  padding: .25rem .45rem;
+  border: 0;
+  border-radius: .35rem;
+  color: var(--blue);
+  background: transparent;
+  font: inherit;
+  white-space: nowrap;
+}
+.demo-toggle { min-width: 3.6rem; cursor: pointer; }
+.demo-toggle[hidden] { display: none; }
+.demo-toggle:hover, .demo-actions a:hover { background: #dbeaf2; }
+.demo-screen video { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; }
+.demo-screen video:not([controls]) { pointer-events: none; }
 
 .screen {
   display: block;
@@ -131,89 +165,6 @@ a.screen:hover { border-color: #779db5; }
 }
 .film-play:hover { background: #18384d; }
 .film-play[hidden] { display: none; }
-.write-journey {
-  --pin-top: calc(var(--nav-height) + 1.15rem);
-  --player-width: min(calc(100% - 3.4rem), 70rem, max(16rem, calc((100svh - 17.8rem) * 1.7778)));
-  background: radial-gradient(ellipse at 51% 0, #e7f0f5, transparent 60%), var(--page);
-}
-.journey-steps {
-  width: var(--player-width);
-  margin: 0 auto;
-  padding: 0;
-  list-style: none;
-}
-.journey-steps li { margin: 0 0 clamp(1.85rem, 7vw, 5rem); }
-.journey-steps li:last-child { margin-bottom: 0; }
-.journey-steps h2 { margin-bottom: .8rem; font-size: clamp(1.35rem, 3vw, 2.3rem); }
-.journey-player {
-  position: sticky;
-  top: var(--pin-top);
-  z-index: 2;
-  align-self: start;
-  width: var(--player-width);
-  margin-inline: auto;
-}
-.journey-nav {
-  display: flex;
-  width: fit-content;
-  margin: 0 auto .75rem;
-  padding: .2rem;
-  border: 1px solid #ccdae1;
-  border-radius: 2rem;
-  background: #f7f9fa;
-  box-shadow: 0 .35rem 1.15rem #35566b10;
-}
-.journey-nav a {
-  display: grid;
-  min-width: 3.4rem;
-  min-height: 2.35rem;
-  padding-inline: .68rem;
-  place-items: center;
-  border-radius: 2rem;
-  color: var(--quiet);
-  font-size: .91rem;
-  font-weight: 650;
-  white-space: nowrap;
-}
-.journey-nav a:hover { background: #e7eff4; }
-.journey-nav a[aria-current] { color: #fff; background: #254b63; }
-.journey-screen { background: #fafaf9; }
-.journey-screen video { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; pointer-events: none; }
-.write-journey[data-scrubbing] { display: grid; }
-[data-scrubbing] .journey-player, [data-scrubbing] .journey-steps { grid-area: 1 / 1; }
-[data-scrubbing] .journey-steps li {
-  min-height: clamp(18rem, 62svh, 36rem);
-  margin: 0;
-  scroll-margin-top: max(0px, calc(var(--pin-top) - var(--nav-height) - 1.15rem));
-}
-[data-scrubbing] .journey-steps li:last-child { min-height: calc(100svh + 8rem); }
-[data-scrubbing] .journey-steps img { display: none; }
-[data-scrubbing] .journey-steps h2 {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
-.write-replay {
-  width: min(calc(100% - 2rem), 54rem);
-  margin: clamp(1.25rem, 4vw, 3rem) auto clamp(2.25rem, 5vw, 4.75rem);
-}
-.write-replay summary {
-  width: fit-content;
-  margin-inline: auto;
-  padding: .5rem .75rem;
-  border-radius: .35rem;
-  color: var(--blue);
-  cursor: pointer;
-  font-weight: 650;
-}
-.write-replay summary:hover { text-decoration: underline; text-underline-offset: .22em; }
-.write-replay summary:focus-visible { outline: 3px solid #4385b3; outline-offset: 2px; }
-.write-replay figure { margin-top: .9rem; }
-
 .feature { padding-block: clamp(3.7rem, 7.6vw, 6.9rem); }
 .feature h2 { font-size: clamp(2.5rem, 4.8vw, 4.4rem); font-weight: 750; }
 .outline-feature { background: #fff; }
@@ -281,6 +232,8 @@ a.screen:hover { border-color: #779db5; }
 
 @media (max-width: 56rem) {
   .shell { width: calc(100% - 3.4rem); }
+  .write-intro-inner { grid-template-columns: 1fr; gap: 1.65rem; }
+  .writing-demo { width: min(100%, 42rem); }
   .outline-scene, .memory-scene { grid-template-columns: 1fr; }
   .outline-scene h2, .outline-stage { grid-area: auto; }
   .outline-scene h2 br { display: none; }
@@ -294,12 +247,7 @@ a.screen:hover { border-color: #779db5; }
   .site-header .brand small { display: none; }
   .site-header nav { gap: .65rem; }
   .site-header nav a { font-size: .816rem; }
-  .write-journey {
-    --pin-top: max(calc(var(--nav-height) + .7rem), 25svh);
-    --player-width: calc(100% - 1rem);
-  }
-  [data-scrubbing] .journey-steps li { min-height: clamp(11rem, 51svh, 24rem); }
-  [data-scrubbing] .journey-steps li:last-child { min-height: 69svh; }
+  .write-intro-inner { padding-block: 2.75rem 3.2rem; }
   .outline-stage { padding-right: 1rem; }
   .outline-detail { width: 53%; }
   .edit-primary { width: 100%; }
