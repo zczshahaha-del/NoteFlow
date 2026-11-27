@@ -201,6 +201,25 @@ a.screen:hover { border-color: #779db5; }
   pointer-events: none;
 }
 
+.directory-feature {
+  border-top: 1px solid var(--border);
+  background: radial-gradient(ellipse at 19% 5%, #e5eef4, transparent 60%), #f2f6f7;
+}
+.directory-scene { max-width: 66rem; padding-bottom: 2.75rem; }
+.directory-scene h2 { margin-bottom: clamp(1.5rem, 4vw, 3.1rem); }
+
+.login-feature {
+  border-top: 1px solid var(--border);
+  background: radial-gradient(ellipse at 80% 55%, #e5edf4, transparent 67%), #f7f8f8;
+}
+.login-scene {
+  display: grid;
+  grid-template-columns: minmax(11rem, .64fr) minmax(0, 2.2fr);
+  align-items: center;
+  gap: clamp(1.65rem, 5vw, 4.2rem);
+}
+.login-shot { min-width: 0; }
+
 .edit-section {
   background: radial-gradient(ellipse at 81% 0, #304e63, transparent 65%), #182d3d;
   color: #f7fbfd;
@@ -242,6 +261,7 @@ a.screen:hover { border-color: #779db5; }
   .write-intro-inner { grid-template-columns: 1fr; gap: 1.65rem; }
   .writing-demo { width: min(100%, 42rem); }
   .outline-scene, .memory-scene { grid-template-columns: 1fr; }
+  .login-scene { grid-template-columns: 1fr; }
   .outline-scene h2, .outline-stage { grid-area: auto; }
   .outline-scene h2 br { display: none; }
 }

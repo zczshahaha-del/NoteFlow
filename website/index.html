@@ -73,6 +73,34 @@
       </div>
     </section>
 
+    <section class="feature directory-feature" id="directories" aria-labelledby="directory-title">
+      <div class="shell directory-scene">
+        <h2 id="directory-title">找笔记，跳章节。</h2>
+        <figure class="writing-demo">
+          <div class="screen demo-screen">
+            <video id="directory-film" controls playsinline muted preload="none" poster="./assets/directory-poster.webp"
+              width="1920" height="1080" aria-label="知流的文件夹与章节目录" aria-describedby="directory-transcript">
+              <source src="./assets/directory-demo.mp4" type="video/mp4">
+              <a href="./assets/directory-demo.mp4">打开目录实录</a>
+            </video>
+          </div>
+          <div class="demo-actions">
+            <button class="demo-toggle" type="button" aria-controls="directory-film" data-demo-name="目录实录"
+              aria-label="播放目录实录" title="播放" hidden></button>
+            <a href="./assets/directory-demo.mp4" aria-label="放大目录实录" title="放大目录实录">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+                stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4"/>
+              </svg>
+            </a>
+          </div>
+          <figcaption class="sr-only" id="directory-transcript">
+            在左侧知识库展开后端学习和 Docker 文件夹，打开端口映射笔记，再用右侧的章节目录跳到「访问失败时怎么排查」。
+          </figcaption>
+        </figure>
+      </div>
+    </section>
+
     <section class="feature edit-section" id="edit" aria-labelledby="edit-title">
       <div class="shell edit-scene">
         <h2 id="edit-title">整篇，或这一句。</h2>
@@ -110,6 +138,16 @@
             </ol>
           </figcaption>
         </figure>
+      </div>
+    </section>
+    <section class="feature login-feature" id="login-preview" aria-labelledby="login-title">
+      <div class="shell login-scene">
+        <h2 id="login-title">登录界面</h2>
+        <picture class="screen login-shot">
+          <source media="(max-width: 36rem)" srcset="./assets/login-mobile.webp" width="780" height="1520">
+          <img src="./assets/login-desktop.webp" width="2160" height="1350" loading="lazy"
+            alt="知流登录界面。插画小人牵着织物表单，表单展示空白邮箱栏和蓝色的获取验证码按钮。">
+        </picture>
       </div>
     </section>
   </main>

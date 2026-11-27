@@ -23,50 +23,53 @@ for (const film of films) {
   playButton.hidden = false;
 }
 
-const demo = document.querySelector("#product-film");
-const demoToggle = document.querySelector(".demo-toggle");
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
-let demoVisible = false;
-let pausedByViewer = false;
 
-function showDemoControl() {
-  const playing = !demo.paused && !demo.ended;
-  const action = playing ? "暂停" : demo.ended ? "重播" : "播放";
-  demoToggle.toggleAttribute("data-playing", playing);
-  demoToggle.setAttribute("aria-label", `${action}写作实录`);
-  demoToggle.title = action;
-}
+for (const toggle of document.querySelectorAll(".demo-toggle")) {
+  const demo = document.getElementById(toggle.getAttribute("aria-controls"));
+  const subject = toggle.dataset.demoName ?? "写作实录";
+  let demoVisible = false;
+  let pausedByViewer = false;
 
-function playDemo() {
-  demo.play().catch(showDemoControl);
-}
-
-function updateDemoPlayback() {
-  if (!demoVisible || document.hidden || reducedMotion.matches) {
-    demo.pause();
-  } else if (!pausedByViewer && !demo.ended && demo.paused) {
-    playDemo();
+  function showControl() {
+    const playing = !demo.paused && !demo.ended;
+    const action = playing ? "暂停" : demo.ended ? "重播" : "播放";
+    toggle.toggleAttribute("data-playing", playing);
+    toggle.setAttribute("aria-label", `${action}${subject}`);
+    toggle.title = action;
   }
-}
 
-demoToggle.addEventListener("click", () => {
-  pausedByViewer = !demo.paused;
-  if (pausedByViewer) demo.pause();
-  else playDemo();
-  showDemoControl();
-});
-for (const event of ["play", "pause", "ended"]) {
-  demo.addEventListener(event, showDemoControl);
-}
-demo.controls = false;
-demoToggle.hidden = false;
+  function playDemo() {
+    demo.play().catch(showControl);
+  }
 
-if ("IntersectionObserver" in window) {
-  const visibility = new IntersectionObserver(([entry]) => {
-    demoVisible = entry.intersectionRatio >= .55;
-    updateDemoPlayback();
-  }, { threshold: .55 });
-  visibility.observe(demo);
-  document.addEventListener("visibilitychange", updateDemoPlayback);
-  reducedMotion.addEventListener("change", updateDemoPlayback);
+  function updatePlayback() {
+    if (!demoVisible || document.hidden || reducedMotion.matches) {
+      demo.pause();
+    } else if (!pausedByViewer && !demo.ended && demo.paused) {
+      playDemo();
+    }
+  }
+
+  toggle.addEventListener("click", () => {
+    pausedByViewer = !demo.paused;
+    if (pausedByViewer) demo.pause();
+    else playDemo();
+    showControl();
+  });
+  for (const event of ["play", "pause", "ended"]) {
+    demo.addEventListener(event, showControl);
+  }
+  demo.controls = false;
+  toggle.hidden = false;
+
+  if ("IntersectionObserver" in window) {
+    const visibility = new IntersectionObserver(([entry]) => {
+      demoVisible = entry.intersectionRatio >= .55;
+      updatePlayback();
+    }, { threshold: .55 });
+    visibility.observe(demo);
+    document.addEventListener("visibilitychange", updatePlayback);
+    reducedMotion.addEventListener("change", updatePlayback);
+  }
 }
