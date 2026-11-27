@@ -99,34 +99,41 @@ h1, h2 { line-height: 1.12; letter-spacing: -.056em; }
 .product-kind::before { width: 1.65rem; height: 1px; background: #6695b4; content: ""; }
 .write-intro h1 { font-size: clamp(2.8rem, 4.7vw, 4.5rem); font-weight: 760; }
 .write-intro h1 span, .memory-scene h2 span { color: var(--blue); }
-.writing-demo { min-width: 0; }
-.demo-bar {
+.writing-demo { position: relative; min-width: 0; }
+.demo-actions {
+  position: absolute;
+  top: calc(100% + .15rem);
+  right: 0;
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: .5rem;
-  margin-bottom: .55rem;
-  color: var(--quiet);
-  font-size: .875rem;
-  font-weight: 620;
+  gap: .1rem;
 }
-.demo-actions { display: flex; align-items: center; gap: .6rem; }
 .demo-toggle, .demo-actions a {
-  display: inline-flex;
-  min-height: 2.5rem;
-  align-items: center;
-  justify-content: center;
-  padding: .25rem .45rem;
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
   border: 0;
-  border-radius: .35rem;
+  border-radius: .4rem;
   color: var(--blue);
   background: transparent;
-  font: inherit;
-  white-space: nowrap;
 }
-.demo-toggle { min-width: 3.6rem; cursor: pointer; }
+.demo-toggle { cursor: pointer; }
 .demo-toggle[hidden] { display: none; }
 .demo-toggle:hover, .demo-actions a:hover { background: #dbeaf2; }
+.demo-toggle::before {
+  content: "";
+  margin-left: .12rem;
+  border-block: .4rem solid transparent;
+  border-left: .6rem solid currentColor;
+}
+.demo-toggle[data-playing]::before {
+  width: .62rem;
+  height: .84rem;
+  margin-left: 0;
+  border-block: 0;
+  border-inline: .18rem solid currentColor;
+}
 .demo-screen video { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; }
 .demo-screen video:not([controls]) { pointer-events: none; }
 

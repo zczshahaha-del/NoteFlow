@@ -30,7 +30,11 @@ let demoVisible = false;
 let pausedByViewer = false;
 
 function showDemoControl() {
-  demoToggle.textContent = demo.ended ? "重播" : demo.paused ? "播放" : "暂停";
+  const playing = !demo.paused && !demo.ended;
+  const action = playing ? "暂停" : demo.ended ? "重播" : "播放";
+  demoToggle.toggleAttribute("data-playing", playing);
+  demoToggle.setAttribute("aria-label", `${action}写作实录`);
+  demoToggle.title = action;
 }
 
 function playDemo() {

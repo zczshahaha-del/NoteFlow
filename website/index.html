@@ -38,19 +38,21 @@
           <h1 id="hero-title">说一句话，<br><span>写成笔记。</span></h1>
         </div>
         <figure class="writing-demo" id="input">
-          <figcaption class="demo-bar">
-            <span>知流实录</span>
-            <div class="demo-actions">
-              <button class="demo-toggle" type="button" aria-controls="product-film" hidden>播放</button>
-              <a href="./assets/create-note-4k.mp4">4K 实录</a>
-            </div>
-          </figcaption>
           <div class="screen demo-screen">
             <video id="product-film" controls playsinline muted preload="none" poster="./assets/writing-demo.webp"
               width="1920" height="1080" aria-label="知流写作实录" aria-describedby="film-transcript">
               <source src="./assets/writing-demo.mp4" type="video/mp4">
               <a href="./assets/create-note-4k.mp4">打开知流 4K 操作录屏</a>
             </video>
+          </div>
+          <div class="demo-actions">
+            <button class="demo-toggle" type="button" aria-controls="product-film" aria-label="播放写作实录" title="播放" hidden></button>
+            <a href="./assets/create-note-4k.mp4" aria-label="打开 4K 实录" title="打开 4K 实录">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+                stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4"/>
+              </svg>
+            </a>
           </div>
           <p class="sr-only" id="film-transcript">
             在知流输入写作要求，生成 Docker 端口映射笔记的大纲，再分章生成正文并保存到知识库。
