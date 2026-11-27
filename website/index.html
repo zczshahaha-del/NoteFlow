@@ -34,53 +34,49 @@
         <figure class="product-film" id="create">
           <div class="screen film-screen">
             <video id="product-film" controls playsinline preload="none" poster="./assets/film-poster.webp"
-              width="3840" height="2160" aria-label="知流 4K 操作实录，从一句话到一篇笔记" aria-describedby="film-caption">
+              width="3840" height="2160" aria-label="知流操作实录，从一句话到一篇笔记" aria-describedby="film-transcript">
               <source src="./assets/create-note-4k.mp4" type="video/mp4">
               <a href="./assets/create-note-4k.mp4">打开知流 4K 操作录屏</a>
             </video>
             <button class="film-play" type="button" aria-label="播放操作录屏" aria-controls="product-film" hidden></button>
           </div>
-          <figcaption class="film-meta">
-            <span id="film-caption">4K · 27 秒</span>
-            <details class="film-transcript">
-              <summary>文字版</summary>
-              <ol>
-                <li>请知流写一篇给初学者的 Docker 端口映射笔记。</li>
-                <li>点击「生成大纲」，打开草稿查看章节。</li>
-                <li>点击「全部生成」，查看逐章生成的正文。</li>
-                <li>点击「保存为笔记」，确认后在知识库打开。</li>
-              </ol>
-            </details>
+          <figcaption class="sr-only" id="film-transcript">
+            <ol>
+              <li>请知流写一篇给初学者的 Docker 端口映射笔记。</li>
+              <li>生成大纲，打开草稿查看章节。</li>
+              <li>逐章生成正文。</li>
+              <li>确认保存，在知识库打开笔记。</li>
+            </ol>
           </figcaption>
         </figure>
       </div>
     </section>
 
     <section class="feature outline-feature" id="outline" aria-labelledby="outline-title">
-      <div class="shell visual-section">
-        <h2 id="outline-title">章节目录</h2>
-        <a class="screen" href="./assets/outline.webp" aria-label="放大笔记章节目录的界面截图">
-          <img src="./assets/outline.webp" width="1550" height="1089" alt="知流编辑器展开了右侧章节目录，点击章节可以跳到正文对应位置。" loading="lazy">
-        </a>
+      <div class="shell outline-scene">
+        <h2 id="outline-title">想读<br>哪一节？</h2>
+        <figure class="outline-stage">
+          <a class="screen outline-page" href="./assets/outline.webp" aria-label="放大笔记章节目录的界面截图">
+            <img src="./assets/outline.webp" width="1550" height="1089" alt="知流笔记里展开了右侧章节目录，点击章节可跳转到正文。" loading="lazy">
+          </a>
+          <img class="outline-detail" src="./assets/outline-detail.webp" width="565" height="232" alt="" loading="lazy">
+        </figure>
       </div>
     </section>
 
     <section class="feature edit-section" id="edit" aria-labelledby="edit-title">
-      <div class="shell visual-section">
-        <h2 id="edit-title">AI 修改</h2>
-        <div class="gallery edit-gallery">
-          <figure>
-            <figcaption>整篇修改</figcaption>
+      <div class="shell edit-scene">
+        <h2 id="edit-title">整篇，或这一句。</h2>
+        <div class="edit-stage">
+          <figure class="edit-primary">
+            <figcaption>原文对照</figcaption>
             <a class="screen" href="./assets/edit.webp" aria-label="放大整篇修改的原文对照截图">
-              <img src="./assets/edit.webp" width="1920" height="947" alt="知流修改预览左边显示原文，右边显示修改稿，确认后可应用到笔记。" loading="lazy">
+              <img src="./assets/edit.webp" width="1920" height="947" alt="知流修改预览左边是原文，右边是修改稿，确认后可应用到笔记。" loading="lazy">
             </a>
           </figure>
-          <figure>
-            <figcaption>AI 改一下</figcaption>
-            <a class="screen" href="./assets/selection.webp" aria-label="放大 AI 改一下的选区改写截图">
-              <img src="./assets/selection.webp" width="1431" height="873" alt="知流编辑器内的 AI 改一下弹窗，显示选区的改写结果和替换按钮。" loading="lazy">
-            </a>
-          </figure>
+          <a class="screen edit-quick" href="./assets/selection.webp" aria-label="放大 AI 改一下的完整界面截图">
+            <img src="./assets/selection-detail.webp" width="686" height="438" alt="知流的 AI 改一下弹窗，显示所选文字的改写结果和替换按钮。" loading="lazy">
+          </a>
         </div>
       </div>
     </section>
