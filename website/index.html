@@ -27,6 +27,7 @@
         <a href="#edit">修改</a>
         <a href="#memory">记忆</a>
       </nav>
+      <button class="motion-toggle" type="button" aria-label="暂停页面动效" title="暂停页面动效" hidden></button>
     </div>
   </header>
 
@@ -39,14 +40,13 @@
         </div>
         <figure class="writing-demo" id="input">
           <div class="screen demo-screen">
-            <video id="product-film" controls playsinline muted preload="none" poster="./assets/writing-demo.webp"
+            <video id="product-film" controls playsinline muted loop preload="none" poster="./assets/writing-demo.webp"
               width="1920" height="1080" aria-label="知流写作实录" aria-describedby="film-transcript">
               <source src="./assets/writing-demo.mp4" type="video/mp4">
               <a href="./assets/create-note-4k.mp4">打开知流 4K 操作录屏</a>
             </video>
           </div>
           <div class="demo-actions">
-            <button class="demo-toggle" type="button" aria-controls="product-film" aria-label="播放写作实录" title="播放" hidden></button>
             <a href="./assets/create-note-4k.mp4" aria-label="打开 4K 实录" title="打开 4K 实录">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -63,31 +63,23 @@
 
     <section class="feature login-feature" id="login-preview" aria-labelledby="login-title">
       <div class="shell login-scene">
-        <h2 id="login-title">登录界面</h2>
+        <h2 class="sr-only" id="login-title">登录动效</h2>
         <figure class="writing-demo login-film login-film--desktop">
           <div class="screen demo-screen">
-            <video id="login-film-desktop" controls playsinline muted preload="none" poster="./assets/login-desktop.webp"
+            <video id="login-film-desktop" controls playsinline muted loop preload="none" poster="./assets/login-desktop.webp"
               width="1440" height="900" aria-label="知流桌面登录实录" aria-describedby="login-transcript">
               <source src="./assets/login-motion-desktop.mp4" type="video/mp4">
               <a href="./assets/login-motion-desktop.mp4">打开桌面登录实录</a>
             </video>
           </div>
-          <div class="demo-actions">
-            <button class="demo-toggle" type="button" aria-controls="login-film-desktop" data-demo-name="登录实录"
-              aria-label="播放登录实录" title="播放" hidden></button>
-          </div>
         </figure>
         <figure class="writing-demo login-film login-film--mobile">
           <div class="screen demo-screen">
-            <video id="login-film-mobile" controls playsinline muted preload="none" poster="./assets/login-mobile.webp"
+            <video id="login-film-mobile" controls playsinline muted loop preload="none" poster="./assets/login-mobile.webp"
               width="390" height="760" aria-label="知流手机版登录实录" aria-describedby="login-transcript">
               <source src="./assets/login-motion-mobile.mp4" type="video/mp4">
               <a href="./assets/login-motion-mobile.mp4">打开手机版登录实录</a>
             </video>
-          </div>
-          <div class="demo-actions">
-            <button class="demo-toggle" type="button" aria-controls="login-film-mobile" data-demo-name="登录实录"
-              aria-label="播放登录实录" title="播放" hidden></button>
           </div>
         </figure>
         <p id="login-transcript" class="sr-only">
@@ -101,15 +93,13 @@
         <h2 id="directory-title">找笔记，跳章节。</h2>
         <figure class="writing-demo">
           <div class="screen demo-screen">
-            <video id="directory-film" controls playsinline muted preload="none" poster="./assets/directory-poster.webp"
+            <video id="directory-film" controls playsinline muted loop preload="none" poster="./assets/directory-poster.webp"
               width="1920" height="1080" aria-label="知流的文件夹与章节目录" aria-describedby="directory-transcript">
               <source src="./assets/directory-demo.mp4" type="video/mp4">
               <a href="./assets/directory-demo.mp4">打开目录实录</a>
             </video>
           </div>
           <div class="demo-actions">
-            <button class="demo-toggle" type="button" aria-controls="directory-film" data-demo-name="目录实录"
-              aria-label="播放目录实录" title="播放" hidden></button>
             <a href="./assets/directory-demo.mp4" aria-label="放大目录实录" title="放大目录实录">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -158,12 +148,11 @@
         <h2 id="memory-title">说一次，<span>下次还记得。</span></h2>
         <figure class="memory-film">
           <div class="screen film-screen">
-            <video id="memory-film" controls playsinline preload="none" poster="./assets/memory-poster.webp"
+            <video id="memory-film" controls playsinline muted loop preload="none" poster="./assets/memory-poster.webp"
               width="3840" height="2160" aria-label="知流操作实录，记住偏好并用在新对话" aria-describedby="memory-transcript">
               <source src="./assets/memory-4k.mp4" type="video/mp4">
               <a href="./assets/memory-4k.mp4">打开知流长期记忆实录</a>
             </video>
-            <button class="film-play" type="button" aria-label="播放长期记忆实录" aria-controls="memory-film" hidden></button>
           </div>
           <figcaption id="memory-transcript" class="sr-only">
             <ol>

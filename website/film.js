@@ -1,75 +1,65 @@
 const films = [...document.querySelectorAll("main video")];
+const motionToggle = document.querySelector(".motion-toggle");
 
-for (const film of films) {
-  film.addEventListener("play", () => {
-    for (const otherFilm of films) {
-      if (otherFilm !== film && !otherFilm.paused) otherFilm.pause();
-    }
-  });
+if (motionToggle && "IntersectionObserver" in window) {
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+  const visibleRatios = new Map();
+  const startThreshold = .4;
+  let motionPreference;
+  let activeFilm = null;
 
-  const playButton = film.parentElement.querySelector(".film-play");
-  if (!playButton) continue;
-
-  playButton.addEventListener("click", () => {
-    film.controls = true;
-    playButton.hidden = true;
-    film.focus({ preventScroll: true });
-    film.play().catch(() => {
-      playButton.hidden = false;
-    });
-  });
-
-  film.controls = false;
-  playButton.hidden = false;
-}
-
-const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
-
-for (const toggle of document.querySelectorAll(".demo-toggle")) {
-  const demo = document.getElementById(toggle.getAttribute("aria-controls"));
-  const subject = toggle.dataset.demoName ?? "写作实录";
-  let demoVisible = false;
-  let pausedByViewer = false;
-
-  function showControl() {
-    const playing = !demo.paused && !demo.ended;
-    const action = playing ? "暂停" : demo.ended ? "重播" : "播放";
-    toggle.toggleAttribute("data-playing", playing);
-    toggle.setAttribute("aria-label", `${action}${subject}`);
-    toggle.title = action;
-  }
-
-  function playDemo() {
-    demo.play().catch(showControl);
+  function motionEnabled() {
+    return motionPreference ?? !reducedMotion.matches;
   }
 
   function updatePlayback() {
-    if (!demoVisible || document.hidden || reducedMotion.matches) {
-      demo.pause();
-    } else if (!pausedByViewer && !demo.ended && demo.paused) {
-      playDemo();
+    const enabled = motionEnabled();
+    const action = enabled ? "暂停页面动效" : "播放页面动效";
+    motionToggle.toggleAttribute("data-enabled", enabled);
+    motionToggle.setAttribute("aria-label", action);
+    motionToggle.title = action;
+
+    let nextFilm = null;
+    if (enabled && !document.hidden) {
+      let highestRatio = 0;
+      for (const film of films) {
+        const ratio = visibleRatios.get(film) ?? 0;
+        if (ratio >= startThreshold && ratio > highestRatio) {
+          nextFilm = film;
+          highestRatio = ratio;
+        }
+      }
+    }
+    if (nextFilm !== activeFilm) {
+      activeFilm?.pause();
+      activeFilm = nextFilm;
+    }
+
+    if (nextFilm?.paused) {
+      nextFilm.play().catch(error => {
+        if (error.name === "NotAllowedError" && activeFilm === nextFilm) {
+          motionPreference = false;
+          updatePlayback();
+        }
+      });
     }
   }
 
-  toggle.addEventListener("click", () => {
-    pausedByViewer = !demo.paused;
-    if (pausedByViewer) demo.pause();
-    else playDemo();
-    showControl();
-  });
-  for (const event of ["play", "pause", "ended"]) {
-    demo.addEventListener(event, showControl);
-  }
-  demo.controls = false;
-  toggle.hidden = false;
+  const observer = new IntersectionObserver(entries => {
+    for (const entry of entries) visibleRatios.set(entry.target, entry.intersectionRatio);
+    updatePlayback();
+  }, { threshold: [0, startThreshold, .55, .7, .85, 1] });
 
-  if ("IntersectionObserver" in window) {
-    const visibility = new IntersectionObserver(([entry]) => {
-      demoVisible = entry.intersectionRatio >= .55;
-      updatePlayback();
-    }, { threshold: .55 });
-    visibility.observe(demo);
-    document.addEventListener("visibilitychange", updatePlayback);
-    reducedMotion.addEventListener("change", updatePlayback);
+  for (const film of films) {
+    film.controls = false;
+    observer.observe(film);
   }
+  motionToggle.addEventListener("click", () => {
+    motionPreference = !motionEnabled();
+    updatePlayback();
+  });
+  document.addEventListener("visibilitychange", updatePlayback);
+  reducedMotion.addEventListener("change", updatePlayback);
+  updatePlayback();
+  motionToggle.hidden = false;
 }
