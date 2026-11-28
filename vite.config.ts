@@ -1,7 +1,7 @@
 import path from 'node:path'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { defineConfig } from 'vite'
+import { defineConfig, type ProxyOptions } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
@@ -29,12 +29,30 @@ function devApiProxyTarget(): string {
 }
 
 const apiPrefix = `${base}api`
-const proxy = {
+const privateCookiePrefix = base === '/' ? '' : `noteflow_path_${Buffer.from(base).toString('hex')}_`
+const proxy: Record<string, ProxyOptions> = {
   [`^${apiPrefix}(?:/|\\?|$)`]: {
     target: devApiProxyTarget(),
     changeOrigin: true,
     rewrite: (url: string) => url.slice(base.length - 1),
     cookiePathRewrite: { '/': base },
+    configure: (server) => {
+      if (!privateCookiePrefix) return
+      // The local backend also serves the root preview. Translate the
+      // subpath's cookie names without changing that backend's sessions.
+      server.on('proxyReq', (forwarded, request) => {
+        const cookies = (request.headers.cookie || '').split(';')
+          .map(cookie => cookie.trim())
+          .filter(cookie => cookie.startsWith(privateCookiePrefix))
+          .map(cookie => cookie.slice(privateCookiePrefix.length))
+        if (cookies.length) forwarded.setHeader('Cookie', cookies.join('; '))
+        else forwarded.removeHeader('Cookie')
+      })
+      server.on('proxyRes', (response) => {
+        const cookies = response.headers['set-cookie']
+        if (cookies) response.headers['set-cookie'] = cookies.map(cookie => privateCookiePrefix + cookie)
+      })
+    },
   },
 }
 

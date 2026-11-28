@@ -49,6 +49,12 @@ def _env_bool(key: str, default: bool = False) -> bool:
     return value.strip().lower() not in {"0", "false", "no", "off"}
 
 
+def _auth_cookie_name() -> str:
+    name = _env("AUTH_COOKIE_NAME", "noteflow_session")
+    base = _env("NOTEFLOW_BASE_PATH", "/")
+    return name if base == "/" else f"noteflow_path_{base.encode().hex()}_{name}"
+
+
 class Config:
     ENVIRONMENT: str = _env("ENVIRONMENT", "development")
     PROMPT_RELEASE_ROOT: str = _env("PROMPT_RELEASE_ROOT")
@@ -60,7 +66,7 @@ class Config:
     DB_PASSWORD: str = _env("DB_PASSWORD", "noteflow_password")
     DB_NAME: str = _env("DB_NAME", "noteflow")
     JWT_SECRET: str = _env("JWT_SECRET", "dev-only-change-this-secret")
-    AUTH_COOKIE_NAME: str = _env("AUTH_COOKIE_NAME", "noteflow_session")
+    AUTH_COOKIE_NAME: str = _auth_cookie_name()
     AUTH_COOKIE_SECURE: bool = _env_bool("AUTH_COOKIE_SECURE", ENVIRONMENT == "production")
     AUTH_ACCESS_TTL_MINUTES: int = _env_int("AUTH_ACCESS_TTL_MINUTES", 30)
     AUTH_SESSION_TTL_DAYS: int = _env_int("AUTH_SESSION_TTL_DAYS", 7)

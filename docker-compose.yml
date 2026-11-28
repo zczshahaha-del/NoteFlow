@@ -44,6 +44,7 @@ services:
     environment:
       PORT: 8080
       ENVIRONMENT: ${ENVIRONMENT:-development}
+      NOTEFLOW_BASE_PATH: ${NOTEFLOW_BASE_PATH:-/}
       DB_HOST: postgres
       DB_PORT: 5432
       DB_USER: ${POSTGRES_USER:-noteflow}

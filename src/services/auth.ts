@@ -150,18 +150,21 @@ export async function confirmEmailChange(email: string, code: string): Promise<A
   return session;
 }
 
-export async function loadCurrentSession(): Promise<AuthSession | null> {
+export async function loadCurrentSession(signal?: AbortSignal): Promise<AuthSession | null> {
   try {
-    const response = await apiFetch("/api/auth/me");
+    const response = await apiFetch("/api/auth/me", { signal });
+    signal?.throwIfAborted();
     if (!response.ok) {
       if (response.status === 401 || response.status === 403) clearCachedAuthSession();
       return null;
     }
     const data = await readApiJson<{ user: AuthUser }>(response);
+    signal?.throwIfAborted();
     const session = { user: data.user };
     cacheAuthSession(session);
     return session;
   } catch (error) {
+    if (signal?.aborted) throw error;
     const cachedSession = loadCachedAuthSession();
     if (cachedSession) return cachedSession;
     throw error;
