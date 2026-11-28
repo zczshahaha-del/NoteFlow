@@ -254,6 +254,7 @@ a.screen:hover { border-color: #779db5; }
   .site-header nav { gap: .55rem; }
   .site-header nav a { font-size: .816rem; }
   .write-intro-inner { padding-block: 2.75rem 3.2rem; }
+  .login-scene h2 { font-size: clamp(1.25rem, 6.25vw, 1.85rem); }
   .login-film--desktop { display: none; }
   .login-film--mobile { display: block; width: min(100%, 25rem); }
   .outline-stage { padding-right: 1rem; }
