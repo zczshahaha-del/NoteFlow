@@ -1,0 +1,86 @@
+{
+  "date": "2026-11-10",
+  "scope": "Local NoteFlow; synthetic text and accounts only",
+  "models": {
+    "embedding": {
+      "ok": true,
+      "model": "qwen3.7-text-embedding",
+      "dimensions": 1024,
+      "vectors": 3,
+      "relevantDocumentRanksFirst": true,
+      "elapsedMs": 386
+    },
+    "reranker": {
+      "ok": true,
+      "model": "qwen3.7-text-rerank",
+      "endpointSuffix": "reranks",
+      "relevantDocumentRanksFirst": true,
+      "returnedResults": 2,
+      "elapsedMs": 276
+    },
+    "syntheticTextOnly": true,
+    "productionConfigChanged": false
+  },
+  "noteAndRagWorkflow": {
+    "ok": true,
+    "realHttpNoteCreate": true,
+    "realBackgroundIndex": true,
+    "storedEmbeddingModel": "qwen3.7-text-embedding",
+    "storedDimensions": 1024,
+    "storedVectors": 2,
+    "hybridSearchFoundRelevantNote": true,
+    "productionRagFoundRelevantNote": true,
+    "rerankerFallback": false,
+    "vectorChannelStatus": "ok",
+    "rerankerStatus": "ok",
+    "syntheticAccountCleaned": true
+  },
+  "memoryHttpWorkflow": {
+    "ok": true,
+    "realHttp": true,
+    "sessionAuth": true,
+    "backgroundWorker": true,
+    "sharedContext": true,
+    "normalizedSourceAndGraph": true,
+    "capabilities": true,
+    "realOutage": false
+  },
+  "backendTests": {
+    "run": 283,
+    "passed": 269,
+    "skipped": 14,
+    "failed": 0
+  },
+  "hindsight": {
+    "image": "ghcr.io/vectorize-io/hindsight:1.1.0-slim@sha256:fbc37d194bce007b6cce2fd9f66cd7f8c050bd18b80e662090a92835d9cb191d",
+    "apiPort": 8888,
+    "consolePort": 9999,
+    "loopbackOnly": true,
+    "hostFileBindCount": 0,
+    "proxyPostStatus": 403,
+    "healthStatus": 200,
+    "consoleStatus": 200,
+    "embeddingModel": "qwen3.7-text-embedding",
+    "embeddingDimensions": 1024,
+    "llmModel": "deepseek-flash",
+    "workerId": "noteflow-hindsight",
+    "volume": "noteflow_hindsight_data"
+  },
+  "noteflow": {
+    "baseURL": "http://127.0.0.1:5173",
+    "memoryEngine": "hindsight",
+    "healthStatus": "healthy"
+  },
+  "cleanup": {
+    "remainingSyntheticAccounts": 0,
+    "memoryBanksDeletedBySmokeFinally": true
+  },
+  "limitations": [
+    "Small synthetic scenarios verify connectivity and integration, not benchmark quality gains",
+    "No production deployment or historical data recovery",
+    "No real email delivery acceptance",
+    "Docker Desktop host-file-sharing root cause remains unconfirmed; startup avoids the affected path",
+    "Existing Python utcnow deprecation and jieba SyntaxWarning observed"
+  ],
+  "issue": "https://github.com/zczshahaha-del/NoteFlow/issues/9"
+}

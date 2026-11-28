@@ -198,6 +198,9 @@ button,
   --directory-row-icon: var(--nf-ui-icon);
   --directory-row-hover: var(--nf-ui-soft);
   --directory-row-selected: var(--nf-ui-accent-soft);
+  --directory-guide-color: #d5d2cd;
+  --directory-arrow-width: 18px;
+  --directory-arrow-shift: 3px;
 }
 
 .theme-dark .directory-tree .directory-node-list {
@@ -206,9 +209,11 @@ button,
   --directory-row-icon: #99a8b7;
   --directory-row-hover: #313a44;
   --directory-row-selected: var(--nf-ui-accent-soft);
+  --directory-guide-color: var(--nf-ui-line);
 }
 
 .directory-tree .directory-node-row {
+  --directory-row-fill: transparent;
   min-height: 36px;
   margin-block: 2px;
   padding-inline: 5px;
@@ -222,12 +227,30 @@ button,
 
 .directory-tree .directory-node-row:hover,
 .directory-tree .directory-node-row[data-menu-open="true"] {
-  background: var(--directory-row-hover);
+  --directory-row-fill: var(--directory-row-hover);
+  background: var(--directory-row-fill);
 }
 
 .directory-tree .directory-node-row[data-selected="true"] {
   background: var(--directory-row-selected);
+  --directory-row-fill: var(--directory-row-selected);
   color: var(--nf-ui-accent-text);
+}
+
+.directory-tree .directory-node-branch .directory-node-row {
+  background: transparent;
+}
+
+.directory-tree .directory-node-branch .directory-node-row::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  /* The guide ends 17px into each child row, leaving a 4px gap before the fill. */
+  inset-inline: 21px 0;
+  border-radius: inherit;
+  background: var(--directory-row-fill);
+  transition: inherit;
+  pointer-events: none;
 }
 
 .directory-tree .directory-node-row[data-folder="true"],
@@ -246,11 +269,70 @@ button,
   background: transparent;
 }
 
-.directory-tree .directory-node-arrow,
-.directory-tree .directory-node-slot {
+.directory-tree .directory-favorites {
+  margin-block-end: 7px;
+  padding-block-end: 6px;
+  border-block-end: 1px solid var(--nf-ui-line);
+}
+
+.directory-tree .directory-favorites-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding-inline: 10px;
+  border-radius: 6px;
+  list-style: none;
+  color: var(--directory-row-muted);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.directory-tree .directory-favorites-title::-webkit-details-marker { display: none; }
+.directory-tree .directory-favorites-chevron { margin-inline-start: auto; rotate: -90deg; }
+.directory-tree .directory-favorites[open] .directory-favorites-chevron { rotate: 0deg; }
+
+.directory-tree .directory-favorite-link {
+  padding-inline: 23px 0;
+  text-align: start;
+}
+
+.directory-tree .directory-favorites-title:hover { background: var(--directory-row-hover); }
+
+.directory-tree .directory-favorite-link[aria-current="page"] {
+  color: var(--nf-ui-accent-text);
+  font-weight: 500;
+}
+
+.directory-tree .directory-node-arrow, .directory-tree .directory-node-slot {
   width: 18px;
   height: 32px;
   color: var(--directory-row-muted);
+}
+
+.directory-tree .directory-node-arrow {
+  position: relative;
+  width: var(--directory-arrow-width);
+}
+
+.directory-tree .directory-node-arrow svg {
+  translate: var(--directory-arrow-shift) 0;
+}
+
+.directory-tree .directory-node-branch {
+  position: relative;
+  padding-inline-start: 8px;
+}
+
+.directory-tree .directory-node-branch::before {
+  content: "";
+  position: absolute;
+  inset-block: 6px 6px;
+  /* Align to the desktop folder icon without crossing child icons on touch layouts. */
+  inset-inline-start: calc(var(--directory-branch-indent) + 36px);
+  border-inline-start: 1px solid var(--directory-guide-color);
+  pointer-events: none;
 }
 
 .directory-tree .directory-node-icon,
@@ -266,22 +348,65 @@ button,
   width: 24px;
   height: 32px;
   border-radius: 6px;
+  background: transparent;
 }
 
-.directory-tree .directory-node-more:hover {
-  background: var(--directory-row-selected);
+.directory-tree .directory-node-status {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 24px;
+  height: 32px;
+  border-radius: 6px;
+  color: var(--directory-row-muted);
+}
+
+.directory-tree .directory-node-star { color: var(--color-jelly-amber); }
+.directory-tree .directory-node-status:hover { color: var(--nf-ui-text); }
+
+.directory-tree .directory-node-more:hover,
+.directory-tree .directory-node-more[aria-expanded="true"] {
+  color: var(--nf-ui-text);
+}
+
+.directory-tree .directory-node-list :is(.directory-node-open, .directory-node-arrow, .directory-node-status, .directory-favorites-title):focus,
+.directory-tree .directory-library-title:focus,
+.directory-tree .directory-node-more:focus,
+.directory-tree .nf-directory-context-menu button:focus {
+  box-shadow: none !important;
+}
+
+.directory-tree .directory-node-list :is(.directory-node-open, .directory-node-arrow, .directory-node-status, .directory-favorites-title):focus-visible,
+.directory-tree .directory-node-more:focus-visible,
+.directory-tree .nf-directory-context-menu button:focus-visible {
+  outline: 1px solid var(--nf-ui-focus) !important;
+  outline-offset: -2px;
 }
 
 @media (pointer: coarse) {
+  .directory-tree .directory-node-list { --directory-arrow-width: 44px; }
+
+  .directory-tree .directory-favorites-title,
   .directory-tree .directory-node-row,
   .directory-tree .directory-node-open {
     min-height: 44px;
   }
 
-  .directory-tree .directory-node-arrow,
-  .directory-tree .directory-node-more {
+  .directory-tree .directory-node-arrow { height: 44px; }
+
+  .directory-tree .directory-node-more,
+  .directory-tree .directory-node-status {
     width: 44px;
     height: 44px;
+  }
+
+  .directory-tree .directory-node-name {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 }
 

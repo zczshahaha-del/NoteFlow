@@ -15,9 +15,36 @@ const entry=`import React from 'react';import{createRoot}from'react-dom/client';
 import AccountMenu from ${JSON.stringify(path('components/AppNav.tsx'))};
 import{useAppStore}from ${JSON.stringify(path('store/index.tsx'))};
 useAppStore.setState({treeData:[],fileContents:{},deletedNotes:[],serverSyncReady:false,hydratedUserId:null});
-window.fetch=async()=>new Response(JSON.stringify([]),{headers:{'Content-Type':'application/json'}});
+let memoryEnabled=true;
+window.fetch=async(input,init={})=>{
+  const url=String(input);
+  let data=[];
+  if(url.endsWith('/api/settings')){
+    if(init.method==='PUT')memoryEnabled=JSON.parse(init.body).memoryEnabled;
+    data={settings:{memoryEnabled,preferences:{}}};
+  }else if(url.endsWith('/api/memories?allRecords=true')){
+    const examples=[
+      '用户表示“小林”是准确的 | Involving: user',
+      '用户的名字是小林，用户更正了自己的称呼。 | Involving: 小林 | 旧记录',
+      '用户的名字是小雨 | Involving: 小雨',
+      '用户澄清自己不叫小林，之前的称呼有误。 | Involving: user',
+      '喜欢简洁的回答。',
+      '喜欢简洁的回答。 | Involving: user',
+      '偏好使用示例来解释复杂概念。',
+      '测试长记忆内容。'.repeat(50),
+      '学习技术术语时，希望先讲原理。',
+      '正在整理阅读笔记。',
+      '喜欢浅色模式。',
+    ];
+    data={memories:examples.map((content,index)=>({
+      id:'browser-memory-'+index,content,provider:'hindsight',scope:'global',
+      status:index===7?'pending':index===10?'archived':'active',
+    }))};
+  }
+  return new Response(JSON.stringify(data),{headers:{'Content-Type':'application/json'}});
+};
 const root=createRoot(document.getElementById('anchor'));
-const props={compact:true,themeMode:'light',userEmail:'example@example.invalid',userName:'示例用户',onThemeModeChange(){},onSignOut(){window.signOutCount++;},trashCount:13};
+const props={compact:true,themeMode:'light',userEmail:'example@example.invalid',userEmailVerified:true,userName:'示例用户',onThemeModeChange(){},onSignOut(){window.signOutCount++;},trashCount:13};
 window.signOutCount=0;window.accountTest={update(p){Object.assign(props,p);root.render(React.createElement(React.StrictMode,null,React.createElement(AccountMenu,props)));}};
 window.accountTest.update({});`;
 const bundle=await build({configFile:false,logLevel:'silent',plugins:[{name:'account-fixture',resolveId(id){if(id==='virtual:entry')return '\0entry';},load(id){if(id==='\0entry')return entry;}}],build:{write:false,minify:false,rolldownOptions:{input:'virtual:entry',output:{codeSplitting:false}}}});
@@ -67,27 +94,109 @@ try{
   assert.equal(geometry.box.bottom,triggerBefore.y+triggerBefore.height,'Align menu bottom with launcher');
   assert(geometry.rows.every(h=>h===(width===320?44:36)));
   assert.deepEqual(await page.locator('.nf-account-trigger').boundingBox(),triggerBefore,'Launcher must not change');
-  assert.equal(await panel.locator('button').count(),3);assert.equal(await panel.getByText('13',{exact:true}).count(),1);
+  assert.deepEqual(await panel.getByRole('button').allTextContents(),['设置','退出登录']);
   assert.equal(await panel.locator('[title]').count(),0);
   if(width===1280)await page.screenshot({path:join(output,'menu.png')});
-  await panel.getByRole('button',{name:'设置',exact:true}).press('Escape');await settled(page);
-  assert.equal(await panel.count(),0);assert.equal(await page.locator('.nf-account-trigger').evaluate(n=>n===document.activeElement),true);
+  await panel.getByRole('button',{name:'设置',exact:true}).press('Escape');await panel.waitFor({state:'detached'});
+  assert.equal(await page.locator('.nf-account-trigger').evaluate(n=>n===document.activeElement),true);
   assert.equal(await page.locator('.nf-account-trigger').evaluate(n=>getComputedStyle(n).outlineStyle),'solid','Keyboard return retains a visible circular focus');
   await open(page);await page.locator('.nf-account-trigger').click();assert.equal(await panel.evaluate(n=>n.hasAttribute('inert')),true);
   await open(page);await page.waitForTimeout(210);assert.equal(await panel.count(),1);
-  // Existing settings / trash routing is unchanged; no dangerous action is submitted.
-  await panel.getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('dialog',{name:'设置',exact:true}).waitFor();await settled(page);
-  assert.equal(await page.getByRole('button',{name:'账号与安全',exact:true}).getAttribute('aria-current'),'page');
-  await page.getByRole('button',{name:'外观',exact:true}).click();await settled(page);
-  assert.equal(await page.locator('.nf-nav[aria-current="page"]').evaluate(n=>getComputedStyle(n).backgroundColor),'rgb(231, 238, 242)');
-  assert.equal(await page.locator('.nf-nav[aria-current="page"]').evaluate(n=>getComputedStyle(n).color),'rgb(49, 95, 125)');
-  assert.equal(await page.locator('.nf-segment button').count(),2,'keep the existing light/dark choices, not mockup-only features');
-  assert.equal(await page.locator('.nf-segment button[aria-pressed="true"]').evaluate(n=>getComputedStyle(n).backgroundColor),'rgb(231, 238, 242)');
-  await page.screenshot({path:join(output,'appearance-'+width+'.png')});
-  await page.getByRole('dialog',{name:'设置',exact:true}).press('Escape');await settled(page);
-  await open(page);await panel.getByRole('button',{name:/^回收站/}).click();await page.getByRole('dialog',{name:'设置',exact:true}).waitFor();await settled(page);
-  assert.equal(await page.getByRole('heading',{name:'回收站',exact:true}).count(),1);
-  await page.getByRole('dialog',{name:'设置',exact:true}).press('Escape');await settled(page);
+  const settingsHome=page.getByRole('dialog',{name:'设置',exact:true});
+  let settingsBounds;
+  const checkSettingsFrame=async dialog=>{
+    const bounds=await dialog.boundingBox();
+    assert.equal(bounds.width,Math.min(1000,width-(width===320?24:32)));
+    assert.equal(bounds.height,640);
+    if(settingsBounds)assert.deepEqual(bounds,settingsBounds,'Navigating must keep the settings frame anchored');
+    settingsBounds=bounds;
+    assert.equal(await dialog.evaluate(n=>getComputedStyle(n).animationName),'none');
+    assert.equal(await dialog.locator('.nf-settings-page').evaluate(n=>getComputedStyle(n).animationName),'none');
+  };
+  await panel.getByRole('button',{name:'设置',exact:true}).click();await settingsHome.waitFor();await settled(page);
+  const nav = settingsHome.getByRole('navigation', { name: '设置分类' });
+  assert.deepEqual(await nav.getByRole('button').allTextContents(), ['账号', '外观', '记忆', '导入与导出']);
+  await checkSettingsFrame(settingsHome);
+  assert.match(await settingsHome.innerText(), /example@example.invalid/);
+  const changeEmail = settingsHome.getByRole('button',{name:'更换邮箱',exact:true});
+  const newEmail = settingsHome.getByRole('textbox',{name:'新邮箱',exact:true});
+  const sendCode = settingsHome.getByRole('button',{name:'发送验证码',exact:true});
+  assert.equal(await newEmail.count(),0);
+  await changeEmail.click();
+  assert.equal(await changeEmail.getAttribute('aria-expanded'),'true');
+  assert.equal(await settingsHome.getByRole('button',{name:'取消',exact:true}).count(),0);
+  assert.equal(await newEmail.inputValue(),'');
+  assert.equal(await newEmail.evaluate(input=>input===document.activeElement),true);
+  assert.equal(await newEmail.evaluate(input=>getComputedStyle(input).outlineWidth),'1px');
+  assert.equal(await sendCode.isDisabled(),true);
+  assert.equal(await settingsHome.locator('.nf-email-form').evaluate(form=>form.scrollWidth<=form.clientWidth),true);
+  const inputBox=await newEmail.boundingBox(), sendBox=await sendCode.boundingBox();
+  assert.equal(inputBox.y,sendBox.y);
+  assert.equal(inputBox.height,sendBox.height);
+  await newEmail.fill('new@example.invalid');
+  await changeEmail.click();
+  assert.equal(await changeEmail.getAttribute('aria-expanded'),'false');
+  assert.equal(await newEmail.count(),0);
+  assert.equal(await changeEmail.evaluate(button=>button===document.activeElement),true);
+  await changeEmail.click();
+  assert.equal(await newEmail.inputValue(),'');
+  await changeEmail.click();
+  await checkSettingsFrame(settingsHome);
+  await nav.getByRole('button',{name:'外观',exact:true}).click();
+  assert.equal(await settingsHome.locator('.nf-segment button').count(),2);
+  assert.equal(await settingsHome.locator('.nf-segment button[aria-pressed="true"]').evaluate(n=>getComputedStyle(n).backgroundColor),'rgb(251, 250, 248)');
+  await checkSettingsFrame(settingsHome);
+  await settingsHome.screenshot({path:join(output,'settings-'+width+'.png')});
+  await nav.getByRole('button',{name:'记忆',exact:true}).click();
+  const memorySwitch=settingsHome.getByRole('switch',{name:'长期记忆',exact:true});
+  await memorySwitch.click();
+  await settingsHome.locator('[role="switch"][aria-checked="false"]:enabled').waitFor();
+  await settingsHome.getByRole('button',{name:'查看摘要',exact:true}).click();
+  const memoryPage=page.getByRole('dialog',{name:'记忆摘要',exact:true});
+  const article=memoryPage.getByRole('article',{name:'记忆摘要'});
+  await article.waitFor();await settled(page);await checkSettingsFrame(memoryPage);
+  assert.equal(await memoryPage.getByText('共 11 条记忆',{exact:true}).count(),1);
+  assert.match(await article.textContent(),/喜欢简洁的回答/);
+  assert.equal(await article.getByRole('button').count(),0);
+  assert.equal(await article.getByRole('heading',{name:'待核对的称呼'}).count(),1);
+  assert.equal(await article.getByRole('heading',{name:'已停用'}).count(),1);
+  assert.doesNotMatch(await article.innerText(),/Involving:/);
+  assert.equal((await article.innerText()).split('喜欢简洁的回答。').length-1,1);
+  const scroll=memoryPage.locator('.nf-summary');
+  assert(await scroll.evaluate(n=>n.scrollWidth===n.clientWidth));
+  assert.equal(await memoryPage.getByRole('switch').count(),0);
+  const more = memoryPage.getByRole('button',{name:'更多记忆操作'});
+  await more.click();
+  await memoryPage.getByRole('button',{name:'搜索记忆',exact:true}).click();
+  const search = memoryPage.getByRole('searchbox',{name:'搜索记忆'});
+  await search.fill('例来解释');
+  assert.match(await article.innerText(), /使用示例来解释/);
+  assert.doesNotMatch(await article.innerText(), /整理阅读笔记/);
+  await search.fill('没有这种记忆');
+  assert.equal(await memoryPage.getByText('没有找到相关记忆',{exact:true}).count(),1);
+  await memoryPage.getByRole('button',{name:'关闭搜索'}).click();
+  await more.click();
+  await memoryPage.getByRole('button',{name:'编辑段落',exact:true}).click();
+  await article.getByRole('button').first().click();
+  await memoryPage.getByRole('textbox',{name:'记忆内容'}).waitFor();
+  await memoryPage.getByRole('button',{name:'取消编辑'}).click();
+  assert(await memoryPage.evaluate(d=>d.scrollWidth<=d.clientWidth));
+  await memoryPage.screenshot({path:join(output,'memory-'+width+'.png')});
+  await page.keyboard.press('Escape');await settingsHome.waitFor();
+  await settingsHome.getByRole('button',{name:'查看摘要'}).evaluate(n=>new Promise(resolve=>requestAnimationFrame(()=>resolve(n===document.activeElement)))).then(result=>assert(result));
+  assert.equal(await memorySwitch.getAttribute('aria-checked'),'false');
+  await nav.getByRole('button',{name:'导入与导出',exact:true}).click();await settled(page);
+  await checkSettingsFrame(settingsHome);
+  assert.equal(await settingsHome.getByRole('button',{name:'导出知识库备份',exact:true}).count(),1);
+  assert.equal(await settingsHome.getByRole('button',{name:'导出 Markdown 文件',exact:true}).count(),1);
+  assert.match(await settingsHome.textContent(),/不含聊天与长期记忆/);
+  assert.equal(await settingsHome.locator('input[type=file]').evaluate(n=>n.multiple),false);
+  await settingsHome.screenshot({path:join(output,'export-'+width+'.png')});
+  await settingsHome.getByRole('button',{name:/从回收站恢复/}).click();
+  assert.equal(await settingsHome.getByRole('heading',{name:'回收站',exact:true}).count(),1);
+  await checkSettingsFrame(settingsHome);
+  await settingsHome.getByRole('button',{name:'返回导入与导出'}).click();
+  await settingsHome.getByRole('button',{name:'关闭设置'}).click();await settled(page);
   await page.evaluate(()=>window.accountTest.update({userName:'很长的名字'.repeat(8),compact:false}));await open(page);
   assert.equal(await page.locator('.nf-account-trigger').evaluate(n=>getComputedStyle(n).borderRadius),'11px','Expanded account row keeps its original styling');
   assert.notEqual(await page.locator('.nf-account-trigger').evaluate(n=>getComputedStyle(n).backgroundColor),'rgba(0, 0, 0, 0)');
@@ -104,12 +213,12 @@ try{
   assert.equal(await panel.evaluate(n=>getComputedStyle(n).backgroundColor),'rgb(37, 43, 51)');
   assert.equal(await panel.locator('.nf-account-heading .nf-avatar').evaluate(n=>n.getBoundingClientRect().width),28);
   await panel.getByRole('button',{name:'设置',exact:true}).press('Escape');await settled(page);
-  await open(page);await panel.getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('dialog',{name:'设置',exact:true}).waitFor();
-  await page.getByRole('button',{name:'外观',exact:true}).click();await settled(page);
-  assert.equal(await page.locator('.nf-nav[aria-current="page"]').evaluate(n=>getComputedStyle(n).backgroundColor),'rgb(38, 62, 77)');
-  assert.equal(await page.locator('.nf-segment button[aria-pressed="true"]').evaluate(n=>getComputedStyle(n).color),'rgb(155, 200, 225)');
-  if(width===1280)await page.screenshot({path:join(output,'appearance-dark.png')});
-  await page.getByRole('dialog',{name:'设置',exact:true}).press('Escape');await settled(page);
+  await open(page);await panel.getByRole('button',{name:'设置',exact:true}).click();await settingsHome.waitFor();await settled(page);
+  assert.equal(await settingsHome.evaluate(n=>getComputedStyle(n).backgroundColor),'rgb(37, 43, 51)');
+  await nav.getByRole('button',{name:'外观',exact:true}).click();
+  assert.equal(await settingsHome.locator('.nf-segment button[aria-pressed="true"]').evaluate(n=>getComputedStyle(n).backgroundColor),'rgb(75, 88, 103)');
+  if(width===1280)await settingsHome.screenshot({path:join(output,'settings-dark.png')});
+  await page.keyboard.press('Escape');await settled(page);
   await page.emulateMedia({reducedMotion:'reduce'});await open(page);
   assert.equal(await panel.evaluate(n=>getComputedStyle(n).animationName),'none');
   assert.equal(await page.locator('.nf-account-trigger .nf-avatar').evaluate(n=>getComputedStyle(n).transitionDuration),'0s');
@@ -118,8 +227,12 @@ try{
   assert(await panel.evaluate(n=>n.getBoundingClientRect().top)>=0);assert.equal(await panel.evaluate(n=>getComputedStyle(n).overflowY),'auto');
   await page.emulateMedia({forcedColors:'active'});
   assert.equal(await panel.evaluate(n=>getComputedStyle(n).outlineStyle),'solid');
+  await panel.getByRole('button',{name:'设置',exact:true}).click();await settingsHome.waitFor();
+  assert(await settingsHome.evaluate(n=>n.getBoundingClientRect().height<=240));
+  await nav.getByRole('button',{name:'导入与导出',exact:true}).click();
+  assert(await settingsHome.locator('.nf-settings-scroll').evaluate(n=>n.scrollHeight>n.clientHeight));
   assert.deepEqual(requests,[]);assert.deepEqual(errors,[]);
-  reports.push({width,compactWidth:224,rightOfAvatar:true,bottomAligned:true,avatar:28,launcherUnchanged:true,framelessCompactLauncher:true,circularFeedback:true,keyboardFocus:true,expandedRowUnchanged:true,rows:geometry.rows,settingsAndTrash:true,longName:true,dark:true,reducedMotion:true,shortViewport:true,requests,errors});await context.close();
+  reports.push({width,compactWidth:224,rightOfAvatar:true,bottomAligned:true,avatar:28,launcherUnchanged:true,framelessCompactLauncher:true,circularFeedback:true,keyboardFocus:true,expandedRowUnchanged:true,rows:geometry.rows,settingsAndTrash:true,backupScope:true,longName:true,dark:true,reducedMotion:true,shortViewport:true,requests,errors});await context.close();
  }
  console.log(JSON.stringify({actualAccountMenu:true,syntheticOnly:true,output,reports},null,2));
 }finally{await browser.close();}

@@ -15,7 +15,7 @@ def _reranker_endpoint(base_url: str, model: str) -> str:
     base = base_url.rstrip("/")
     if base.endswith(("/rerank", "/reranks")):
         return base
-    suffix = "reranks" if model.strip().lower().startswith("qwen3-rerank") else "rerank"
+    suffix = "reranks" if model.strip().lower().startswith(("qwen3-rerank", "qwen3.7-text-rerank")) else "rerank"
     return f"{base}/{suffix}"
 
 

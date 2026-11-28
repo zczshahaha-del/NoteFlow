@@ -42,6 +42,11 @@
 .nf-draft-workspace .nf-draft-stage .nf-writing-label { font-size:11px; font-weight:400; color:var(--draft-muted); }
 .nf-draft-workspace .nf-draft-progress { flex:none; padding-left:10px; box-shadow:inset 1px 0 0 var(--draft-selected); font-size:11px; font-variant-numeric:tabular-nums; }
 .nf-draft-workspace .nf-draft-reading { --draft-reading-gutter:24px; width:100%; max-width:calc(var(--nf-reading-width, 704px) + var(--draft-reading-gutter) * 2); margin-inline:auto; padding-inline:var(--draft-reading-gutter); }
+.nf-draft-workspace .draft-note-content .rendered-code-block {
+  --prose-code: var(--draft-soft);
+  outline: 1px solid color-mix(in srgb, var(--draft-muted) 25%, var(--draft-soft));
+  outline-offset: -1px;
+}
 .nf-draft-workspace .nf-draft-footer-inner { display:flex; align-items:flex-end; gap:16px; padding-block:14px 18px; }
 .nf-draft-workspace .nf-draft-footer-actions { display:flex; flex:none; flex-wrap:wrap; align-items:center; justify-content:flex-end; gap:4px; min-height:44px; margin-left:auto; }
 .nf-draft-workspace .nf-draft-toolbar { gap:4px; }

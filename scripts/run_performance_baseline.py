@@ -154,7 +154,7 @@ def _write_markdown(report: dict) -> None:
             "",
             "## 口径",
             "",
-            "- `healthApi`：包含 PostgreSQL/Redis 诊断的 `/api/health` 往返时间。",
+            "- `healthApi`：基础可用性接口 `/api/health` 的往返时间。",
             "- `authenticatedNotesApi`：登录后 `/api/notes` 往返时间。",
             "- `retrievalApi`：固定测试笔记的 `/api/notes/search` 往返时间。",
             "- `workerIndexWithoutEmbedding`：API 创建笔记后到索引任务 success，测试服务使用 `EMBEDDING_PROVIDER=none`。",

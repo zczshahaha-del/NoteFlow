@@ -16,10 +16,6 @@ class AttachmentRepository(Repository):
             )
         )
 
-    async def get_by_signed_id(self, attachment_id: str) -> NoteAttachment | None:
-        """Use only after the router has verified the HMAC signed URL."""
-        return await self.session.scalar(select(NoteAttachment).where(NoteAttachment.id == attachment_id))
-
     async def list(self, user_id: str, note_id: str | None = None) -> list[NoteAttachment]:
         user_id = require_user_id(user_id)
         stmt = select(NoteAttachment).where(NoteAttachment.user_id == user_id)

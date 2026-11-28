@@ -7,7 +7,8 @@ from typing import Optional
 from sqlalchemy import desc, select
 
 from app.database import AsyncSessionLocal
-from app.models.db import AgentCheckpoint, AgentRun, AgentToolTrace
+from app.models.db import AgentCheckpoint, AgentRun, AgentToolTrace, NoteDraft, NoteEditPreview
+from app.repositories.runs import RunRepository
 
 
 def _short(text: str, limit: int = 180) -> str:
@@ -36,6 +37,7 @@ def _tool_trace_out(trace: AgentToolTrace) -> dict:
     return {
         "id": trace.id,
         "runId": trace.run_id,
+        "traceId": trace.trace_id,
         "toolName": trace.tool_name,
         "action": trace.action,
         "status": trace.status,
@@ -52,6 +54,7 @@ def _run_out(run: AgentRun, traces: list[AgentToolTrace], checkpoint: Optional[d
     return {
         "id": run.id,
         "sessionId": run.session_id,
+        "traceId": run.trace_id or run.id,
         "intent": run.intent,
         "status": status,
         "rawStatus": run.status,
@@ -119,6 +122,102 @@ def patch_working_memory_status(payload: dict, status: str, extra: Optional[dict
         working.update(extra)
     patched["workingMemory"] = working
     return patched
+
+
+def _update_checkpoint(checkpoint: AgentCheckpoint, status: str, payload_patch: dict | None = None) -> None:
+    payload = {**(checkpoint.payload or {}), **(payload_patch or {})}
+    if checkpoint.checkpoint_type in {"draft_workspace", "edit_preview"} or payload.get("workingMemory"):
+        related = {
+            target: payload[source]
+            for source, target in (
+                ("draftId", "relatedDraftId"),
+                ("editPreviewId", "relatedEditPreviewId"),
+                ("noteId", "relatedNoteId"),
+            )
+            if payload.get(source)
+        }
+        payload = patch_working_memory_status(payload, status, related)
+    now = datetime.utcnow()
+    checkpoint.payload = payload
+    checkpoint.status = status
+    checkpoint.resolved_at = now if status != "waiting_user_confirm" else None
+    checkpoint.updated_at = now
+
+
+def bind_created_draft(checkpoint: AgentCheckpoint, draft_id: str) -> None:
+    _update_checkpoint(checkpoint, "waiting_user_confirm", {"draftId": draft_id})
+
+
+async def _linked_outcome(session, checkpoint: AgentCheckpoint, payload: dict) -> tuple[str | None, str | None]:
+    if checkpoint.checkpoint_type == "draft_workspace" and payload.get("draftId"):
+        draft = await session.get(NoteDraft, payload["draftId"])
+        if draft and draft.user_id == checkpoint.user_id:
+            if draft.saved_note_id:
+                return "resolved", draft.saved_note_id
+            if draft.status == "canceled":
+                return "cancelled", None
+    elif checkpoint.checkpoint_type == "edit_preview" and payload.get("editPreviewId"):
+        preview = await session.get(NoteEditPreview, payload["editPreviewId"])
+        if preview and preview.user_id == checkpoint.user_id:
+            if preview.status == "applied":
+                return "resolved", preview.note_id
+            if preview.status == "cancelled":
+                return "cancelled", None
+    return None, None
+
+
+async def resolve_checkpoint_by_id(
+    *, user_id: str, checkpoint_id: str, status: str, payload_patch: dict | None = None,
+) -> dict | None:
+    async with AsyncSessionLocal() as db:
+        checkpoint = await RunRepository(db).get_checkpoint(user_id, checkpoint_id, for_update=True)
+        if checkpoint is None:
+            return None
+        if checkpoint.status in {"resolved", "cancelled"} or (
+            checkpoint.status != "waiting_user_confirm" and status == "cancelled"
+        ):
+            return checkpoint_out(checkpoint)
+        payload = {**(checkpoint.payload or {}), **(payload_patch or {})}
+        if checkpoint.checkpoint_type == "draft_workspace":
+            payload.pop("sourceNoteId", None)
+            if (checkpoint.payload or {}).get("sourceNoteId"):
+                payload["sourceNoteId"] = checkpoint.payload["sourceNoteId"]
+        object_key = {"draft_workspace": "draftId", "edit_preview": "editPreviewId"}.get(checkpoint.checkpoint_type)
+        if object_key and (checkpoint.payload or {}).get(object_key):
+            payload[object_key] = checkpoint.payload[object_key]
+        if object_key and payload.get(object_key):
+            outcome, note_id = await _linked_outcome(db, checkpoint, payload)
+            if outcome:
+                status = outcome
+                if note_id:
+                    payload["noteId"] = note_id
+            elif status in {"resolved", "cancelled"}:
+                return checkpoint_out(checkpoint)
+        elif object_key and status == "resolved":
+            return checkpoint_out(checkpoint)
+        _update_checkpoint(checkpoint, status, payload)
+        await db.commit()
+        await db.refresh(checkpoint)
+        return checkpoint_out(checkpoint)
+
+
+async def settle_linked_checkpoints(
+    session, *, user_id: str, checkpoint_type: str, object_id: str, status: str, note_id: str | None = None,
+) -> bool:
+    """Save the chat's view of the result in the same transaction as the draft or preview."""
+    object_key = "draftId" if checkpoint_type == "draft_workspace" else "editPreviewId"
+    checkpoints = await session.scalars(
+        select(AgentCheckpoint).where(
+            AgentCheckpoint.user_id == user_id,
+            AgentCheckpoint.checkpoint_type == checkpoint_type,
+            AgentCheckpoint.status != status,
+            AgentCheckpoint.payload[object_key].as_string() == object_id,
+        ).with_for_update()
+    )
+    changed = checkpoints.all()
+    for checkpoint in changed:
+        _update_checkpoint(checkpoint, status, {"noteId": note_id} if note_id else None)
+    return bool(changed)
 
 
 async def create_checkpoint(*, user_id: str, session_id: str, run_id: str, intent: str, checkpoint_type: str, payload: dict) -> dict:

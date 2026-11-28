@@ -62,6 +62,7 @@ def _stream_note_key(req: NoteGenerateRequest) -> str:
         stream=True,
         max_tokens=ai_service._normalize_max_tokens(req.maxTokens),
         temperature=ai_service._clamp_temperature(req.temperature),
+        thinking="disabled",
     )
     return ai_cache_key("stream-note", body)
 

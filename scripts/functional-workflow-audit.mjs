@@ -79,9 +79,9 @@ try {
   store.getState().reloadWorkspace();
   await waitFor(() => requests.some(r => r.url === '/api/categories'));
   await reply(requests.find(r => r.url === '/api/categories'), { categories: [] });
-  await waitFor(() => requests.some(r => r.url === '/api/notes?includeDeleted=true'));
+  await waitFor(() => requests.some(r => r.url === '/api/notes?includeDeleted=true&includeContent=false'));
   store.getState().updateFileContent('refresh', '刷新请求期间输入');
-  await reply(requests.find(r => r.url === '/api/notes?includeDeleted=true'), { notes: [note('refresh', '旧远端正文')] });
+  await reply(requests.find(r => r.url === '/api/notes?includeDeleted=true&includeContent=false'), { notes: [note('refresh', '旧远端正文')] });
   await wait(20);
   findings.push({ scenario: 'workspace-refresh-vs-typing', riskConfirmed: store.getState().fileContents.refresh !== '刷新请求期间输入',
     expected: '刷新请求期间输入', observed: store.getState().fileContents.refresh });

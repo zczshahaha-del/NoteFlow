@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import select
 
@@ -11,6 +11,7 @@ from app.database import AsyncSessionLocal
 from app.memory.control import control, effective_mission, uses_engine, lock_owner, save_control
 from app.memory.engine import MemoryChanges, MemoryEngine, MemoryFact, MemoryRecord
 from app.providers.memory_registry import configured_engine
+from app.memory.legacy_review import outstanding_reviews, reconcile_legacy
 from app.memory.policy import classify_memory_content
 from app.models.db import MemorySource, IntegrationOutbox, UserSettings
 from app.observability.context import current_trace
@@ -20,8 +21,10 @@ from app.utils import random_id
 
 def record(fact: MemoryFact, source, *, provider: str):
     metadata = source.metadata_json or {}
+    claim = metadata.get("claim") or {}
     return MemoryRecord(
-        id=fact.id, content=fact.content, source_ref=source.id,
+        id=fact.id, content=claim.get("content", fact.content), source_ref=metadata.get("group", source.id),
+        value=claim.get("value"),
         status="pending" if fact.id in metadata.get("pendingIds", []) else fact.status,
         memory_type=metadata.get("memoryType", "personal_info"),
         source=metadata.get("source", "user_message"), scope=metadata.get("scope", "global"),
@@ -65,8 +68,9 @@ class MemoryGateway:
                 source = await session.get(MemorySource, source_id)
                 if source is None or source.user_id != user_id:
                     raise LookupError("source not found")
-                if source.status == "stored":
-                    return [r for r in await self.read(user_id) if r.source_ref == source_id and r.status == "active"]
+                if source.status in {"organized", "stored"}:
+                    ids = set((source.metadata_json or {}).get("children", [source_id]))
+                    return [r for r in await self.read(user_id, limit=None) if r.source_ref in ids and r.status == "active"]
                 dead = await session.scalar(select(IntegrationOutbox.id).where(
                     IntegrationOutbox.user_id == user_id, IntegrationOutbox.aggregate_id == source_id,
                     IntegrationOutbox.status == "dead"))
@@ -79,65 +83,136 @@ class MemoryGateway:
 
     async def sources(self, session, user_id):
         return {s.id: s for s in (await session.scalars(select(MemorySource).where(
-            MemorySource.user_id == user_id, MemorySource.status == "stored"))).all()}
+            MemorySource.user_id == user_id, MemorySource.status == "stored").execution_options(populate_existing=True))).all()}
 
     async def read(self, user_id, *, query=None, memory_types=(), scopes=(), canonical_keys=(), layers=(),
-                   limit=50, include_archived=True):
+                   limit=50, include_archived=True, historical=False, direct_read=False, include_scoped_types=()):
         async with AsyncSessionLocal() as session:
-            settings, initial_state = await control(session, user_id)
-            if query is not None and not settings.memory_enabled:
+            settings = await session.get(UserSettings, user_id)
+            initial_state = ((settings.preferences or {}).get("memoryControl") or {}) if settings else {}
+            if query is not None and settings and not settings.memory_enabled:
                 return []
             sources = await self.sources(session, user_id)
             if not sources:
                 return []
-            rows = await (self.engine.recall(user_id, query) if query is not None else self.engine.list(user_id))
-            result = []
-            for row in rows:
-                # Recall payloads vary; get the live fact before using it. This
-                # also enforces current curation state instead of stale scores.
-                if query is not None:
+            # An index hit only nominates a source. Read governed facts from a
+            # fresh SQL snapshot after the external calls (including concurrent deletion).
+            has_legacy = any("claim" not in (s.metadata_json or {}) for s in sources.values())
+            if query is not None:
+                hits = await self.engine.recall(user_id, query)
+            else:
+                hits = await self.engine.list(user_id) if has_legacy else []
+            legacy, ranked = [], []
+            for hit in hits:
+                if hit.derived:
+                    continue
+                source = sources.get(hit.source_id)
+                if query is not None and (source is None or "claim" not in (source.metadata_json or {})):
                     try:
-                        row = await self.engine.get(user_id, row.id)
+                        hit = await self.engine.get(user_id, hit.id)
                     except LookupError:
                         continue
+                ranked.append(hit.source_id)
+                if hit.source_id in sources and not (sources[hit.source_id].metadata_json or {}).get("claim"):
+                    legacy.append(hit)
+
+            sources = await self.sources(session, user_id)
+            if query is not None:
+                current = (await session.execute(select(UserSettings.memory_enabled, UserSettings.preferences).where(
+                    UserSettings.user_id == user_id))).first()
+                if current is not None and (not current[0] or (current[1] or {}).get("memoryControl", {}).get("generation", 0) != initial_state.get("generation", 0)):
+                    return []
+            order = dict.fromkeys(ranked)
+            if query is not None and include_scoped_types:
+                # Scoped defaults can apply even when the topic has no words in
+                # common with them. Use governed claims from this fresh read.
+                defaults = {}
+                for source in sorted(sources.values(), key=lambda row: row.updated_at, reverse=True):
+                    meta = source.metadata_json or {}
+                    if meta.get("claim") and meta.get("scope") in scopes and meta.get("memoryType") in include_scoped_types:
+                        defaults[source.id] = None
+                ranked_defaults = {source_id: None for source_id in order if source_id in defaults}
+                order = ranked_defaults | defaults | order
+            for source in sources.values():
+                meta = source.metadata_json or {}
+                if query is None or meta.get("canonicalKey") in canonical_keys:
+                    order[source.id] = None
+            if historical:
+                # Follow the revision chain back from relevant hits even when
+                # the index only returns the latest city, project, or preference.
+                successors = set(order)
+                while successors:
+                    prior = {s.id for s in sources.values()
+                             if successors.intersection((s.metadata_json or {}).get("historical", {}).values())}
+                    successors = prior - order.keys()
+                    order.update(dict.fromkeys(successors))
+            rows = []
+            for source_id in order:
+                source = sources.get(source_id)
+                claim = (source.metadata_json or {}).get("claim") if source else None
+                if claim:
+                    rows.append(MemoryFact(claim["id"], claim["content"], source_id,
+                                           "active" if claim.get("active", True) else "archived"))
+            exact = {s.id for s in sources.values() if (s.metadata_json or {}).get("canonicalKey") in canonical_keys}
+            # While the worker checks pre-governance records against confirmed
+            # facts, avoid treating an unchecked older value as current.
+            pending_reviews = outstanding_reviews(sources)
+            result = []
+            for row in [*rows, *legacy]:
                 source = sources.get(row.source_id)
                 if not source or row.derived or row.status == "unavailable":
                     continue
-                if row.id in (source.metadata_json or {}).get("hiddenIds", []):
+                meta = source.metadata_json or {}
+                awaiting_review = not meta.get("claim") and any(
+                    source.created_at <= datetime.fromisoformat(revision.metadata_json["effectiveAt"])
+                    and meta.get("scope") in (None, revision.metadata_json["scope"])
+                    for revision in pending_reviews
+                )
+                is_past = row.id in meta.get("hiddenIds", [])
+                if is_past and not (historical and meta.get("historical", {}).get(row.id) in sources):
                     continue
                 item = record(row, source, provider=self.engine.name)
+                if awaiting_review and item.status == "active":
+                    item.status = "pending"
                 if not classify_memory_content(item.content).allowed:
                     continue
                 if (query is not None or not include_archived) and item.status != "active":
                     continue
-                metadata = source.metadata_json or {}
-                # Older Hindsight facts have no NoteFlow classification. Keep
-                # provider relevance for those records while enforcing known fields.
-                if memory_types and (query is None or metadata.get("memoryType")) and item.memory_type not in memory_types:
+                # A request to inspect one's own preferences may span task scopes.
+                # Applying a preference to a task still enforces that task's scope.
+                inspecting = direct_read and query is not None and bool(meta.get("claim"))
+                if scopes and not inspecting and item.scope not in {"global", *scopes}:
                     continue
-                if scopes and item.scope not in {"global", *scopes}:
+                if not inspecting and memory_types and (query is None or meta.get("memoryType")) and item.memory_type not in memory_types:
+                    continue
+                if not inspecting and layers and meta.get("layer") and item.memory_layer not in layers:
                     continue
                 if canonical_keys and item.canonical_key and not any(
                     item.canonical_key == key or item.canonical_key.startswith(key + ".")
                     or key.startswith(item.canonical_key + ".") for key in canonical_keys
                 ):
-                    continue
-                if layers and metadata.get("layer") and metadata["layer"] not in layers:
-                    continue
+                    # An open-ended planner key can differ from the stored vocabulary.
+                    # A ranked claim remains eligible when no such field exists.
+                    if not inspecting or (exact and not is_past):
+                        continue
+                if is_past:
+                    item.content = "曾经有效（后来已更改）：" + item.content
                 result.append(item)
-            live_sources = await self.sources(session, user_id)
-            if query is not None:
-                current = (await session.execute(select(UserSettings.memory_enabled, UserSettings.preferences).where(
-                    UserSettings.user_id == user_id))).first()
-                if current is None or not current[0] or (current[1] or {}).get("memoryControl", {}).get("generation", 0) != initial_state.get("generation", 0):
-                    return []
-            return [r for r in result if r.source_ref in live_sources][:max(1, min(limit, 500))]
+            return result if limit is None else result[:max(1, min(limit, 500))]
+
+    async def submit_turn(self, user_id, content, *, automatic):
+        trace = current_trace()
+        return await self.submit(user_id, content, source_key=trace.run_id or None,
+            metadata={"dialogue": True, "automatic": automatic, "runId": trace.run_id,
+                      "sessionId": trace.session_id, "source": "user_message" if automatic else "user_explicit"})
 
     async def submit(self, user_id, content, *, source_key=None, metadata=None):
         text = content.strip()
         if len(text) > 8000:
             raise ValueError("记忆输入过长，请缩短到 8000 字以内。")
-        if not classify_memory_content(text).allowed:
+        decision = classify_memory_content(text)
+        mixed_turn = (metadata or {}).get("dialogue") and decision.reason == "temporary_instruction"
+        if not decision.allowed and not mixed_turn:
             return None
         trace = current_trace()
         source_key = source_key or trace.run_id or trace.request_id or random_id()
@@ -151,28 +226,45 @@ class MemoryGateway:
                 MemorySource.user_id == user_id, MemorySource.source_key == source_key))
             if existing:
                 return None if existing.status in {"deleted", "skipped"} else existing.id
-            source = MemorySource(id=random_id(), user_id=user_id, source_key=source_key,
-                engine=self.engine.name,
-                generation=state.get("generation", 0), rule_version=state.get("ruleVersion", 1),
-                metadata_json=metadata or {}, status="queued")
-            session.add(source)
-            await session.flush()
-            await OutboxRepository(session).enqueue(topic="memory.retain.requested", aggregate_type="memory_source",
-                aggregate_id=source.id, user_id=user_id, idempotency_key=f"retain:{user_id}:{source_key}",
-                payload={"content": text}, max_attempts=3, trace_id=trace.trace_id or None)
+            source = await self.enqueue_source(session, user_id, text, source_key=source_key,
+                                               state=state, metadata=metadata or {}, trace_id=trace.trace_id or None)
             await session.commit()
         from app.workers.outbox_worker import notify_outbox_worker
         notify_outbox_worker()
         return source.id
+
+    async def enqueue_source(self, session, user_id, content, *, source_key, state, metadata, trace_id):
+        source = MemorySource(id=random_id(), user_id=user_id, source_key=source_key, engine=self.engine.name,
+            generation=state.get("generation", 0), rule_version=state.get("ruleVersion", 1),
+            metadata_json=metadata, status="queued")
+        session.add(source)
+        await session.flush()
+        job = await OutboxRepository(session).enqueue(topic="memory.retain.requested", aggregate_type="memory_source",
+            aggregate_id=source.id, user_id=user_id, idempotency_key=f"retain:{user_id}:{source_key}",
+            payload={"content": content}, max_attempts=3, trace_id=trace_id)
+        if metadata.get("automatic"):
+            job.available_at = datetime.utcnow() + timedelta(seconds=15)
+        return source
 
     async def process(self, session, item):
         await lock_owner(session, item.user_id)
         settings, state = await control(session, item.user_id)
         source = await session.get(MemorySource, item.aggregate_id)
         if not source or source.user_id != item.user_id or source.status != "queued":
+            item.payload = {}
             return
         if (not settings.memory_enabled or not await uses_engine(item.user_id)
             or source.generation != state.get("generation", 0) or source.rule_version != state.get("ruleVersion", 1)):
+            source.status = "skipped"
+            item.payload = {}
+            return
+        if (source.metadata_json or {}).get("dialogue"):
+            from app.memory.resolution import organize
+            # The worker records failure and retries in its outer transaction.
+            async with session.begin_nested():
+                await organize(self, session, item, source, state)
+            return
+        if state.get("contextSince") and source.created_at.isoformat() <= state["contextSince"]:
             source.status = "skipped"
             item.payload = {}
             return
@@ -200,6 +292,17 @@ class MemoryGateway:
         source.status = "stored" if rows else "empty"
         item.payload = {}
 
+    async def process_legacy_review(self, session, user_id):
+        await lock_owner(session, user_id)
+        settings = await session.get(UserSettings, user_id)
+        if settings and not settings.memory_enabled:
+            return
+        sources = await self.sources(session, user_id)
+        pending = outstanding_reviews(sources)
+        if pending:
+            async with session.begin_nested():
+                await reconcile_legacy(self.engine, user_id, sources, pending)
+
     async def curated(self, user_id, memory_id, *, content=None, status=None):
         if content is None and status is None:
             raise ValueError("请选择要修改的内容或状态。")
@@ -216,50 +319,97 @@ class MemoryGateway:
                 settings, state = await control(session, user_id)
                 # Subsequent automatic facts require confirmation after a manual
                 # correction, rather than silently introducing a contradictory copy.
-                save_control(settings, {**state, "reviewNewFacts": True})
+                if not (source.metadata_json or {}).get("claim"):
+                    save_control(settings, {**state, "reviewNewFacts": True})
             if status is not None:
                 if status not in {"active", "archived"}:
                     raise ValueError("这里只支持启用或停用；彻底删除请使用删除来源。")
             changes = MemoryChanges(content=content.strip() if content is not None else None,
                                     status=status, reason="NoteFlow user curation")
+            meta = dict(source.metadata_json or {})
+            if memory_id in meta.get("hiddenIds", []):
+                raise LookupError("memory not found")
             row = await self.engine.curate(user_id, memory_id, changes)
+            if claim := meta.get("claim"):
+                meta["claim"] = {**claim, "value": content.strip() if content is not None else claim.get("value"),
+                                 "content": content.strip() if content is not None else claim["content"],
+                                 "active": status == "active" if status else claim.get("active", True)}
+                if content is not None:
+                    meta.update(manuallyEdited=True, legacyReviewed=False)
+                meta["effectiveAt"] = datetime.utcnow().isoformat()
+                source.metadata_json = meta
             if status is not None:
                 source.metadata_json = {**(source.metadata_json or {}), "pendingIds": [
                     key for key in (source.metadata_json or {}).get("pendingIds", []) if key != memory_id]}
             await session.commit()
             return record(row, source, provider=self.engine.name)
 
+    async def _deletion_group(self, session, user_id, memory_id):
+        row = await self.engine.get(user_id, memory_id)
+        sources = await self.sources(session, user_id)
+        chosen = sources.get(row.source_id)
+        if chosen is None or row.id in (chosen.metadata_json or {}).get("hiddenIds", []):
+            raise LookupError("memory not found")
+        group = (chosen.metadata_json or {}).get("group", chosen.id)
+        return row, chosen, [s for s in sources.values() if (s.metadata_json or {}).get("group", s.id) == group]
+
     async def delete_impact(self, user_id, memory_id):
         async with AsyncSessionLocal() as session:
-            row = await self.engine.get(user_id, memory_id)
-            source = (await self.sources(session, user_id)).get(row.source_id)
-            if source is None:
-                raise LookupError("memory not found")
-            rows = await self.engine.list(user_id, source_id=source.id)
-            return {"sourceId": source.id, "memories": [public_record(record(r, source, provider=self.engine.name))
-                for r in rows if r.source_id == source.id and not r.derived and r.status != "unavailable"]}
+            _, chosen, group = await self._deletion_group(session, user_id, memory_id)
+            records = []
+            for source in group:
+                hidden = (source.metadata_json or {}).get("hiddenIds", [])
+                rows = await self.engine.list(user_id, source_id=source.id)
+                records.extend(public_record(record(r, source, provider=self.engine.name)) for r in rows
+                               if r.source_id == source.id and not r.derived and r.status != "unavailable"
+                               and r.id not in hidden)
+            return {"sourceId": (chosen.metadata_json or {}).get("group", chosen.id), "memories": records}
 
     async def delete(self, user_id, memory_id):
         from app.memory.portability import clear_portable_source, copied_source_memories
 
         async with AsyncSessionLocal() as session:
             await lock_owner(session, user_id)
-            row = await self.engine.get(user_id, memory_id)
-            source = (await self.sources(session, user_id)).get(row.source_id)
-            if source is None:
-                raise LookupError("memory not found")
+            row, source, group = await self._deletion_group(session, user_id, memory_id)
             result = record(row, source, provider=self.engine.name)
-            for copy in await copied_source_memories(session, user_id, source.id):
-                copy.status = "deleted"
-                copy.deleted_at = datetime.utcnow()
-            # Persist a barrier before touching the engine. Failed external
-            # deletion remains hidden and is retried, never reported as success.
-            source.status = "deleted"
-            clear_portable_source(source)
-            await OutboxRepository(session).enqueue(topic="memory.source.delete", aggregate_type="memory_source",
-                aggregate_id=source.id, user_id=user_id, idempotency_key=f"delete-source:{source.id}", payload={}, max_attempts=3)
+            # Also erase dedicated documents for superseded versions. A legacy
+            # document may own other facts, so its per-fact exclusion stays in force.
+            sources = await self.sources(session, user_id)
+            ids = {s.id for s in group}
+            ancestors = list(ids)
+            while ancestors:
+                child = sources[ancestors.pop()]
+                for prior_id in (child.metadata_json or {}).get("predecessors", []):
+                    if prior_id in sources and prior_id not in ids:
+                        ids.add(prior_id)
+                        ancestors.append(prior_id)
+            pending = [revision for revision in outstanding_reviews(sources) if revision.id in ids]
+            if pending:
+                # Finish comparison while the disappearing correction is still
+                # available, so deleting it cannot re-expose an older value.
+                await reconcile_legacy(self.engine, user_id, sources, pending)
+            # Old records lack message provenance, so use a conservative time
+            # barrier for those. New records only fence their own evidence/field.
+            if any(not sources[sid].metadata_json.get("turn") for sid in ids):
+                settings, state = await control(session, user_id)
+                save_control(settings, {**state, "contextSince": datetime.utcnow().isoformat()})
+            for source_id in ids:
+                source = sources[source_id]
+                for copy in await copied_source_memories(session, user_id, source_id):
+                    copy.status = "deleted"
+                    copy.deleted_at = datetime.utcnow()
+                source.status = "deleted"
+                clear_portable_source(source)
+                meta = source.metadata_json
+                turn = await session.get(MemorySource, meta["turn"]) if meta.get("turn") else None
+                meta = {**meta, "evidenceIds": meta.get("contextIds", []),
+                        "evidenceRuns": [turn.metadata_json["runId"]] if turn and turn.metadata_json.get("runId") else []}
+                source.metadata_json = {k: v for k, v in meta.items() if k not in {"claim", "evidence", "contextIds"}}
+                await OutboxRepository(session).enqueue(topic="memory.source.delete", aggregate_type="memory_source",
+                    aggregate_id=source_id, user_id=user_id, idempotency_key=f"delete-source:{source_id}", payload={}, max_attempts=3)
             await session.commit()
-        await self.engine.delete_source(user_id, source.id)
+        from app.workers.outbox_worker import notify_outbox_worker
+        notify_outbox_worker()
         result.status = "deleted"
         return result
 

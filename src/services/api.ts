@@ -1,5 +1,8 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim().replace(/\/$/, "") ?? "";
+import { appBasePath } from "../utils/appPaths";
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim().replace(/\/$/, "") || appBasePath.slice(0, -1);
 const LEGACY_TOKEN_KEY = "noteflow-auth-token";
+export const sessionRejectedEvent = "noteflow:session-rejected";
 
 function apiUrl(path: string): string {
   if (/^https?:\/\//i.test(path)) return path;
@@ -7,7 +10,8 @@ function apiUrl(path: string): string {
   return `${API_BASE_URL}${normalizedPath}`;
 }
 
-let refreshRequest: Promise<boolean> | null = null;
+type RefreshResult = "renewed" | "rejected" | "unavailable";
+let refreshRequest: Promise<RefreshResult> | null = null;
 let legacyMigrationRequest: Promise<string | null> | null = null;
 let legacyMigrationAbortController: AbortController | null = null;
 
@@ -65,14 +69,17 @@ async function migrateLegacyToken(): Promise<string | null> {
   return legacyMigrationRequest;
 }
 
-async function refreshSession(): Promise<boolean> {
+async function refreshSession(): Promise<RefreshResult> {
   if (!refreshRequest) {
     refreshRequest = fetch(apiUrl("/api/auth/refresh"), {
       method: "POST",
       credentials: "include",
     })
-      .then((response) => response.ok)
-      .catch(() => false)
+      .then((response): RefreshResult => {
+        if (response.ok) return "renewed";
+        return response.status === 401 || response.status === 403 ? "rejected" : "unavailable";
+      })
+      .catch((): RefreshResult => "unavailable")
       .finally(() => {
         refreshRequest = null;
       });
@@ -91,7 +98,14 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
   };
   const response = await request();
   if (response.status !== 401 || path.includes("/api/auth/refresh")) return response;
-  return (await refreshSession()) ? request() : response;
+  const refresh = await refreshSession();
+  const result = refresh === "renewed" ? await request() : response;
+  if (refresh !== "unavailable" && result.status === 401 &&
+    path.startsWith("/api/") && path !== "/api/auth/me" && !init.signal?.aborted &&
+    typeof window !== "undefined") {
+    window.dispatchEvent(new window.Event(sessionRejectedEvent));
+  }
+  return result;
 }
 
 export async function publicApiFetch(path: string, init: RequestInit = {}): Promise<Response> {
@@ -99,6 +113,10 @@ export async function publicApiFetch(path: string, init: RequestInit = {}): Prom
 }
 
 export async function readApiError(response: Response): Promise<string> {
+  if (response.status === 429) {
+    const seconds = response.headers.get("Retry-After") ?? "";
+    if (/^\d{1,8}$/.test(seconds)) return `请求太频繁，请在 ${Number(seconds)} 秒后重试。`;
+  }
   // Reverse proxies may return plain English or an HTML error page rather than
   // our JSON contract. Never expose that infrastructure response as UI copy.
   const gatewayMessage = response.status === 502 || response.status === 504 ? "暂时连接不上服务，请稍后重试。"
@@ -112,7 +130,12 @@ export async function readApiError(response: Response): Promise<string> {
       error?: string | { code?: string; message?: string };
       code?: string;
     };
-    if (typeof data.detail === "string" && data.detail.trim()) return data.detail.trim();
+    if (typeof data.detail === "string" && data.detail.trim()) {
+      if (response.status === 401 && [
+        "authentication required", "session expired or invalid", "session has been revoked or expired",
+      ].includes(data.detail)) return "暂时无法确认登录状态，请重试。";
+      return data.detail.trim();
+    }
     if (Array.isArray(data.detail) && data.detail.length > 0) return "请求参数有误，请检查后再试。";
     if (typeof data.error === "object" && data.error?.message) return data.error.message;
     if (typeof data.error === "string" && data.error) return data.error;

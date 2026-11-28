@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import asyncpg
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text, update
 
 from app.config import cfg
 from app.database import AsyncSessionLocal, engine
@@ -18,18 +18,22 @@ from app.models.db import (
     AgentRun,
     AgentCheckpoint,
     Base,
+    ChatMessage,
     ChatSession,
     Note,
     NoteAttachment,
+    NoteChunk,
     NoteDraft,
     NoteEditPreview,
     NoteIndexJob,
+    NoteVersion,
     RagIndexState,
     RagEmbedding,
     RagNode,
     User,
     UserMemory,
     IntegrationOutbox,
+    MemorySource,
 )
 from app.repositories.outbox import OutboxRepository
 from app.repositories.attachments import AttachmentRepository
@@ -41,8 +45,14 @@ from app.repositories.notes import NoteRepository
 from app.repositories.runs import RunRepository
 from app.services.markdown_index import create_index_job, run_index_job
 from app.services.note_library import understand_note_query
+from app.memory.control import lock_owner
+from app.memory.engine import MemoryUnavailable
 from app.memory.service import MemoryService
 from app.services.run_service import RunService
+from app.services import index_worker
+from app.services.embeddings import EmbeddingBatchResult, content_hash
+from app.deps import CurrentUser
+from app.routers.notes import NoteUpdatePayload, update_note
 from app.agent.write_runtime import (
     authorize_draft_save,
     initialize_draft_graph,
@@ -94,28 +104,34 @@ async def _exercise_postgres_write_graph_resume() -> dict:
     suffix = uuid.uuid4().hex
     draft_thread = f"db-draft-graph-{suffix}"
     edit_thread = f"db-edit-graph-{suffix}"
-    draft_initialized = await initialize_draft_graph(
-        user_id="graph-test-user", thread_id=draft_thread,
-        draft_id=f"draft-{suffix}", topic="测试草稿", outline="## 大纲",
-    )
-    draft_resumed = await resume_draft_generation(thread_id=draft_thread)
-    draft_saved = await authorize_draft_save(
-        thread_id=draft_thread, assembled_content="## 大纲\n正文",
-    )
-    edit_initialized = await initialize_edit_graph(
-        user_id="graph-test-user", thread_id=edit_thread,
-        note_id=f"note-{suffix}", instruction="修改正文",
-        preview_id=f"preview-{suffix}", target_type="note",
-        section_id="", selected_text="", source_content_hash="abc",
-    )
-    edit_revised = await resume_edit_graph(
-        thread_id=edit_thread, action="revise", payload={"instruction": "再短一点"},
-    )
-    edit_applied = await resume_edit_graph(thread_id=edit_thread, action="apply")
-    return {
-        "draft": draft_initialized and draft_resumed and draft_saved,
-        "edit": edit_initialized and edit_revised and edit_applied,
-    }
+    try:
+        draft_initialized = await initialize_draft_graph(
+            user_id="graph-test-user", thread_id=draft_thread,
+            draft_id=f"draft-{suffix}", topic="测试草稿", outline="## 大纲",
+        )
+        draft_resumed = await resume_draft_generation(thread_id=draft_thread)
+        draft_saved = await authorize_draft_save(
+            thread_id=draft_thread, assembled_content="## 大纲\n正文",
+        )
+        edit_initialized = await initialize_edit_graph(
+            user_id="graph-test-user", thread_id=edit_thread,
+            note_id=f"note-{suffix}", instruction="修改正文",
+            preview_id=f"preview-{suffix}", target_type="note",
+            section_id="", selected_text="", source_content_hash="abc",
+        )
+        edit_revised = await resume_edit_graph(
+            thread_id=edit_thread, action="revise", payload={"instruction": "再短一点"},
+        )
+        edit_applied = await resume_edit_graph(thread_id=edit_thread, action="apply")
+        return {
+            "draft": draft_initialized and draft_resumed and draft_saved,
+            "edit": edit_initialized and edit_revised and edit_applied,
+        }
+    finally:
+        from app.agent.langgraph_readonly import postgres_checkpointer
+        async with postgres_checkpointer() as saver:
+            await saver.adelete_thread(draft_thread)
+            await saver.adelete_thread(edit_thread)
 
 
 async def _exercise_reused_child_with_new_parent() -> tuple[str, str]:
@@ -270,21 +286,22 @@ async def _exercise_repository_user_isolation() -> dict[str, bool]:
 
         cross_user_update_rejected = False
         try:
-            await MemoryService().update(
-                other.id,
-                memory.id,
-                SimpleNamespace(
-                    memoryType=None,
-                    content="cross-user overwrite",
-                    importance=None,
-                    confidence=None,
-                    source=None,
-                    scope=None,
-                    tags=None,
-                    status=None,
-                    reason="cross-user test",
-                ),
-            )
+            with patch("app.memory.control.uses_engine", AsyncMock(return_value=False)):
+                await MemoryService().update(
+                    other.id,
+                    memory.id,
+                    SimpleNamespace(
+                        memoryType=None,
+                        content="cross-user overwrite",
+                        importance=None,
+                        confidence=None,
+                        source=None,
+                        scope=None,
+                        tags=None,
+                        status=None,
+                        reason="cross-user test",
+                    ),
+                )
         except LookupError:
             cross_user_update_rejected = True
         result["other_memory_update"] = cross_user_update_rejected
@@ -444,11 +461,356 @@ async def _exercise_rag_incremental_and_permissions() -> dict[str, bool]:
         await engine.dispose()
 
 
+async def _exercise_long_note_selection() -> None:
+    from app.agent.langgraph_readonly import _default_rag_search, new_readonly_state
+
+    suffix = uuid.uuid4().hex
+    owner_id = f"selection-owner-{suffix}"
+    owner = User(id=owner_id, email=f"{owner_id}@local.test", display_name="选区验收")
+    long_text = (
+        "## 开头\n\n这是我选中的第一段。\n\n"
+        + "\n\n".join(f"## 日常记录 {i}\n\n" + "这里是与校验口令无关的背景。 " * 18 for i in range(100))
+        + "\n\n## 结尾\n\n远处校验词 NEPTUNE_7429 的值是松果。"
+    )
+    note = Note(id=f"selection-note-{suffix}", user_id=owner_id, title="合成长笔记", content=long_text)
+    other = Note(
+        id=f"selection-other-{suffix}", user_id=owner_id, title="同账号另一篇笔记",
+        content="远处校验词 NEPTUNE_7429 的值是 WRONG_OTHER_NOTE。",
+    )
+    try:
+        with patch.object(cfg, "EMBEDDING_API_KEY", ""), patch.object(cfg, "RAG_VECTOR_ENABLED", False), patch.object(
+            cfg, "RAG_BM25_ENABLED", True,
+        ), patch.object(cfg, "RAG_RERANK_ENABLED", False):
+            async with AsyncSessionLocal() as session:
+                session.add(owner)
+                await session.flush()
+                session.add_all([note, other])
+                await session.flush()
+                for fixture in (note, other):
+                    job = await create_rag_index_job(session, fixture)
+                    await run_rag_index_job(session, fixture, job)
+                    assert job.status == "success"
+                await session.commit()
+
+            state = new_readonly_state(
+                user_id=owner_id, question="这一段里的 NEPTUNE_7429 是什么？", mode="chat",
+                page_state={
+                    "contextScope": "selection", "currentNoteId": note.id,
+                    "selectedText": "这是我选中的第一段。", "selectionContext": {"heading": "开头"},
+                    "dirty": True, "unsavedContent": f"{long_text}\nUNSAVED_EDITOR_MARKER",
+                },
+            )
+            local = await _default_rag_search(state)
+            assert local["context_mode"] == "selection" and not local["sources"]
+            assert "松果" not in local["context_text"]
+            for page_state in (
+                state["page_state"],
+                {
+                    "contextScope": "current_note", "currentNoteId": note.id,
+                    "dirty": True, "unsavedContent": "UNSAVED_EDITOR_MARKER",
+                },
+            ):
+                expanded = await _default_rag_search({
+                    **state, "page_state": page_state, "question": "请结合全文说明 NEPTUNE_7429 的值",
+                })
+                assert expanded["context_mode"] == "note_excerpt" and 1 <= len(expanded["sources"]) <= 3
+                assert {source["noteId"] for source in expanded["sources"]} == {note.id}
+                assert "松果" in expanded["context_text"]
+                assert "WRONG_OTHER_NOTE" not in expanded["context_text"]
+                assert "UNSAVED_EDITOR_MARKER" not in expanded["context_text"]
+                assert len(expanded["context_text"]) < 3500
+    finally:
+        async with AsyncSessionLocal() as session:
+            await session.execute(delete(User).where(User.id == owner_id))
+            await session.commit()
+        await engine.dispose()
+
+
+async def _exercise_concurrent_draft_save() -> None:
+    import httpx
+    from app.deps import CurrentUser, get_current_user
+    from app.main import app
+    from app.services import draft_save
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    owner_id = f"draft-save-check-{uuid.uuid4().hex}"
+    draft_id = f"{owner_id}-draft"
+    chat_id = f"{owner_id}-chat"
+    run_id = f"{owner_id}-run"
+    checkpoint_id = f"{owner_id}-checkpoint"
+    user = CurrentUser(id=owner_id, email=f"{owner_id}@local.test", display_name="草稿保存验收")
+
+    async def enqueue_for_test(session, note):
+        job = await original_enqueue(session, note)
+        # Keep the live background worker from consuming synthetic jobs.
+        await session.execute(update(NoteIndexJob).where(NoteIndexJob.note_id == note.id).values(
+            next_attempt_at=datetime.utcnow() + timedelta(days=1),
+        ))
+        return job
+
+    original_enqueue = draft_save.index_note_now
+    try:
+        async with AsyncSessionLocal() as session:
+            session.add(User(id=user.id, email=user.email, display_name=user.display_name))
+            await session.flush()
+            session.add(NoteDraft(
+                id=draft_id, user_id=user.id, title="待保存", topic="合成草稿",
+                status="assembled", assembled_content="## 章节\n\n合成正文",
+                graph_thread_id=f"{owner_id}-obsolete-graph",
+            ))
+            session.add(ChatSession(id=chat_id, user_id=user.id))
+            await session.flush()
+            session.add(AgentRun(id=run_id, session_id=chat_id, user_id=user.id, intent="note_draft_create"))
+            await session.flush()
+            session.add(AgentCheckpoint(
+                id=checkpoint_id, session_id=chat_id, run_id=run_id, user_id=user.id,
+                status="waiting_user_confirm", checkpoint_type="draft_workspace", payload={"draftId": draft_id},
+            ))
+            await session.commit()
+
+        with patch.dict(app.dependency_overrides, {get_current_user: lambda: user}), patch.object(
+            draft_save, "index_note_now", enqueue_for_test,
+        ):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app, raise_app_exceptions=False), base_url="http://test") as client:
+                url = f"/api/note-drafts/{draft_id}/save-to-notes"
+                denied = await client.post(url, json={"confirm": False})
+                assert denied.status_code == 400
+
+                async def fail_commit(session):
+                    await session.flush()
+                    raise RuntimeError("interrupted before commit")
+
+                with patch.object(AsyncSession, "commit", fail_commit):
+                    failed = await client.post(url, json={"confirm": True})
+                assert failed.status_code == 500
+                async with AsyncSessionLocal() as session:
+                    assert (await session.get(NoteDraft, draft_id)).saved_note_id is None
+                    assert (await session.get(AgentCheckpoint, checkpoint_id)).status == "waiting_user_confirm"
+                    assert not await session.scalar(select(Note.id).where(Note.user_id == user.id))
+
+                results = await asyncio.gather(*[
+                    client.post(url, json={"confirm": True, "title": "正式笔记.md", "categoryId": None})
+                    for _ in range(2)
+                ])
+        assert all(response.status_code == 200 for response in results)
+        first, second = (response.json() for response in results)
+        assert sum(bool(item.get("idempotentReplay")) for item in (first, second)) == 1
+        assert first["note"]["id"] == second["note"]["id"]
+        assert first["note"]["title"] == "正式笔记"
+        assert first["draft"]["savedNoteId"] == first["note"]["id"]
+
+        async with AsyncSessionLocal() as session:
+            notes = list((await session.scalars(select(Note).where(Note.user_id == user.id))).all())
+            versions = list((await session.scalars(select(NoteVersion).where(NoteVersion.user_id == user.id))).all())
+            jobs = list((await session.scalars(select(NoteIndexJob).where(NoteIndexJob.user_id == user.id))).all())
+            checkpoint = await session.get(AgentCheckpoint, checkpoint_id)
+            assert checkpoint.status == "resolved" and checkpoint.payload["noteId"] == first["note"]["id"]
+            assert len(notes) == len(versions) == 1
+            assert notes[0].content == versions[0].content == "## 章节\n\n合成正文"
+            assert len(jobs) == 2 and {bool(job.graph_version) for job in jobs} == {False, True}
+    finally:
+        async with AsyncSessionLocal() as session:
+            await session.execute(delete(User).where(User.id == owner_id))
+            await session.commit()
+        await engine.dispose()
+
+
 @unittest.skipUnless(RUN_DB_TESTS, "set NOTEFLOW_RUN_DB_TESTS=1 to run real PostgreSQL integration checks")
 class DatabaseIntegrationTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.snapshot = asyncio.run(_database_snapshot())
+
+    def test_memory_lock_contention_is_bounded_and_cancellable(self) -> None:
+        async def exercise() -> None:
+            owner = uuid.uuid4().hex
+            try:
+                async with AsyncSessionLocal() as holder:
+                    await lock_owner(holder, owner)
+                    async with AsyncSessionLocal() as waiter:
+                        with self.assertRaises(MemoryUnavailable):
+                            await asyncio.wait_for(lock_owner(waiter, owner), timeout=6)
+                    async with AsyncSessionLocal() as waiter:
+                        pid = await waiter.scalar(text("SELECT pg_backend_pid()"))
+                        task = asyncio.create_task(lock_owner(waiter, owner))
+                        try:
+                            await asyncio.sleep(0.3)
+                            self.assertFalse(task.done())
+                            pending = await holder.scalar(text(
+                                "SELECT count(*) FROM pg_locks WHERE pid = :pid AND locktype = 'advisory'",
+                            ), {"pid": pid})
+                            self.assertEqual(pending, 0)
+                        finally:
+                            task.cancel()
+                            with self.assertRaises(asyncio.CancelledError):
+                                await task
+                async with AsyncSessionLocal() as retry:
+                    await asyncio.wait_for(lock_owner(retry, owner), timeout=1)
+            finally:
+                await engine.dispose()
+
+        asyncio.run(exercise())
+
+    def test_chat_completion_queues_learning_without_waiting_for_memory_lock(self) -> None:
+        from app.schemas.agent import AgentChatPayload
+        from app.services.agent_runtime import finish_agent_run, start_agent_run
+
+        async def exercise() -> None:
+            owner = uuid.uuid4().hex
+            async with AsyncSessionLocal() as session:
+                session.add(User(id=owner, email=f"{owner}@example.invalid", display_name="Chat test"))
+                await session.commit()
+            try:
+                first = await start_agent_run(AgentChatPayload(question="我是硕士"), owner, "general_chat")
+                stopped = await start_agent_run(AgentChatPayload(question="我每天写笔记"), owner, "general_chat")
+                retry = await start_agent_run(AgentChatPayload(question="我是硕士", retryAnswerOnly=True,
+                    retryOfRunId=first["run_id"]), owner, "general_chat")
+                await RunService().cancel(owner, stopped["run_id"], "test")
+                async with AsyncSessionLocal() as holder:
+                    await lock_owner(holder, owner)
+                    for run, expected in ((first, True), (stopped, False), (retry, True)):
+                        committed = await asyncio.wait_for(finish_agent_run(
+                            user_id=owner, session_id=run["session_id"], run_id=run["run_id"],
+                            status="completed", answer="收到", learn_from_chat=True,
+                        ), timeout=2)
+                        self.assertEqual(committed, expected)
+                    async with AsyncSessionLocal() as session:
+                        queued = (await session.scalars(select(MemorySource).where(MemorySource.user_id == owner))).all()
+                        self.assertEqual([row.metadata_json["runId"] for row in queued], [first["run_id"]])
+                        reply = await session.scalar(select(ChatMessage).where(
+                            ChatMessage.run_id == first["run_id"], ChatMessage.role == "assistant"))
+                        self.assertEqual(reply.text, "收到")
+            finally:
+                async with AsyncSessionLocal() as session:
+                    await session.execute(delete(IntegrationOutbox).where(IntegrationOutbox.user_id == owner))
+                    await session.execute(delete(User).where(User.id == owner))
+                    await session.commit()
+                await engine.dispose()
+
+        with patch.object(cfg, "MEMORY_ENGINE", "hindsight"):
+            asyncio.run(exercise())
+
+    def test_selection_only_expands_to_the_attached_long_note(self) -> None:
+        asyncio.run(_exercise_long_note_selection())
+
+    def test_draft_save_concurrency_returns_one_note_and_one_version(self) -> None:
+        asyncio.run(_exercise_concurrent_draft_save())
+
+    def test_background_index_releases_connection_and_fences_stale_results(self) -> None:
+        async def exercise(rag: bool) -> None:
+            suffix = uuid.uuid4().hex
+            owner = CurrentUser(id=f"index-{suffix}", email=f"{suffix}@example.invalid", display_name="Index test")
+            note_id = f"note-{suffix}"
+            create_job = create_rag_index_job if rag else create_index_job
+            started = asyncio.Event()
+            release = asyncio.Event()
+            checked_out = []
+
+            async def embed(texts):
+                checked_out.append(engine.pool.checkedout())
+                started.set()
+                await asyncio.wait_for(release.wait(), 5)
+                return EmbeddingBatchResult(
+                    [[0.01] * cfg.EMBEDDING_DIMENSIONS for _ in texts],
+                    cfg.EMBEDDING_PROVIDER, cfg.EMBEDDING_MODEL, cfg.EMBEDDING_DIMENSIONS,
+                )
+
+            async def claim(session, job):
+                job.status = "running"
+                job.claim_owner = index_worker._worker_id
+                job.claimed_at = job.heartbeat_at = datetime.utcnow()
+                await session.flush()
+                return job.id
+
+            worker_task = None
+            try:
+                async with AsyncSessionLocal() as session, session.begin():
+                    session.add(User(id=owner.id, email=owner.email, display_name=owner.display_name))
+                    await session.flush()
+                    note = Note(id=note_id, user_id=owner.id, title="隔离索引", content="## 测试\n\n旧正文")
+                    session.add(note)
+                    await session.flush()
+                    original = await claim(session, await create_job(session, note))
+                with (
+                    patch.object(cfg, "EMBEDDING_PROVIDER", "test"),
+                    patch.object(cfg, "EMBEDDING_API_KEY", "synthetic"),
+                    patch("app.services.embedding_index.embed_texts", new=embed),
+                ):
+                    worker_task = asyncio.create_task(index_worker._run_claimed(original))
+                    await asyncio.wait_for(started.wait(), 5)
+                    async with AsyncSessionLocal() as session, session.begin():
+                        # A second worker could take this lock while the model is waiting.
+                        await session.get(NoteIndexJob, original, with_for_update={"nowait": True})
+                    new_body = "## 测试\n\n新正文"
+                    await asyncio.wait_for(
+                        update_note(note_id, NoteUpdatePayload(content=new_body), owner), 5,
+                    )
+                    release.set()
+                    self.assertTrue(await worker_task)
+                    async with AsyncSessionLocal() as session, session.begin():
+                        old = await session.get(NoteIndexJob, original)
+                        self.assertEqual((old.status, old.error_code), ("cancelled", "STALE_SOURCE_VERSION"))
+                        condition = NoteIndexJob.graph_version == "rag-v2" if rag else NoteIndexJob.graph_version.is_(None)
+                        fresh = await session.scalar(
+                            select(NoteIndexJob).where(
+                                NoteIndexJob.note_id == note_id, NoteIndexJob.source_version == content_hash(new_body), condition,
+                            )
+                        )
+                        latest = await claim(session, fresh)
+                    self.assertTrue(await index_worker._run_claimed(latest))
+                self.assertEqual(checked_out, [0, 0])
+                async with AsyncSessionLocal() as session:
+                    job = await session.get(NoteIndexJob, latest)
+                    self.assertEqual(job.status, "success")
+                    if rag:
+                        state = await session.get(RagIndexState, note_id)
+                        self.assertEqual(state.source_version, content_hash(new_body))
+                        parts = await session.scalars(select(RagNode.content).where(RagNode.note_id == note_id, RagNode.active.is_(True)))
+                    else:
+                        note = await session.get(Note, note_id)
+                        self.assertEqual(note.index_version, content_hash(new_body))
+                        parts = await session.scalars(select(NoteChunk.content).where(NoteChunk.note_id == note_id))
+                    joined = "\n".join(parts)
+                    self.assertIn("新正文", joined)
+                    self.assertNotIn("旧正文", joined)
+
+                failing_body = "## 测试\n\n等待索引的新版本"
+                await update_note(note_id, NoteUpdatePayload(content=failing_body), owner)
+                async with AsyncSessionLocal() as session, session.begin():
+                    fresh = await session.scalar(
+                        select(NoteIndexJob).where(
+                            NoteIndexJob.note_id == note_id, NoteIndexJob.source_version == content_hash(failing_body), condition,
+                        )
+                    )
+                    failing = await claim(session, fresh)
+                with (
+                    patch.object(cfg, "EMBEDDING_PROVIDER", "test"),
+                    patch.object(cfg, "EMBEDDING_API_KEY", "synthetic"),
+                    patch.object(cfg, "EMBEDDING_FAIL_INDEX_ON_ERROR", True),
+                    patch("app.services.embedding_index.embed_texts", new=AsyncMock(side_effect=TimeoutError)),
+                ):
+                    self.assertTrue(await index_worker._run_claimed(failing))
+                async with AsyncSessionLocal() as session:
+                    retry = await session.get(NoteIndexJob, failing)
+                    self.assertEqual((retry.status, retry.retry_count, retry.error_code), ("pending", 1, "TimeoutError"))
+                    self.assertIsNotNone(retry.next_attempt_at)
+                    if rag:
+                        state = await session.get(RagIndexState, note_id)
+                        self.assertEqual((state.status, state.source_version), ("indexed", content_hash(new_body)))
+                    else:
+                        note = await session.get(Note, note_id)
+                        self.assertEqual(note.index_version, content_hash(new_body))
+            finally:
+                if worker_task is not None and not worker_task.done():
+                    worker_task.cancel()
+                    await asyncio.gather(worker_task, return_exceptions=True)
+                async with AsyncSessionLocal() as session, session.begin():
+                    await session.execute(delete(User).where(User.id == owner.id))
+                await engine.dispose()
+
+        for rag in (False, True):
+            with self.subTest(rag=rag):
+                asyncio.run(exercise(rag))
 
     def test_runtime_tables_match_sqlalchemy_metadata(self) -> None:
         library_owned = {
@@ -466,7 +828,12 @@ class DatabaseIntegrationTest(unittest.TestCase):
         self.assertGreaterEqual(self.snapshot["vectorIndexCount"], 1)
 
     def test_database_is_at_current_alembic_revision(self) -> None:
-        self.assertEqual(self.snapshot["migration"], "20260717_0009")
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+        from pathlib import Path
+        configuration = Config()
+        configuration.set_main_option("script_location", str(Path(__file__).resolve().parents[1] / "alembic"))
+        self.assertEqual(self.snapshot["migration"], ScriptDirectory.from_config(configuration).get_current_head())
 
     @unittest.skipUnless(LANGGRAPH_DURABLE_INTERRUPT, "requires pinned langgraph >= 1.0")
     def test_postgres_write_graphs_interrupt_and_resume(self) -> None:

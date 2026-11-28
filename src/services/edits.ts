@@ -25,6 +25,7 @@ export interface NoteEditPreviewRecord {
   newContent: string;
   instruction: string;
   changeSummary: string[];
+  currentRevisionId?: string | null;
   status: EditPreviewStatus;
   createdAt: string | null;
   updatedAt: string | null;
@@ -39,6 +40,7 @@ export interface NoteEditPreviewRevisionRecord {
   instruction: string;
   changeSummary: string[];
   source: string;
+  previousRevisionId?: string | null;
   createdAt: string | null;
 }
 

@@ -4,14 +4,17 @@ import unittest
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, Mock, patch
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import StaticPool
 from app.deps import CurrentUser
 from app.routers import agent
 from app.schemas.agent import AgentChatPayload
 from app.services.turn_planner import PrimaryIntent, PlanResult, TurnPlan
 from app.models.db import ChatMessage
 from app.routers.chat_sessions import _visible_reply_attempts
-from app.services import agent_runtime
-from app.models.db import AgentRun, ChatSession
+from app.services import agent_runtime, run_service
+from app.models.db import AgentCheckpoint, AgentRun, AgentStep, ChatSession, User
 
 
 class ChatReplyRetryTest(unittest.IsolatedAsyncioTestCase):
@@ -32,7 +35,7 @@ class ChatReplyRetryTest(unittest.IsolatedAsyncioTestCase):
                 from types import SimpleNamespace
                 return SimpleNamespace(scalar_one_or_none=lambda: self.session)
 
-            async def get(self, model, key):
+            async def scalar(self, statement):
                 return self.run
 
             def add_all(self, items):
@@ -53,6 +56,33 @@ class ChatReplyRetryTest(unittest.IsolatedAsyncioTestCase):
         assistant = database.added[-1]
         self.assertEqual(assistant.text, "部分回答")
         self.assertEqual(assistant.metadata_json, {"retryOfRunId": "old-run", "replyState": "failed", "replyError": "连接中断"})
+
+    async def test_cancelled_run_cannot_persist_a_late_reply(self):
+        engine = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool)
+        self.addAsyncCleanup(engine.dispose)
+        async with engine.begin() as connection:
+            for model in (User, ChatSession, AgentRun, AgentStep, ChatMessage, AgentCheckpoint):
+                await connection.run_sync(model.__table__.create)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessions.begin() as db:
+            db.add(User(id="u", email="test@example.invalid", display_name="Tester"))
+
+        with (
+            patch.object(agent_runtime, "AsyncSessionLocal", sessions),
+            patch.object(run_service, "AsyncSessionLocal", sessions),
+        ):
+            result = await agent_runtime.start_agent_run(AgentChatPayload(question="问题"), "u", "general_chat")
+            run_id, session_id = result["run_id"], result["session_id"]
+            self.assertTrue(await run_service.RunService().cancel("u", run_id, "user_cancelled"))
+            committed = await agent_runtime.finish_agent_run(
+                user_id="u", session_id=session_id, run_id=run_id,
+                status="completed", answer="停止后迟到的回复",
+            )
+        self.assertFalse(committed)
+        async with sessions() as db:
+            self.assertEqual((await db.get(AgentRun, run_id)).status, "cancelled")
+            messages = list((await db.scalars(select(ChatMessage).where(ChatMessage.run_id == run_id))).all())
+            self.assertEqual([(item.role, item.text) for item in messages], [("user", "问题")])
 
     def test_reopening_history_folds_retry_chain_and_keeps_failed_partial_reply(self):
         def message(run, role, text, parent=None, failed=False):

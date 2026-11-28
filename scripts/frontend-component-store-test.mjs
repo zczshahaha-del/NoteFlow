@@ -37,10 +37,9 @@ dom.window.HTMLElement.prototype.scrollTo ??= function scrollTo() {};
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const { createRoot } = await import("react-dom/client");
 const testFetch = async (input) => new Response(JSON.stringify(
-  String(input).endsWith("/api/auth/sessions") ? []
-    : String(input).endsWith("/api/settings")
-      ? { settings: { memoryEnabled: true, preferences: {}, createdAt: null, updatedAt: null } }
-      : { revisions: [] }
+  String(input).endsWith("/api/settings")
+    ? { settings: { memoryEnabled: true, preferences: {}, createdAt: null, updatedAt: null } }
+    : { revisions: [] }
 ), {
   status: 200,
   headers: { "Content-Type": "application/json" },
@@ -91,6 +90,7 @@ try {
     assert.equal(await readApiError(new Response(body,{status,headers:{"Content-Type":contentType}})),"暂时连接不上服务，请稍后重试。");
   }
   assert.equal(await readApiError(new Response("Service Unavailable",{status:503})),"服务暂时不可用，请稍后重试。");
+  assert.equal(await readApiError(new Response("",{status:429,headers:{"Retry-After":"17"}})),"请求太频繁，请在 17 秒后重试。");
   assert.equal(await readApiError(new Response(JSON.stringify({detail:"验证码不正确或已过期"}),{status:400,headers:{"Content-Type":"application/json"}})),"验证码不正确或已过期");
   assert.equal(await readApiError(new Response(JSON.stringify({detail:"索引服务尚未就绪"}),{status:503,headers:{"Content-Type":"application/json"}})),"索引服务尚未就绪","structured service errors remain actionable");
 
@@ -386,7 +386,7 @@ try {
   assert.ok(conversationContainer.querySelector('.nf-chat-message--user p.max-h-44'));
   const supplementButton = () => Array.from(conversationContainer.querySelectorAll('button'))
     .find(button => button.textContent.trim() === "补充理解");
-  assert.ok(supplementButton(), "selected-text answers can still be added to the note");
+  assert.equal(supplementButton(), undefined, "selected-text answers do not expose the supplement shortcut");
   const editNotices = [
     { text: "我正在生成修改预览，不会直接改正式笔记。" },
     { text: "无法准确定位所选原文。", kind: "edit_preview_status" },
@@ -400,12 +400,12 @@ try {
     assert.ok(conversationContainer.textContent.includes(notice.text));
     assert.equal(supplementButton(), undefined, notice.text);
   }
-  await act(async () => modeTrigger.click());
-  await act(async () => conversationContainer.querySelector('[role="option"][aria-selected="false"]').click());
+  assert.match(modeTrigger.textContent, /对话/, "adding a selection makes the visible scope local");
   await changeComposerInput("解释引用");
   await act(async () => conversationContainer.querySelector('button[aria-label="发送"]').click());
   assert.equal(sentMessages[2][1].contextScope, "selection");
   assert.equal(sentMessages[2][1].selectedText, attachedSelection.text);
+  assert.equal(sentMessages[2][2].mode, "chat");
   assert.equal(conversationContainer.querySelector('button[aria-label="移除选中文字引用"]'), null);
 
   const tableMarkdown = "| 第一列 | 第二列 |\n| --- | --- |\n| 完整内容 | 最后一列 |";
@@ -719,11 +719,12 @@ try {
     },
   });
   const editHtml = await renderClient(React.createElement(EditPreviewWorkspace));
-  assert.match(editHtml, /预览中，尚未写入笔记/);
+  assert.doesNotMatch(editHtml, /预览中，尚未写入笔记|修改后的内容已准备好|替换第二行/);
   assert.doesNotMatch(editHtml, /旧内容/);
   assert.match(editHtml, /修改后正文/);
-  assert.match(editHtml, /对照原文/);
-  assert.match(editHtml, /更多预览操作/);
+  assert.match(editHtml, /原文对照/);
+  assert.match(editHtml, /版本记录/);
+  assert.doesNotMatch(editHtml, /更多预览操作/);
   assert.doesNotMatch(editHtml, /详细差异/);
   assert.match(editHtml, /新内容/);
   assert.match(editHtml, /应用到笔记/);
@@ -750,12 +751,12 @@ try {
       onSignOut() {},
     }));
   });
-  const activeFileButton = directoryContainer.querySelector('button[aria-current="page"]');
+  const activeFileButton = directoryContainer.querySelector('.directory-node-row[data-selected] button[aria-current="page"]');
   assert.ok(activeFileButton);
   assert.ok(activeFileButton.classList.contains("directory-node-open"));
   assert.equal(activeFileButton.closest(".directory-node-row").dataset.selected, "true");
   assert.equal(activeFileButton.getAttribute("aria-label"), "组件测试笔记");
-  assert.equal(activeFileButton.getAttribute("title"), "组件测试笔记");
+  assert.equal(activeFileButton.hasAttribute("title"), false);
   assert.equal(activeFileButton.querySelector("span[aria-hidden]"), null);
   assert.ok(activeFileButton.closest(".directory-node-row")
     .querySelector(".file-node-menu-button").classList.contains("opacity-100"));
@@ -864,7 +865,7 @@ try {
   await act(async () => {
     fileMenu.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
   });
-  assert.deepEqual(Array.from(directoryContainer.querySelector('.nf-action-menu[data-open="true"]').querySelectorAll('button')).map(button => button.textContent.trim()), ["重命名", "移动到", "导出", "置顶", "取消收藏", "删除"]);
+  assert.deepEqual(Array.from(directoryContainer.querySelector('.nf-action-menu[data-open="true"]').querySelectorAll('button')).map(button => button.textContent.trim()), ["取消收藏", "置顶", "重命名", "移动到", "导出 Markdown", "删除"]);
   // Export reads the latest body at action time, without subscribing navigation
   // to every keystroke. No system download or clipboard is used in this test.
   const exportId = useAppStore.getState().selectedFileId;
@@ -875,7 +876,7 @@ try {
   URL.revokeObjectURL = () => {};
   dom.window.HTMLAnchorElement.prototype.click = function () {};
   await act(async () => useAppStore.setState(state => ({fileContents:{...state.fileContents,[exportId]:'最新尚未同步的导出正文'}})));
-  await act(async () => Array.from(directoryContainer.querySelector('.nf-action-menu[data-open="true"]').querySelectorAll('button')).find(button=>button.textContent.trim()==='导出').click());
+  await act(async () => Array.from(directoryContainer.querySelector('.nf-action-menu[data-open="true"]').querySelectorAll('button')).find(button=>button.textContent.trim()==='导出 Markdown').click());
   assert.equal(await exportedBlob.text(),'最新尚未同步的导出正文');
   URL.createObjectURL = savedCreateUrl; URL.revokeObjectURL = savedRevokeUrl;
   dom.window.HTMLAnchorElement.prototype.click = savedAnchorClick;
@@ -922,23 +923,24 @@ try {
   })));
   const selectedRow = rowContainer.querySelector('[data-selected="true"]');
   assert.equal(selectedRow.style.marginLeft, "12px");
-  assert.ok(selectedRow.querySelector('svg[aria-label="已置顶"]'));
-  assert.ok(selectedRow.querySelector('svg[aria-label="已收藏"]'));
+  assert.ok(selectedRow.querySelector(':scope > button[aria-label="取消置顶"]'));
+  assert.ok(selectedRow.querySelector(':scope > button[aria-label="取消收藏"]'));
+  assert.equal(selectedRow.querySelector('.directory-node-open .directory-node-status'), null);
   const folderArrow = rowContainer.querySelector('button[aria-label="收起全栈开发"]');
-  const rowFolderMore = folderArrow.closest('.directory-node-row').querySelector('button[aria-label="文件操作"]');
+  const rowFolderMore = folderArrow.closest('.directory-node-row').querySelector('button[aria-label="文件夹操作"]');
   await act(async () => rowFolderMore.click());
   const folderMenu = rowContainer.querySelector('.nf-action-menu[data-open="true"]');
-  assert.deepEqual(Array.from(folderMenu.querySelectorAll('button')).map(button => button.textContent.trim()), ["重命名", "移动到", "置顶", "删除"]);
+  assert.deepEqual(Array.from(folderMenu.querySelectorAll('button')).map(button => button.textContent.trim()), ["新建笔记", "重命名", "移动到", "置顶", "删除"]);
   await act(async () => folderMenu.querySelector('button').dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   assert.equal(document.activeElement === rowFolderMore, true);
   await act(async () => folderArrow.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })));
-  assert.equal(rowContainer.querySelector('[aria-current="page"]'), null);
+  assert.equal(rowContainer.querySelector('.directory-node-branch [aria-current="page"]'), null);
   assert.equal(useAppStore.getState().selectedFileId, nestedNote.id);
   assert.equal(fileOpenCalls, 0);
   const folderOpen = rowContainer.querySelector('.directory-node-row[data-folder] .directory-node-open');
   assert.equal(folderOpen.getAttribute("aria-expanded"), "false");
   await act(async () => folderOpen.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })));
-  await act(async () => rowContainer.querySelector('[aria-current="page"]')
+  await act(async () => rowContainer.querySelector('.directory-node-branch [aria-current="page"]')
     .dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })));
   assert.equal(fileOpenCalls, 1);
   const rowMenu = rowContainer.querySelector('[data-selected] .file-node-menu-button');
@@ -953,6 +955,36 @@ try {
   await act(async () => renameInput.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   assert.equal(rowContainer.querySelector('.directory-node-open input'), null);
   assert.equal(useAppStore.getState().treeData[0].children[0].name, note.name);
+  const rootNote = { ...note, id: 'root-note', favorite: false };
+  const noteCreations = [];
+  await act(async () => useAppStore.setState({
+    treeData: [folder, rootNote], selectedFileId: rootNote.id,
+    addNode(parentId, node) { noteCreations.push({ parentId, node }); },
+  }));
+  await act(async () => rowFolderMore.click());
+  await act(async () => rowContainer.querySelector('.nf-directory-context-menu[data-open="true"] button').click());
+  assert.equal(noteCreations.length, 1);
+  assert.equal(noteCreations[0].parentId, folder.id);
+  assert.equal(noteCreations[0].node.type, 'file');
+  assert.equal(useAppStore.getState().selectedFileId, noteCreations[0].node.id);
+  assert.equal(fileOpenCalls, 2);
+  await act(async () => useAppStore.setState({ addNode: originalAddNode, expandedFolderIds: new Set() }));
+  const favorites = rowContainer.querySelector('.directory-favorites');
+  assert.equal(favorites.open, true);
+  const favoriteLinks = favorites.querySelectorAll('.directory-favorite-link');
+  assert.equal(favoriteLinks.length, 1);
+  assert.equal(favoriteLinks[0].hasAttribute('title'), false);
+  assert.equal(favoriteLinks[0].getAttribute('aria-description'), '全栈开发 / 组件测试笔记');
+  assert.ok(favorites.querySelector('button[aria-label="取消收藏 组件测试笔记"]'));
+  await act(async () => favorites.querySelector('summary').click());
+  assert.equal(favorites.open, false);
+  await act(async () => favorites.querySelector('summary').click());
+  await act(async () => favoriteLinks[0].click());
+  assert.equal(useAppStore.getState().selectedFileId, nestedNote.id);
+  assert.equal(favoriteLinks[0].getAttribute('aria-current'), 'page');
+  assert.equal(fileOpenCalls, 3);
+  await act(async () => useAppStore.setState({ treeData: [rootNote] }));
+  assert.equal(rowContainer.querySelector('.directory-favorites'), null);
   await act(async () => rowRoot.unmount());
   rowContainer.remove();
 
@@ -1018,8 +1050,8 @@ try {
   let signOutCalls = 0, changedSession = null, restoredId = null;
   const accountStore = useAppStore.getState();
   const apiCalls = [];
-  let failSessions = false, failMemorySetting = false;
-  const sessionFixture = (id, current) => ({ id, current, userAgent: "Chrome/130 Mac OS X", ipAddress: null, createdAt: "2026-01-01T00:00:00Z", lastSeenAt: "2026-01-01T00:00:00Z", expiresAt: "2027-01-01T00:00:00Z" });
+  let failMemorySetting = false, importResolve;
+  const importRequests=[];
   const memoryFixture = { provider: "reference", sourceRef: "source-ui-test", id: "memory-ui-test", memoryType: "preference", content: "偏好简洁排版", layer: "semantic", importance: 3, status: "pending" };
   const siblingMemory = { ...memoryFixture, id: "memory-same-source", content: "偏好先看图示", status: "active" };
   const unrelatedMemory = { ...siblingMemory, id: "memory-other-source", sourceRef: "other-source", content: "正在学习数据库" };
@@ -1029,24 +1061,24 @@ try {
     const payload = options.body ? JSON.parse(options.body) : null;
     apiCalls.push({ path, method, payload, search: new URL(String(input), "http://127.0.0.1").search });
     let data = {}, status = 200;
-    if (path === "/api/settings") {
+    if(path === "/api/knowledge-backup") data={format:'noteflow-knowledge-backup',version:2,exportedAt:new Date().toISOString(),categories:[],notes:[],versions:[],attachments:[]};
+    else if(path === "/api/knowledge-backup/import") {
+      importRequests.push({payload,requestId:options.headers['X-Import-Id']});
+      return new Promise(resolve=>{importResolve=resolve;});
+    }
+    else if (path === "/api/settings") {
       if (method === "PUT" && failMemorySetting) { status = 500; data = { detail: "保存设置失败" }; }
       else data = { settings: { memoryEnabled: payload?.memoryEnabled ?? true, preferences: {} } };
-    } else if (path === "/api/auth/sessions") {
-      if (failSessions) { status = 500; data = { detail: "设备加载失败" }; }
-      else data = [sessionFixture("other-device", false), sessionFixture("current-device", true)];
-    } else if (path.startsWith("/api/auth/sessions/")) data = { currentSessionRevoked: path.endsWith("/current-device") };
-    else if (path.endsWith("/email-change/request")) data = { message: "验证码已发送", developmentCode: "123456" };
-    else if (path.endsWith("/email-change/confirm")) data = { user: { id: "test-user", email: "test@example.com", displayName: "test", emailVerified: true } };
-    else if (path === "/api/memory-console") data = { engine: "reference", capabilities: { rules: true, graph: true, sources: true, importLegacy: true }, mission: "用户偏好", ruleVersion: 1, history: [], jobs: [] };
+    } else if (path.endsWith("/email-change/request")) data = { message: "验证码已发送", developmentCode: "123456" };
+    else if (path.endsWith("/email-change/confirm")) data = { user: { id: "test-user", email: payload.email, displayName: "test", emailVerified: true } };
     else if (path === "/api/memory-console/impact/memory-ui-test") data = { sourceId: "source-ui-test", memories: [memoryFixture, siblingMemory] };
     else if (path === "/api/memories") data = { memories: [memoryFixture, siblingMemory, unrelatedMemory] };
     else if (path === "/api/memories/memory-ui-test") data = { memory: { ...memoryFixture, ...payload, status: method === "DELETE" ? "deleted" : payload?.status ?? "active" } };
     return new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
   };
   globalThis.fetch = window.fetch = accountFetch;
-  const importCalls = [], selectCalls = [];
-  useAppStore.setState({ deletedNotes: [{ id: "trash-test", title: "待恢复笔记", deletedAt: null }], restoreDeletedNote(id) { restoredId = id; }, addNode(parent, node) { importCalls.push({ parent, node }); }, setSelectedFileId(id) { selectCalls.push(id); } });
+  const selectCalls = [];
+  useAppStore.setState({ noteSaveStates: {}, deletedNotes: [{ id: "trash-test", title: "待恢复笔记", deletedAt: null }], restoreDeletedNote(id) { restoredId = id; }, reloadWorkspace(id) { selectCalls.push(id); } });
   const accountContainer = document.createElement("div");
   traceFrontend("account");
   document.body.appendChild(accountContainer);
@@ -1054,10 +1086,11 @@ try {
   const accountProps = { themeMode: "light", onThemeModeChange(mode) { themeCalls.push(mode); }, userEmail: "test@example.com", userName: "test", userEmailVerified: true, trashCount: 1, onEmailChanged(session) { changedSession = session; }, onSignOut() { signOutCalls += 1; } };
   const themeCalls = [];
   const clickAccount = async (button) => { assert.ok(button); await act(async () => button.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }))); };
-  const activeSettings = () => document.querySelector('.nf-overlay[data-open="true"] [role="dialog"][aria-label="设置"]');
+  const activeSettings = () => document.querySelector('.nf-overlay[data-open="true"] .nf-settings-dialog[role="dialog"]');
   const accountPanel = () => accountContainer.querySelector('.nf-account-popover[data-open="true"]');
   const action = (scope, label) => Array.from(scope?.querySelectorAll("button") ?? []).find(b => b.textContent.trim() === label);
-  const settingAction = label => action(activeSettings(), label);
+  const settingAction = label => Array.from(activeSettings()?.querySelectorAll("button") ?? [])
+    .find(button => button.getAttribute("aria-label") === label || button.textContent.trim() === label);
   const waitExit = async () => { await act(async () => new Promise(resolve => setTimeout(resolve, 210))); };
   await act(async () => accountRoot.render(React.createElement(AccountMenu, accountProps)));
   const accountTrigger = accountContainer.querySelector('button[aria-label="test的账号菜单"]');
@@ -1071,7 +1104,7 @@ try {
   await clickAccount(accountTrigger.querySelector(".nf-username"));
   assert.equal(document.activeElement, action(accountPanel(), "设置"));
   assert.equal(accountTrigger.getAttribute("aria-controls"), accountPanel().id);
-  assert.equal(accountPanel().querySelectorAll("button").length, 3);
+  assert.equal(accountPanel().querySelectorAll("button").length, 2);
   assert.equal(accountPanel().querySelector('[title]'), null);
   assert.equal(accountPanel().querySelector('.nf-divider'), null);
   assert.equal(accountPanel().querySelectorAll('.nf-account-separator[aria-hidden="true"]').length, 2);
@@ -1114,88 +1147,109 @@ try {
   assert.equal(accountPanel(), null);
   assert.equal(accountContainer.inert, true);
   assert.equal(document.activeElement.getAttribute("aria-label"), "关闭设置");
-  assert.equal(activeSettings().querySelector('.nf-identity [title]'), null);
-  const firstNav = settingAction("账号与安全");
-  await act(async () => firstNav.focus());
+  assert.deepEqual([...activeSettings().querySelectorAll('nav button')].map(button => button.textContent),
+    ["账号", "外观", "记忆", "导入与导出"]);
+  settingAction("账号").focus();
   await act(async () => document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true })));
   assert.ok(document.activeElement === Array.from(activeSettings().querySelectorAll("button")).at(-1));
-  await clickAccount(Array.from(activeSettings().querySelectorAll("button")).find(b => b.textContent.includes("登录邮箱")));
-  assert.equal(activeSettings().querySelector('input[type="email"]').value, "test@example.com");
+  assert.match(activeSettings().textContent, /登录邮箱test@example.com/);
+  await clickAccount(settingAction("更换邮箱"));
+  const newAddress = activeSettings().querySelector('input[type="email"]');
+  assert.equal(newAddress.value, "");
+  assert.equal(settingAction("发送验证码").disabled, true);
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, "value").set.call(newAddress, "new@example.com");
+    newAddress.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  });
   await clickAccount(settingAction("发送验证码"));
-  assert.equal(activeSettings().querySelector('input[aria-label="邮箱验证码"]').value, "123456");
-  await clickAccount(settingAction("确认并绑定"));
-  assert.equal(changedSession.user.email, "test@example.com");
-  assert.ok(apiCalls.some(call => call.path.endsWith("/email-change/confirm") && call.payload.code === "123456"));
+  assert.equal(activeSettings().querySelector('input[autocomplete="one-time-code"]').value, "123456");
+  await clickAccount(settingAction("确认更换"));
+  assert.equal(changedSession.user.email, "new@example.com");
+  assert.ok(apiCalls.some(call => call.path.endsWith("/email-change/confirm") && call.payload.code === "123456" && call.payload.email === 'new@example.com'));
   assert.equal(activeSettings().querySelector('input[type="email"]'), null);
-  await clickAccount(Array.from(activeSettings().querySelectorAll("button")).find(b => b.textContent.includes("登录设备")));
-  assert.match(activeSettings().textContent, /有效会话|当前设备/);
-  const sessionExits = () => Array.from(activeSettings().querySelectorAll(".nf-device button"));
-  await clickAccount(sessionExits()[0]);
-  assert.equal(sessionExits().length, 1);
-  await clickAccount(sessionExits()[0]);
-  assert.equal(signOutCalls, 1);
-  failSessions = true;
-  await clickAccount(settingAction("刷新"));
-  assert.match(activeSettings().querySelector('[role="alert"]').textContent, /设备加载失败/);
-  failSessions = false;
+  assert.doesNotMatch(activeSettings().textContent, /登录设备|有效会话/);
+  assert.ok(!apiCalls.some(({ path }) => path.startsWith("/api/auth/sessions")));
 
-  await clickAccount(settingAction("外观")); await clickAccount(settingAction("深色"));
+  await clickAccount(settingAction("外观"));
+  await clickAccount(settingAction("深色"));
   assert.deepEqual(themeCalls, ["dark"]);
-  await clickAccount(settingAction("AI 与记忆"));
+  await clickAccount(settingAction("记忆"));
   failMemorySetting = true;
   await clickAccount(activeSettings().querySelector('button[aria-label="长期记忆"]'));
-  assert.equal(activeSettings().querySelector('button[aria-label="长期记忆"]').getAttribute("aria-pressed"), "true");
+  assert.equal(settingAction("长期记忆").getAttribute("aria-checked"), "true");
   assert.match(activeSettings().textContent, /保存设置失败/);
   failMemorySetting = false;
   await clickAccount(activeSettings().querySelector('button[aria-label="长期记忆"]'));
-  assert.equal(activeSettings().querySelector('button[aria-label="长期记忆"]').getAttribute("aria-pressed"), "false");
-  await clickAccount(Array.from(activeSettings().querySelectorAll("button")).find(b => b.textContent.includes("记忆管理")));
+  assert.equal(settingAction("长期记忆").getAttribute("aria-checked"), "false");
+  await clickAccount(settingAction("查看摘要"));
+  assert.ok(apiCalls.some(call => call.path === "/api/memories"));
+  assert.doesNotMatch(activeSettings().textContent, /记忆管理|规则与来源|记忆关系|原有记忆|最近处理状态/);
   assert.match(activeSettings().textContent, /偏好简洁排版/);
-  await clickAccount(settingAction("确认"));
-  assert.ok(apiCalls.some(call => call.payload?.reason === "profile_memory_approve"));
-  await clickAccount(activeSettings().querySelector('button[aria-label="编辑记忆"]'));
-  assert.ok(activeSettings().querySelector('textarea[aria-label="记忆内容"]'));
-  await clickAccount(activeSettings().querySelector('button[aria-label="保存记忆"]'));
-  assert.ok(apiCalls.some(call => call.payload?.reason === "profile_memory_edit"));
-  const originalMemoryConfirm = window.confirm;
-  let confirmedMemoryImpact = "";
-  window.confirm = message => { confirmedMemoryImpact = message; return true; };
-  try {
-    await clickAccount(activeSettings().querySelector('button[aria-label="删除记忆"]'));
-  } finally { window.confirm = originalMemoryConfirm; }
-  assert.match(confirmedMemoryImpact, /关联的 2 条记忆/);
+  await clickAccount(settingAction("更多记忆操作"));
+  await clickAccount(settingAction("编辑段落"));
+  await clickAccount(activeSettings().querySelector(".nf-paragraph"));
+  const memoryInput = activeSettings().querySelector("textarea");
+  assert.equal(memoryInput.value, "偏好简洁排版");
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, "value").set.call(memoryInput, "偏好简洁的编辑页面");
+    memoryInput.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  });
+  await clickAccount(settingAction("保存并启用"));
+  assert.ok(apiCalls.some(call => call.payload?.reason === "profile_memory_edit" && call.payload.status === "active" && call.payload.content === "偏好简洁的编辑页面"));
+  assert.match(activeSettings().textContent, /偏好简洁的编辑页面/);
+  assert.doesNotMatch(activeSettings().textContent, /待确认/);
+  await clickAccount(settingAction("更多记忆操作"));
+  await clickAccount(settingAction("编辑段落"));
+  await clickAccount(activeSettings().querySelector(".nf-paragraph"));
+  await clickAccount(settingAction("删除这段"));
+  assert.match(activeSettings().textContent, /同一来源的 2 条记忆/);
+  await clickAccount(settingAction("取消"));
+  assert.ok(!apiCalls.some(call => call.method === "DELETE" && call.path.startsWith("/api/memories/")));
+  await clickAccount(settingAction("删除这段"));
+  await clickAccount(settingAction("确认删除"));
   assert.ok(apiCalls.some(call => call.path === "/api/memory-console/impact/memory-ui-test"));
   assert.ok(apiCalls.some(call => call.method === "DELETE" && call.search === "?confirmedSource=true"), "Source deletion confirmation is independent of provider name");
-  assert.doesNotMatch(activeSettings().textContent, /偏好简洁排版/);
+  assert.doesNotMatch(activeSettings().textContent, /偏好简洁的编辑页面/);
   assert.doesNotMatch(activeSettings().textContent, /偏好先看图示/);
   assert.match(activeSettings().textContent, /正在学习数据库/);
-  await clickAccount(settingAction("数据管理"));
-  assert.ok(settingAction("导出笔记备份")); assert.ok(settingAction("导出完整数据"));
+  assert.ok(apiCalls.filter(call => call.path.startsWith("/api/memory-console")).every(call => call.path.startsWith("/api/memory-console/impact/")));
+  await clickAccount(settingAction("关闭摘要"));
+  await clickAccount(settingAction("导入与导出"));
+  assert.ok(settingAction("导出 Markdown 文件")); assert.ok(settingAction("导出知识库备份"));
   const downloads = [];
   const originalCreateUrl = URL.createObjectURL, originalRevokeUrl = URL.revokeObjectURL;
   const originalLinkClick = dom.window.HTMLAnchorElement.prototype.click;
   URL.createObjectURL = blob => { downloads.push({ type: blob.type, size: blob.size }); return "blob:test-export"; };
   URL.revokeObjectURL = () => {};
   dom.window.HTMLAnchorElement.prototype.click = function () { downloads[downloads.length - 1].name = this.download; };
-  await clickAccount(settingAction("导出笔记备份"));
-  await clickAccount(settingAction("导出完整数据"));
+  await act(async()=>useAppStore.setState({noteSaveStates:{[note.id]:{status:'offline'}}}));
+  await clickAccount(settingAction("导出知识库备份"));
+  assert.equal(downloads.length,0,'Offline unsynced edits must not produce an incomplete server backup');
+  assert.match(activeSettings().textContent,/正文未同步/);
+  await act(async()=>useAppStore.setState({noteSaveStates:{}}));
+  await clickAccount(settingAction("导出 Markdown 文件"));
+  await clickAccount(settingAction("导出知识库备份"));
   assert.match(downloads[0].name, /\.zip$/); assert.ok(downloads[0].size > 0);
   assert.match(downloads[1].name, /\.json$/); assert.ok(downloads[1].size > 0);
   URL.createObjectURL = originalCreateUrl; URL.revokeObjectURL = originalRevokeUrl;
   dom.window.HTMLAnchorElement.prototype.click = originalLinkClick;
+  assert.ok(settingAction("选择文件"));
   const importInput = activeSettings().querySelector('input[type="file"]');
-  assert.ok(importInput.multiple && importInput.accept.includes(".zip"));
+  assert.ok(!importInput.multiple && importInput.accept.includes(".zip"));
   Object.defineProperty(importInput, "files", { configurable: true, value: [{ name: "导入验证.md", text: async () => "# 导入验证\n\n测试正文" }] });
   await act(async () => importInput.dispatchEvent(new dom.window.Event("change", { bubbles: true })));
-  assert.equal(importCalls.length, 1);
-  assert.equal(selectCalls[0], importCalls[0].node.id);
+  assert.equal(importRequests.length, 1);
+  assert.equal(selectCalls.length, 0);
+  assert.doesNotMatch(activeSettings().textContent, /已导入 1 篇笔记/,'Do not report success before commit');
+  await act(async()=>importResolve(new Response(JSON.stringify({detail:'合成导入失败'}),{status:503})));
+  assert.match(activeSettings().textContent,/合成导入失败/);
+  assert.equal(selectCalls.length,0);
+  await clickAccount(settingAction('重试导入'));
+  assert.equal(importRequests[0].requestId,importRequests[1].requestId,'Retry retains idempotency key');
+  assert.deepEqual(importRequests[0].payload,importRequests[1].payload);
+  await act(async()=>importResolve(new Response(JSON.stringify({ok:true,notesCreated:1,categoriesCreated:0,attachmentsCreated:0,selectedNoteId:'committed-note'}),{headers:{'Content-Type':'application/json'}})));
+  assert.equal(selectCalls[0], 'committed-note');
   assert.match(activeSettings().textContent, /已导入 1 篇笔记/);
-  await clickAccount(settingAction("回收站"));
-  assert.match(activeSettings().textContent, /待恢复笔记/);
-  await clickAccount(activeSettings().querySelector('button[aria-label="恢复 待恢复笔记"]'));
-  assert.equal(restoredId, "trash-test");
-  await clickAccount(settingAction("数据管理"));
-  assert.ok(settingAction("导入笔记文件"));
   await act(async () => document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", isComposing: true, bubbles: true })));
   assert.ok(activeSettings());
   await act(async () => document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
@@ -1205,13 +1259,18 @@ try {
   await waitExit();
   assert.equal(document.querySelector(".nf-overlay"), null);
   await clickAccount(accountTrigger);
-  await clickAccount(Array.from(accountPanel().querySelectorAll("button")).find(b => b.textContent.startsWith("回收站")));
-  assert.equal(activeSettings().querySelector("h2").textContent, "回收站");
-  await clickAccount(activeSettings().querySelector('button[aria-label="关闭设置"]'));
+  await clickAccount(action(accountPanel(), "设置"));
+  await clickAccount(settingAction("导入与导出"));
+  await clickAccount(activeSettings().querySelector(".nf-settings-trash-entry"));
+  assert.equal(activeSettings().querySelector(".nf-content-heading h2").textContent, "回收站");
+  assert.match(activeSettings().textContent, /待恢复笔记/);
+  await clickAccount(activeSettings().querySelector('button[aria-label="恢复 待恢复笔记"]'));
+  assert.equal(restoredId, "trash-test");
+  await clickAccount(settingAction("关闭设置"));
   await waitExit();
   await clickAccount(accountTrigger);
   await clickAccount(action(accountPanel(), "退出登录"));
-  assert.equal(signOutCalls, 2);
+  assert.equal(signOutCalls, 1);
   await act(async () => accountRoot.unmount()); accountContainer.remove();
 
   const compactAccountContainer = document.createElement("div"); document.body.appendChild(compactAccountContainer);
@@ -1260,7 +1319,7 @@ try {
   const deleteRoot = createRoot(deleteContainer);
   await act(async () => deleteRoot.render(React.createElement(DirectoryTree, { ...accountProps, pinned: true, onPinnedChange() {} })));
   const confirmDialog = () => document.querySelector('.nf-overlay[data-open="true"] [role="alertdialog"]');
-  const deleteMore = label => deleteContainer.querySelector('button[aria-label="' + label + '"]').closest('.directory-node-row').querySelector('button[aria-label="文件操作"]');
+  const deleteMore = label => deleteContainer.querySelector('button[aria-label="' + label + '"]').closest('.directory-node-row').querySelector('.file-node-menu-button');
   const noteMore = deleteMore("组件测试笔记");
   await clickAccount(noteMore);
   await clickAccount(action(noteMore.closest('[data-file-menu-root]'), "删除"));
@@ -1428,10 +1487,13 @@ try {
   assert.equal(searchSurface().querySelector('#library-search-hint').textContent, '输入笔记标题、章节名或正文关键词。');
   assert.equal(searchSurface().querySelector('.nf-search-input').getAttribute('aria-describedby'), 'library-search-hint');
   assert.equal(searchSurface().querySelectorAll('svg').length, 2);
-  assert.equal(searchSurface().querySelector('.nf-search-scope').textContent, '全部');
+  assert.equal(searchSurface().querySelector('.nf-search-scope'), null);
+  assert.equal(searchSurface().querySelectorAll('kbd').length, 0);
+  assert.equal(surfaceInput().placeholder, '搜索笔记');
 
   await setSearchQuery('Redis');
-  assert.equal(searchSurface().querySelectorAll('[role="status"]').length, 1);
+  assert.equal(searchSurface().querySelectorAll('[role="status"]').length, 0);
+  assert.equal(searchSurface().querySelector('.nf-search-scope').textContent, '全部');
   assert.equal(searchSurface().querySelector('.nf-search-summary').textContent, '');
   assert.equal(pendingSearches.length, 0);
   await debounceSearch();
@@ -1482,13 +1544,13 @@ try {
   assert.equal(searchSurface().querySelectorAll('[role="option"]').length, 0);
   await act(async () => current.resolve({ results: [] }));
   assert.match(searchSurface().querySelector('[role="status"]').textContent, /没有找到“新查询”/);
-  assert.equal(searchSurface().querySelector('.nf-search-summary').textContent, '0 篇笔记 · 0 处命中');
+  assert.equal(searchSurface().querySelector('.nf-search-summary').textContent, '');
   await surfaceClick([...searchSurface().querySelectorAll('.nf-search-scope')].find((node) => node.textContent === '标题'));
   await debounceSearch();
   const titleSearch = pendingSearches.at(-1);
   assert.equal(titleSearch.options.scope, 'title');
   await act(async () => titleSearch.reject(new Error('合成网络错误')));
-  assert.match(searchSurface().querySelector('[role="alert"]').textContent, /搜索没有完成.*合成网络错误.*重新搜索/);
+  assert.match(searchSurface().querySelector('[role="alert"]').textContent, /^合成网络错误重新搜索$/);
   await surfaceClick(searchSurface().querySelector('.nf-search-retry'));
   await debounceSearch();
   assert.equal(pendingSearches.at(-1).query, '新查询');
@@ -1502,13 +1564,12 @@ try {
   assert.equal(searchSurface().querySelectorAll('img').length, 0);
 
   await act(async () => surfaceInput().dispatchEvent(new dom.window.CompositionEvent('compositionstart', { bubbles: true })));
-  assert.equal(searchSurface().querySelectorAll('[role="status"]').length, 1);
+  assert.equal(searchSurface().querySelectorAll('[role="status"]').length, 0);
   await surfaceKey(surfaceInput(), 'Escape', { isComposing: true });
   assert.equal(surfaceOpen, true);
   await surfaceClick(searchSurface().querySelector('.nf-search-close'));
   assert.equal(surfaceOpen, false);
   surfaceOpen = true; await act(async () => renderSearchSurface());
-  assert.notEqual(searchSurface().querySelector('[role="status"]')?.textContent, '继续完成输入');
   await surfaceKey(surfaceInput(), 'Escape');
   assert.equal(surfaceOpen, false, 'pointer-close / quick-reopen must not keep a stale IME lock');
   surfaceOpen = true; await act(async () => renderSearchSurface());
@@ -1523,6 +1584,8 @@ try {
   assert.equal(document.body.style.overflow, '');
   surfaceOpen = true; await act(async () => renderSearchSurface());
   assert.equal(surfaceInput().value, '');
+  assert.equal(searchSurface().querySelector('[aria-pressed="true"]'), null);
+  await setSearchQuery('重新打开');
   assert.equal(searchSurface().querySelector('[aria-pressed="true"]').textContent, '全部');
   const originalMatchMedia = window.matchMedia;
   window.matchMedia = () => ({ matches: true });
@@ -1535,7 +1598,7 @@ try {
     ok: true,
     storeAssertions: 10,
     componentAssertionGroups: 47,
-    apiErrorCoverage: ["plain-502","html-502","empty-504","plain-503","business-400-retained","structured-503-retained"],
+    apiErrorCoverage: ["plain-502","html-502","empty-504","plain-503","429-retry-after","business-400-retained","structured-503-retained"],
     chatTimeCoverage: ["China-time", "legacy-naive-UTC", "microseconds", "explicit-offsets", "date-rollover", "midnight", "invalid-time-hidden"],
     components: [
       "SoftMenu",
@@ -1547,7 +1610,7 @@ try {
       "AccountMenu",
       "AIPanel",
     ],
-    accountMenuCoverage: ["single-entry", "username", "no-native-tooltip", "username-click", "long-username", "unframed-footer-menu", "numeric-avatar-fallback", "enter-exit", "email-confirm", "devices-revoke", "device-error", "memory-CRUD", "memory-button-rollback-only", "ZIP-JSON-export", "import", "trash-restore", "modal-focus-trap", "escape-focus", "IME", "outside-pointer", "focus-leave", "sign-out", "compact", "note-folder-delete-confirm"],
+    accountMenuCoverage: ["single-entry", "username", "no-native-tooltip", "username-click", "long-username", "unframed-footer-menu", "numeric-avatar-fallback", "enter-exit", "email-confirm", "no-device-settings", "memory-CRUD", "memory-button-rollback-only", "ZIP-JSON-export", "import", "trash-restore", "modal-focus-trap", "escape-focus", "IME", "outside-pointer", "focus-leave", "sign-out", "compact", "note-folder-delete-confirm"],
     directoryRowCoverage: ["whole-row-selection", "full-name", "selected-more", "nested-indent", "pin-favorite-glyphs", "folder-disclosure", "file-open-callback", "independent-menu", "rename-cancel"],
     conversationCoverage: ["empty-wait", "whitespace-wait", "streaming-markdown", "hide-status-on-first-text", "no-status-during-transport-cleanup", "single-status", "completion", "stop-callback", "error-clears-status", "fallback-wait", "empty-send-disabled", "Enter-Shift-IME", "send-context", "library-mode", "remove-note-reference", "citation-open", "selection-expand", "selection-send", "scoped-scrollable-tables", "both-role-copy", "reply-copy-before-time", "user-time-before-copy", "raw-Markdown-copy", "copy-success-reset", "copy-failure-retry", "copy-duplicate-lock", "copy-late-result", "copy-fallback-focus-draft-selection", "copy-hint-label-portal", "copy-hint-keyboard-IME-Escape", "copy-hint-viewport-flip", "copy-hint-hover-delay-bridge", "copy-hint-scroll-resize-blur-lifecycle"],
     softMenuCoverage: ["exit-inert", "unmount-after-exit", "quick-reopen", "reduced-motion", "Escape-focus", "IME-Escape", "file-action-order", "history-search-label-focus-filter", "history-inline-actions", "history-IME-default-composition-229", "history-rename-IME-Enter-Escape", "history-rename-cancel-focus", "history-rename-callback", "history-delete-confirmation", "history-switch-callback"],

@@ -4,7 +4,7 @@ import { JSDOM } from 'jsdom';
 import { createServer } from 'vite';
 const dom = new JSDOM('', { url: 'http://noteflow.test/' });
 Object.assign(globalThis, { window: dom.window, localStorage: dom.window.localStorage });
-const requests = [], replies = [];
+const requests = [], replies = [], stoppedRuns = [];
 const encode = events => events.map(event => 'data: ' + (typeof event === 'string' ? event : JSON.stringify(event)) + '\n\n').join('');
 const session = intent => ({ type: 'agent_session', sessionId: 'session-a', runId: 'run-a', intent });
 const delta = content => ({ choices: [{ delta: { content } }] });
@@ -15,7 +15,11 @@ globalThis.fetch = async (input, init) => {
   if (url.endsWith('/api/agent/chat')) {
     requests.push(JSON.parse(init.body));
     assert(replies.length, 'Each request needs an explicit synthetic response');
-    return replies.shift()();
+    return replies.shift()(init.signal);
+  }
+  if (/\/api\/agent\/runs\/[^/]+\/cancel$/.test(url)) {
+    stoppedRuns.push(url.split('/').at(-2));
+    return new Response(JSON.stringify({ task: null }), { headers: { 'Content-Type': 'application/json' } });
   }
   assert(!init?.method || init.method === 'GET', 'No note/memory/checkpoint mutation during retry');
   return new Response(JSON.stringify({ sessions: [], runs: [], settings: { memoryEnabled: true } }), { headers: { 'Content-Type': 'application/json' } });
@@ -30,6 +34,21 @@ try {
     selectedFileId: 'note-a', treeData: [{ id: 'note-a', name: '原笔记.md', type: 'file', content: '原正文' }],
     fileContents: { 'note-a': '原正文' }, chatSelection: null, centerMode: 'note', noteSaveState: { status: 'saved' } });
   const last = () => store.getState().chatMessages.slice(-1)[0];
+  seed();
+  const history = [
+    { id: 'ordinary-user', role: 'user', text: '我们先聊聊部署' },
+    { id: 'ordinary-answer', role: 'assistant', text: '一般先检查配置' },
+    { id: 'note-user', role: 'user', text: '笔记里的编号是什么？' },
+    { id: 'note-answer', role: 'assistant', text: '笔记编号 MT0BC44BF0', contextMode: 'rag_v2_note' },
+    { id: 'selection-answer', role: 'assistant', text: '从选区读到的编号', contextMode: 'selection' },
+    { id: 'older-answer', role: 'assistant', text: '带引用的旧回答', sources: [{ noteId: 'note-a' }] },
+  ];
+  store.setState({ chatMessages: history });
+  replies.push(() => stream([session('general_chat'), delta('收到'), done, '[DONE]']));
+  await store.getState().sendMessage('继续聊天', { contextScope: 'none' });
+  assert.deepEqual(requests[0].history, history.slice(0, 3).map(({ role, text }) => ({ role, text })));
+  assert.deepEqual(store.getState().chatMessages.slice(0, history.length), history);
+  requests.length = 0;
   seed();
   replies.push(() => stream([session('general_chat'), delta('已收到的部分回答')]));
   await store.getState().sendMessage('原问题', { selectedText: '原选中文字', contextScope: 'selection' });
@@ -60,6 +79,21 @@ try {
   store.setState({ chatMessages:store.getState().chatMessages.map(m=>({...m,streamState:'stopped'})) });
   const beforeStopped=requests.length;store.getState().retryChatReply(last().id);assert.equal(requests.length,beforeStopped,'User stop is not an error');
 
+  seed();
+  store.setState({agentTask:{run:{id:'previous-run'}}});
+  let planningSignal;
+  replies.push(signal=>new Promise((_resolve,reject)=>{
+    planningSignal=signal;
+    signal.addEventListener('abort',()=>reject(new DOMException('stopped','AbortError')),{once:true});
+  }));
+  const planning=store.getState().sendMessage('还没有收到本次运行标识');
+  await until(()=>Boolean(planningSignal));
+  store.getState().stopGeneration();
+  await planning;
+  assert.equal(planningSignal.aborted,true);
+  assert.deepEqual(stoppedRuns,[],'Stopping a planning request must never cancel the previous run');
+  assert.equal(last().streamState,'stopped');
+
   seed();replies.push(()=>stream([session('note_draft_create'),{type:'agent_error',message:'任务失败'},'[DONE]']));
   await store.getState().sendMessage('创建笔记');assert.equal(last().retryBlocked,true);
   const beforeTask=requests.length;store.getState().retryChatReply(last().id);assert.equal(requests.length,beforeTask,'Do not replay writing tasks');
@@ -69,5 +103,5 @@ try {
   store.setState({pendingCheckpoint:null});
   replies.push(()=>stream([session('general_chat'),{type:'tool_action',toolName:'note_draft_tool',action:'open_draft_workspace',payload:{seed:'不得执行'}}]));
   store.getState().retryChatReply(last().id);await until(()=>!store.getState().chatLoading);assert.equal(store.getState().activeDraftContext,null);assert.equal(last().retryBlocked,true);assert.equal(last().text,'部分内容');
-  console.log(JSON.stringify({ok:true,actualStoreAndSSE:true,syntheticOnly:true,checks:['partial EOF','original snapshot','duplicate click','successful replacement','503 and retry failure','agent error','manual stop','writing task guard','checkpoint guard','unexpected tool guard']}));
+  console.log(JSON.stringify({ok:true,actualStoreAndSSE:true,syntheticOnly:true,checks:['detached note history','partial EOF','original snapshot','duplicate click','successful replacement','503 and retry failure','agent error','manual stop','stop during planning','writing task guard','checkpoint guard','unexpected tool guard']}));
 } finally { await vite.close();dom.window.close(); }

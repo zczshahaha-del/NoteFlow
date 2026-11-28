@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.services.prompt_templates import render_prompt
 from app.services.ai import ChatMessage, complete_chat
+from app.services.selection_context import has_selection_scope
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ class PrimaryIntent(str, Enum):
     GENERAL_CHAT = "general_chat"
     NOTE_CREATE = "note_create"
     NOTE_EDIT = "note_edit"
+    DRAFT_REVISE = "draft_revise"
     MEMORY = "memory"
     UNKNOWN = "unknown"
 
@@ -76,13 +78,16 @@ class IntentParameters(BaseModel):
 
     topic: str | None = Field(default=None, max_length=160)
     requirements: str = Field(default="", max_length=2000)
+    source_note_title: str = Field(default="", max_length=160)
     note_id: str | None = Field(default=None, max_length=64)
     instruction: str = Field(default="", max_length=600)
     memory_action: MemoryAction = "none"
+    requires_personal_data: bool = False
     memory_scope: MemoryScope | None = None
     memory_layers: list[MemoryLayer] = Field(default_factory=list, max_length=2)
     memory_types: list[MemoryType] = Field(default_factory=list, max_length=8)
     memory_key: str | None = Field(default=None, max_length=120)
+    memory_time: Literal["current", "history"] = "current"
     memory_query: str = Field(default="", max_length=300)
 
 
@@ -269,6 +274,7 @@ def _normalize_planner_payload(payload: dict[str, Any]) -> dict[str, Any]:
     memory_key = str(parameters.get("memory_key") or "").strip()
     parameters["memory_key"] = key_aliases.get(memory_key.lower(), memory_key or None)
     parameters["requirements"] = str(parameters.get("requirements") or "")
+    parameters["source_note_title"] = str(parameters.get("source_note_title") or "")
     parameters["instruction"] = str(parameters.get("instruction") or "")
     parameters["memory_query"] = str(parameters.get("memory_query") or "")
     parameters["topic"] = parameters.get("topic") or None
@@ -334,18 +340,42 @@ def validate_turn_plan(
         ]
 
     parameters = validated.intent_parameters
+    if state.get("contextScope") == "none":
+        validated.context_sources = [source for source in validated.context_sources if source not in {
+            ContextSource.CURRENT_NOTE, ContextSource.SELECTED_TEXT,
+        }]
+    selection_scope = has_selection_scope(state)
+    if (
+        validated.mode == ChatMode.CHAT
+        and validated.primary_intent == PrimaryIntent.GENERAL_CHAT
+        and parameters.requires_personal_data
+        and not selection_scope
+        and not {ContextSource.CURRENT_NOTE, ContextSource.SELECTED_TEXT}.intersection(validated.context_sources)
+    ):
+        # The output format does not change where personal facts come from.
+        validated.primary_intent = PrimaryIntent.MEMORY
+        parameters.memory_action = "read"
+    if selection_scope and validated.primary_intent in {PrimaryIntent.GENERAL_CHAT, PrimaryIntent.NOTE_EDIT}:
+        validated.context_sources = [ContextSource.SELECTED_TEXT]
     if validated.primary_intent == PrimaryIntent.NOTE_CREATE:
         parameters.topic = _normalize_topic_field(parameters.topic)
         if not parameters.topic:
             missing.append("topic")
     elif validated.primary_intent == PrimaryIntent.NOTE_EDIT:
-        note_id = parameters.note_id or state.get("currentNoteId")
+        note_id = None if state.get("contextScope") == "none" else state.get("currentNoteId") if selection_scope else parameters.note_id or state.get("currentNoteId")
         parameters.note_id = str(note_id) if note_id else None
         if not note_id:
             missing.append("target_note")
         if not _clean(parameters.instruction, 600):
             missing.append("instruction")
+    elif validated.primary_intent == PrimaryIntent.DRAFT_REVISE:
+        if not state.get("boundDraftId"):
+            missing.append("target_draft")
+        if not parameters.instruction:
+            missing.append("instruction")
     elif validated.primary_intent == PrimaryIntent.MEMORY:
+        if parameters.requires_personal_data and parameters.memory_action == "none":
+            parameters.memory_action = "read"
         if parameters.memory_action == "none":
             missing.append("memory_action")
         if parameters.memory_scope is None:
@@ -385,6 +415,8 @@ def validate_turn_plan(
 
 
 def clarification_question(plan: TurnPlan) -> str:
+    if "target_draft" in plan.missing_fields:
+        return "这段对话里没有可接着修改的草稿。请回到那篇草稿的对话再试。"
     if "topic" in plan.missing_fields:
         return "你想生成什么主题的笔记？"
     if "target_note" in plan.missing_fields:
@@ -441,6 +473,7 @@ def _planner_messages(
             mode=_mode(mode).value,
             note_id=state.get('currentNoteId') or '无',
             selection=_clean(state.get('selectedText'), 320) or '无',
+            active_draft=_clean(state.get("boundDraftTitle"), 160) or "无",
             history=_history_text(history),
             question=question.strip(),
         )

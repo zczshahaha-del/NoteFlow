@@ -1,0 +1,60 @@
+{
+  "date": "2026-11-10",
+  "baseURL": "http://127.0.0.1:5173",
+  "browser": "Microsoft Edge, isolated headless context",
+  "checks": {
+    "loginPage": "passed",
+    "registerAndCookieLogin": "passed",
+    "createRenameEditAndServerSave": "passed",
+    "reloadAndReadPersistence": "passed",
+    "literalSearch": "passed",
+    "versionHistory": "passed",
+    "deleteNote": "passed",
+    "logoutAndAuthProtection": "passed"
+  },
+  "limitations": [
+    "No AI provider key configured",
+    "Development email code fallback; no real email sent",
+    "Fresh local database; no historical data restored",
+    "Mobile responsive visual acceptance not completed; this report covers desktop core flows"
+  ],
+  "pageErrors": [],
+  "serverErrors": [],
+  "ok": true,
+  "runtime": {
+    "node": "22.23.2",
+    "python": "3.12.14",
+    "compose": "5.6.1",
+    "apiURL": "http://127.0.0.1:8080",
+    "memoryEngine": "local"
+  },
+  "infrastructure": {
+    "postgres": "healthy",
+    "redis": "healthy",
+    "alembicRevision": "20261031_0012",
+    "pgvectorInstalled": true,
+    "publishedPortsLoopbackOnly": true
+  },
+  "health": {
+    "ok": true,
+    "status": "degraded",
+    "postgresReady": true,
+    "redisReady": true,
+    "deepseekReady": false
+  },
+  "validation": {
+    "frontendBuild": "passed",
+    "devPortCheck": "passed",
+    "pythonDependencies": "121 packages compatible",
+    "isolatedAuthTests": {
+      "passed": 16,
+      "failed": 0
+    },
+    "smokeFixtureAccountCleaned": true
+  },
+  "warnings": [
+    "Existing Python datetime.utcnow deprecation",
+    "Frontend chunk exceeds 500 kB"
+  ],
+  "issue": "https://github.com/zczshahaha-del/NoteFlow/issues/7"
+}

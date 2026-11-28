@@ -9,6 +9,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from app.database import AsyncSessionLocal
+from app.services.agent_checkpoints import settle_linked_checkpoints
 from app.deps import CurrentUser, get_current_user
 from app.models.db import (
     Note,
@@ -25,7 +26,6 @@ from app.services.markdown_index import HEADING_RE, index_note_now
 from app.memory.context import MemoryContextService
 from app.services.note_edit import EditGenerationError, generate_edit_preview, revise_edit_preview
 from app.services.edit_scope import infer_edit_target, positive_instruction, requests_current_section, requests_section, requests_note
-from app.agent.write_runtime import initialize_edit_graph, resume_edit_graph
 from app.utils import random_id
 
 router = APIRouter(tags=["edits"])
@@ -149,6 +149,7 @@ def _edit_out(preview: NoteEditPreview) -> dict:
         "newContent": preview.new_content,
         "instruction": preview.instruction,
         "changeSummary": preview.change_summary or [],
+        "currentRevisionId": preview.current_revision_id,
         "status": preview.status,
         "runtime": preview.runtime,
         "sourceContentHash": preview.source_content_hash,
@@ -167,12 +168,13 @@ def _edit_revision_out(revision: NoteEditPreviewRevision) -> dict:
         "instruction": revision.instruction,
         "changeSummary": revision.change_summary or [],
         "source": revision.source,
+        "previousRevisionId": revision.previous_revision_id,
         "createdAt": _dt(revision.created_at),
     }
 
 
-def _make_edit_revision(preview: NoteEditPreview, *, source: str) -> NoteEditPreviewRevision:
-    return NoteEditPreviewRevision(
+def _make_edit_revision(preview: NoteEditPreview, *, source: str, previous_revision_id: str | None = None) -> NoteEditPreviewRevision:
+    revision = NoteEditPreviewRevision(
         id=random_id(),
         edit_id=preview.id,
         user_id=preview.user_id,
@@ -180,7 +182,10 @@ def _make_edit_revision(preview: NoteEditPreview, *, source: str) -> NoteEditPre
         instruction=preview.instruction or "",
         change_summary=preview.change_summary or [],
         source=source,
+        previous_revision_id=previous_revision_id,
     )
+    preview.current_revision_id = revision.id
+    return revision
 
 
 async def _get_note(session, user_id: str, note_id: str) -> Note:
@@ -197,26 +202,6 @@ async def _get_preview(session, user_id: str, edit_id: str, *, for_update: bool 
     if preview is None:
         raise HTTPException(status_code=404, detail="edit preview not found")
     return preview
-
-
-async def _ensure_edit_graph(preview: NoteEditPreview, user_id: str) -> None:
-    if preview.graph_thread_id:
-        return
-    preview.runtime = "langgraph"
-    preview.graph_thread_id = f"edit-{random_id()}"
-    initialized = await initialize_edit_graph(
-        user_id=user_id,
-        thread_id=preview.graph_thread_id,
-        note_id=preview.note_id,
-        instruction=preview.instruction,
-        preview_id=preview.id,
-        target_type=preview.target_type,
-        section_id=preview.section_id or "",
-        selected_text=preview.old_content or "",
-        source_content_hash=preview.source_content_hash or "",
-    )
-    if not initialized:
-        raise HTTPException(status_code=503, detail="LangGraph 修改流程初始化失败，请稍后重试")
 
 
 async def _get_sections(session, user_id: str, note_id: str) -> list[NoteSection]:
@@ -720,23 +705,11 @@ async def create_edit_preview(
             change_summary=change_summary,
             status="preview",
             idempotency_key=idempotency_key or None,
-            runtime="langgraph",
-            graph_thread_id=f"edit-{random_id()}",
+            runtime="database",
             source_content_hash=hashlib.sha256((note.content or "").encode()).hexdigest(),
         )
         session.add(preview)
         session.add(_make_edit_revision(preview, source="generated"))
-        await session.flush()
-        initialized = await initialize_edit_graph(
-            user_id=user.id, thread_id=preview.graph_thread_id,
-            note_id=preview.note_id, instruction=preview.instruction,
-            preview_id=preview.id, target_type=preview.target_type,
-            section_id=preview.section_id or "", selected_text=payload.selectedText,
-            source_content_hash=preview.source_content_hash,
-        )
-        if not initialized:
-            await session.rollback()
-            raise HTTPException(status_code=503, detail="LangGraph 修改流程初始化失败，请稍后重试")
         await session.commit()
         await session.refresh(preview)
         return {"preview": _edit_out(preview)}
@@ -789,11 +762,12 @@ async def update_preview_content(
                 detail="预览已在其他位置更新，手动修改已保留，请重新打开核对。",
             )
 
+        previous_revision_id = await EditRepository(session).current_revision_id(user.id, preview)
         preview.new_content = payload.newContent
         preview.change_summary = ["手动调整预览正文"]
         now = datetime.utcnow()
         preview.updated_at = max(now, preview.updated_at + timedelta(microseconds=1)) if preview.updated_at else now
-        session.add(_make_edit_revision(preview, source="manual"))
+        session.add(_make_edit_revision(preview, source="manual", previous_revision_id=previous_revision_id))
         await session.commit()
         await session.refresh(preview)
         return {"preview": _edit_out(preview)}
@@ -812,16 +786,10 @@ async def restore_edit_preview_revision(
         revision = await EditRepository(session).get_revision(user.id, edit_id, payload.revisionId)
         if revision is None:
             raise HTTPException(status_code=404, detail="edit preview revision not found")
+        preview.current_revision_id = revision.id
         preview.new_content = revision.new_content
         preview.change_summary = revision.change_summary or []
         preview.instruction = revision.instruction
-        await _ensure_edit_graph(preview, user.id)
-        resumed = await resume_edit_graph(
-            thread_id=preview.graph_thread_id, action="restore",
-            payload={"revisionId": payload.revisionId},
-        )
-        if not resumed:
-            raise HTTPException(status_code=503, detail="LangGraph 修改流程恢复失败，请稍后重试")
         await session.commit()
         await session.refresh(preview)
         return {"preview": _edit_out(preview)}
@@ -884,18 +852,12 @@ async def revise_preview(
                 status_code=409,
                 detail="预览在生成期间已更新，本次 AI 调整未覆盖，请检查当前修改稿后重试。",
             )
+        previous_revision_id = await EditRepository(session).current_revision_id(user.id, preview)
         preview.old_content = original_content
         preview.new_content = result.new_content
         preview.change_summary = result.change_summary
         preview.instruction = f"{preview.instruction}\n\n继续调整：{payload.instruction.strip()}"
-        await _ensure_edit_graph(preview, user.id)
-        resumed = await resume_edit_graph(
-            thread_id=preview.graph_thread_id, action="revise",
-            payload={"instruction": payload.instruction},
-        )
-        if not resumed:
-            raise HTTPException(status_code=503, detail="LangGraph 修改流程恢复失败，请稍后重试")
-        session.add(_make_edit_revision(preview, source="revision"))
+        session.add(_make_edit_revision(preview, source="revision", previous_revision_id=previous_revision_id))
         await session.commit()
         await session.refresh(preview)
         return {"preview": _edit_out(preview)}
@@ -913,6 +875,11 @@ async def apply_preview(
         if preview.status == "applied":
             note = await _get_note(session, user.id, preview.note_id)
             job = await IndexJobRepository(session).latest_for_note(user.id, note.id)
+            if await settle_linked_checkpoints(
+                session, user_id=user.id, checkpoint_type="edit_preview",
+                object_id=preview.id, status="resolved", note_id=note.id,
+            ):
+                await session.commit()
             return {
                 "preview": _edit_out(preview), "note": _note_out(note),
                 "job": _index_job_out(job) if job else None, "idempotentReplay": True,
@@ -928,10 +895,6 @@ async def apply_preview(
                 status_code=409,
                 detail="笔记已在预览生成后发生变化，请重新生成修改预览。",
             )
-        await _ensure_edit_graph(preview, user.id)
-        resumed = await resume_edit_graph(thread_id=preview.graph_thread_id, action="apply")
-        if not resumed:
-            raise HTTPException(status_code=503, detail="LangGraph 修改流程确认失败，请稍后重试")
         session.add(_make_version(note, preview))
         note.content = _apply_preview_content(note, preview)
         preview.applied_content_hash = hashlib.sha256((note.content or "").encode()).hexdigest()
@@ -939,6 +902,10 @@ async def apply_preview(
         job = await index_note_now(session, note)
         preview.status = "applied"
         preview.applied_at = datetime.utcnow()
+        await settle_linked_checkpoints(
+            session, user_id=user.id, checkpoint_type="edit_preview",
+            object_id=preview.id, status="resolved", note_id=note.id,
+        )
         await session.refresh(note)
         note_result = _note_out(note)
         await session.commit()
@@ -958,14 +925,19 @@ async def cancel_preview(
 ):
     async with AsyncSessionLocal() as session:
         preview = await _get_preview(session, user.id, edit_id, for_update=True)
+        if preview.status == "cancelled":
+            if await settle_linked_checkpoints(
+                session, user_id=user.id, checkpoint_type="edit_preview", object_id=preview.id, status="cancelled",
+            ):
+                await session.commit()
+            return {"preview": _edit_out(preview)}
         if preview.status != "preview":
             raise HTTPException(status_code=409, detail="edit preview is not active")
-        await _ensure_edit_graph(preview, user.id)
-        resumed = await resume_edit_graph(thread_id=preview.graph_thread_id, action="cancel")
-        if not resumed:
-            raise HTTPException(status_code=503, detail="LangGraph 修改流程取消失败，请稍后重试")
         preview.status = "cancelled"
         preview.cancelled_at = datetime.utcnow()
+        await settle_linked_checkpoints(
+            session, user_id=user.id, checkpoint_type="edit_preview", object_id=preview.id, status="cancelled",
+        )
         await session.commit()
         await session.refresh(preview)
         return {"preview": _edit_out(preview)}

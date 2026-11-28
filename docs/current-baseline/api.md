@@ -2,10 +2,13 @@
 
 > 由 `scripts/export_current_baseline.py` 从 FastAPI OpenAPI 事实导出。
 
-- API 路径数：77
-- 操作数：91
+- API 路径数：75
+- 操作数：89
 - 全局错误结构：`ApiErrorEnvelope { error: { code, message }, requestId, traceId }`（OpenAPI schema 保持向后兼容，traceId 为运行时关联字段）。
 - 认证实现：HttpOnly session cookie 为当前主路径；部分旧客户端仍兼容 Bearer。
+- `GET /api/notes?includeContent=false` 返回目录用的笔记信息，正文及 `contentHash` 由 `GET /api/notes/{note_id}` 返回。列表参数默认为 `true`，兼容旧客户端。
+- 草稿续改可向 `PUT /api/note-drafts/{draft_id}` 和 `POST /api/note-drafts/{draft_id}/assemble` 提交 `expectedUpdatedAt`。草稿版本或阶段变化时返回 `409`。
+- AI 限流的 `429` 带 `Retry-After` 剩余秒数。笔记版本冲突的 `409 NOTE_VERSION_CONFLICT` 在 `error.details` 中提供当前版本的时间和正文哈希。
 
 | 方法 | 路径 | 操作 | 请求模型 | 成功响应 | 已声明状态码 | 认证基线 |
 |---|---|---|---|---|---|---|
@@ -40,7 +43,6 @@
 | PATCH | `/api/chat-sessions/{session_id}` | Update Chat Session | ChatSessionUpdatePayload | object | 200, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503 | cookie / bearer |
 | DELETE | `/api/chat-sessions/{session_id}` | Delete Chat Session | - | object | 200, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503 | cookie / bearer |
 | GET | `/api/chat-sessions/{session_id}/messages` | List Chat Messages | - | object | 200, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503 | cookie / bearer |
-| GET | `/api/diagnostics` | Diagnostics | - | object | 200, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503 | route dependency / public |
 | GET | `/api/health` | Health | - | object | 200, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503 | route dependency / public |
 | GET | `/api/index-jobs` | List Index Jobs | - | object | 200, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503 | cookie / bearer |
 | GET | `/api/knowledge-base` | Load Knowledge Base | - | object | 200, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503 | cookie / bearer |
@@ -55,7 +57,6 @@
 | POST | `/api/memories/search` | Search Memories | MemorySearchPayload | object | 200, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503 | cookie / bearer |
 | PUT | `/api/memories/{memory_id}` | Update Memory | MemoryUpdatePayload | object | 200, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503 | cookie / bearer |
 | DELETE | `/api/memories/{memory_id}` | Delete Memory | - | object | 200, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503 | cookie / bearer |
-| GET | `/api/metrics` | Metrics | - | object | 200, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503 | cookie / bearer |
 | POST | `/api/note-drafts` | Create Draft | DraftCreatePayload | object | 200, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503 | cookie / bearer |
 | GET | `/api/note-drafts/{draft_id}` | Get Draft | - | object | 200, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503 | cookie / bearer |
 | PUT | `/api/note-drafts/{draft_id}` | Update Draft | DraftUpdatePayload | object | 200, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503 | cookie / bearer |
@@ -102,3 +103,5 @@
 | PUT | `/api/settings` | Update Settings | SettingsUpdatePayload | object | 200, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503 | cookie / bearer |
 
 完整机器可读版本见 `openapi.json`。路由是否公开以 FastAPI dependency 为最终事实，OpenAPI 当前未完整表达所有 dependency 认证要求。
+
+`POST /api/note-drafts/{draft_id}/save-to-notes` 需要 `confirm: true`。省略 `categoryId` 会沿用草稿目录，传 `null` 则保存到根目录。成功响应包含 `draft`、`note` 和 `job`。对同一已保存草稿重复提交时，返回原笔记并带 `idempotentReplay: true`。

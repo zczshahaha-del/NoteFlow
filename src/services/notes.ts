@@ -17,6 +17,8 @@ export interface NoteRecord {
   deletedAt: string | null;
 }
 
+export type NoteListRecord = Omit<NoteRecord, "content" | "contentHash"> & Partial<Pick<NoteRecord, "content" | "contentHash">>;
+
 export interface NoteVersionRecord {
   id: string;
   noteId: string;
@@ -97,10 +99,12 @@ export interface NoteUpdatePayload {
   expectedContentHash?: string | null;
 }
 
-export async function listNotes(includeDeleted = false): Promise<NoteRecord[]> {
-  const response = await apiFetch(`/api/notes${includeDeleted ? "?includeDeleted=true" : ""}`);
+export class NoteVersionConflictError extends Error {}
+
+export async function listNotes(includeDeleted = false): Promise<NoteListRecord[]> {
+  const response = await apiFetch(`/api/notes?${includeDeleted ? "includeDeleted=true&" : ""}includeContent=false`);
   if (!response.ok) throw new Error(await readApiError(response));
-  const data = await readApiJson<{ notes: NoteRecord[] }>(response);
+  const data = await readApiJson<{ notes: NoteListRecord[] }>(response);
   return data.notes;
 }
 
@@ -131,7 +135,7 @@ export async function searchNotes(
 }
 
 export async function getNote(noteId: string): Promise<NoteRecord> {
-  const response = await apiFetch(`/api/notes/${encodeURIComponent(noteId)}`);
+  const response = await apiFetch(`/api/notes/${encodeURIComponent(noteId)}`, { cache: "no-store" });
   if (!response.ok) throw new Error(await readApiError(response));
   const data = await readApiJson<{ note: NoteRecord }>(response);
   return data.note;
@@ -157,6 +161,12 @@ export async function updateNote(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
+  if (response.status === 409) {
+    const data = await response.clone().json().catch(() => null);
+    if (data?.error?.code === "NOTE_VERSION_CONFLICT" || data?.detail?.code === "NOTE_VERSION_CONFLICT") {
+      throw new NoteVersionConflictError(data?.error?.message || data?.detail?.message || "笔记已在其他页面更新。");
+    }
+  }
   if (!response.ok) throw new Error(await readApiError(response));
   const data = await readApiJson<{ note: NoteRecord }>(response);
   return data.note;

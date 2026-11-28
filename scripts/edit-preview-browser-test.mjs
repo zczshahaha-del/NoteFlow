@@ -18,11 +18,11 @@ import {useAppStore} from ${JSON.stringify(path('store/index.tsx'))};
 const preview={id:'synthetic-preview',noteId:'synthetic-note',targetType:'section',sectionId:null,oldContent:${JSON.stringify(before)},newContent:${JSON.stringify(after)},instruction:'合成修改',changeSummary:['更新说明并增加代码示例','补全请求、响应与异常处理的讲解，保留原来的正文风格','增加环境变量与密钥保管的提醒','整理章节顺序，方便逐步阅读'],status:'preview',createdAt:'2020-01-02T10:50:00.123456',updatedAt:'2020-01-02T10:50:00.123456',appliedAt:null,cancelledAt:null};
 const histories=new Map(),servers=new Map();let clock=123456;
 function stamp(){return '2020-01-02T10:50:01.'+String(++clock).padStart(6,'0')}
-function server(id){if(!servers.has(id))servers.set(id,{...preview,id,updatedAt:stamp()});return servers.get(id)}
-function history(id){if(!histories.has(id)){const p=server(id);histories.set(id,[{id:id+'-r1',editId:id,newContent:p.newContent,instruction:'合成初始稿',changeSummary:p.changeSummary,source:'generated',createdAt:p.createdAt}])}return histories.get(id)}
+function server(id){if(!servers.has(id))servers.set(id,{...preview,id,updatedAt:stamp(),currentRevisionId:id+'-r1'});return servers.get(id)}
+function history(id){if(!histories.has(id)){const p=server(id);histories.set(id,[{id:id+'-r1',editId:id,newContent:p.newContent,instruction:p.instruction,changeSummary:p.changeSummary,source:'generated',previousRevisionId:null,createdAt:p.createdAt}])}return histories.get(id)}
 function snapshot(id){return {...server(id)}}
-function appendRevision(id,instruction='合成继续修改',source='revision',content){const p=server(id),records=history(id),number=records.length;const revision={id:id+'-r'+(number+1),editId:id,newContent:content??p.newContent+'\\n\\n本轮调整：补充第 '+number+' 次合成说明。',instruction,changeSummary:source==='manual'?['手动调整预览正文']:preview.changeSummary,source,createdAt:source==='manual'?stamp():'invalid'};records.push(revision);Object.assign(p,{newContent:revision.newContent,changeSummary:revision.changeSummary,updatedAt:stamp()});return revision}
-window.previewTest={applied:0,cancelled:0,closed:0,requests:[],requestBodies:[],events:[],completedRevisionReads:[],failNext:'',failure:null,holdRevisions:false,holdRevise:false,holdSave:false,holdApply:true,seedRevision:appendRevision,current:snapshot,state:()=>useAppStore.getState(),setSummary(items=preview.changeSummary){useAppStore.setState(state=>({activeEditPreview:{...state.activeEditPreview,changeSummary:items}}))},replace(id='second'){history(id);useAppStore.setState({activeEditPreview:snapshot(id),editPreviewError:''})},replaceContent(id,oldContent,newContent){const p=server(id);Object.assign(p,{oldContent,newContent,updatedAt:stamp()});history(id)[0].newContent=newContent;useAppStore.setState({activeEditPreview:snapshot(id),editPreviewError:''})},replaceDelete(id='delete-preview'){const p=server(id);Object.assign(p,{targetType:'delete',newContent:'',changeSummary:['删除目标范围内容']});history(id)[0].newContent='';useAppStore.setState({activeEditPreview:snapshot(id),editPreviewError:''})}};
+function appendRevision(id,instruction='合成继续修改',source='revision',content){const p=server(id),records=history(id),number=records.length;const revision={id:id+'-r'+(number+1),editId:id,previousRevisionId:p.currentRevisionId,newContent:content??p.newContent+'\\n\\n本轮调整：补充第 '+number+' 次合成说明。',instruction,changeSummary:source==='manual'?['手动调整预览正文']:preview.changeSummary,source,createdAt:source==='manual'?stamp():'invalid'};records.push(revision);Object.assign(p,{newContent:revision.newContent,changeSummary:revision.changeSummary,currentRevisionId:revision.id,updatedAt:stamp()});return revision}
+window.previewTest={applied:0,cancelled:0,closed:0,requests:[],requestBodies:[],events:[],completedRevisionReads:[],failNext:'',failure:null,holdRevisions:false,holdRevise:false,holdSave:false,holdApply:true,seedRevision:appendRevision,current:snapshot,state:()=>useAppStore.getState(),replace(id='second'){history(id);useAppStore.setState({activeEditPreview:snapshot(id),editPreviewError:''})},replaceContent(id,oldContent,newContent,targetType='section'){const p=server(id);Object.assign(p,{oldContent,newContent,targetType,updatedAt:stamp()});history(id)[0].newContent=newContent;useAppStore.setState({activeEditPreview:snapshot(id),editPreviewError:''})},replaceDelete(id='delete-preview'){const p=server(id);Object.assign(p,{targetType:'delete',newContent:'',changeSummary:['删除目标范围内容']});history(id)[0].newContent='';useAppStore.setState({activeEditPreview:snapshot(id),editPreviewError:''})}};
 window.previewTest.replaceNote=()=>{const p=server('whole-note'),text='# 合成整篇笔记\\n\\n## 一、第一章\\n\\n### 9.2 小节\\n\\n\x60\x60\x60go\\nprintln(1)\\n\x60\x60\x60';Object.assign(p,{targetType:'note',oldContent:text,newContent:text});history(p.id)[0].newContent=text;useAppStore.setState({treeData:[{id:p.noteId,type:'file',name:'合成整篇笔记.md'}],activeEditPreview:{...p},editPreviewError:''})};
 history(preview.id);
 useAppStore.setState({activeEditPreview:snapshot(preview.id),chatLoading:false,editPreviewDrafts:{},closeEditPreview:()=>{window.previewTest.closed++}});
@@ -41,7 +41,7 @@ window.fetch=async(input,init={})=>{const a=window.previewTest,url=String(input)
  if(snapshot){a.completedRevisionReads.push(id);data={revisions:snapshot}}
  else if(url.endsWith('/content')){const p=server(id);if(init.method!=='PATCH'||typeof payload.newContent!=='string'||!payload.expectedUpdatedAt)return new Response('{"detail":"手动稿保存契约不正确"}',{status:422});if(p.status!=='preview'||p.targetType==='delete')return new Response('{"detail":"不能编辑此预览"}',{status:409});if(payload.newContent!==p.newContent){if(payload.expectedUpdatedAt!==p.updatedAt)return new Response('{"detail":"预览已在其他位置更新，手动修改已保留，请重新打开核对。"}',{status:409});appendRevision(id,p.instruction,'manual',payload.newContent)}data={preview:{...server(id)}}}
  else if(url.endsWith('/revise')){appendRevision(id,payload.instruction);data={preview:{...server(id)}}}
- else if(url.endsWith('/restore-revision')){const revision=history(id).find(record=>record.id===payload.revisionId);if(!revision)return new Response('{"detail":"合成版本不存在"}',{status:404});Object.assign(server(id),{newContent:revision.newContent,changeSummary:revision.changeSummary,updatedAt:stamp()});data={preview:{...server(id)}}}
+ else if(url.endsWith('/restore-revision')){const revision=history(id).find(record=>record.id===payload.revisionId);if(!revision)return new Response('{"detail":"合成版本不存在"}',{status:404});Object.assign(server(id),{newContent:revision.newContent,changeSummary:revision.changeSummary,currentRevisionId:revision.id,updatedAt:stamp()});data={preview:{...server(id)}}}
  else if(url.endsWith('/apply')){a.applied++;Object.assign(server(id),{status:'applied',updatedAt:stamp()});data={preview:{...server(id)},note:{id:'synthetic-note',title:'合成笔记',content:server(id).newContent,tags:[],indexStatus:'pending'},job:{id:'synthetic-job',noteId:'synthetic-note',status:'pending'}}}
  else if(url.endsWith('/cancel')){a.cancelled++;Object.assign(server(id),{status:'cancelled',updatedAt:stamp()});data={preview:{...server(id)}}}
  else if(url.includes('/note-edit-previews/')&&!url.split('/note-edit-previews/')[1].includes('/'))data={preview:{...server(id)}};
@@ -71,49 +71,40 @@ try {
     const editor=result.getByRole('textbox',{name:'修改稿正文',exact:true});
     await editor.waitFor();assert.equal(await editor.getAttribute('contenteditable'),'true');
     assert(!await page.getByText('原来的合成内容。',{exact:true}).count());
-    assert.match(await page.locator('.nf-edit-header').getByRole('heading',{level:1}).innerText(),/修改.*模型接口与 API 调用基础/);
-    await page.getByText('预览中，尚未写入笔记',{exact:true}).waitFor();
-    assert.equal(await page.locator('select,.nf-writing-status ol').count(),0,'No native version dropdown or repeated stage strip');
-    const summary=page.getByRole('region',{name:'修改说明',exact:true});
-    await summary.waitFor();assert.match(await summary.innerText(),/更新说明并增加代码示例/);
-    assert.equal(await summary.locator('li').count(),0,'The initial summary is a short sentence, not the complete list');
-    assert.equal(await page.getByRole('button',{name:'撤销上次调整',exact:true}).count(),0,'The initial generated version has nothing to undo');
-    assert.equal(await page.getByRole('menu').count(),0,'The more menu does not remain in the closed DOM');
-    assert.equal(await page.getByRole('menuitem').count(),0);
+    assert.equal(await page.locator('.nf-edit-header').getByRole('heading',{level:1}).innerText(),'修改预览');
+    assert.equal(await page.getByText('预览中，尚未写入笔记',{exact:true}).count(),0);
+    assert.equal(await page.getByText('更新说明并增加代码示例',{exact:true}).count(),0);
+    assert.equal(await page.getByRole('button',{name:/打开 AI 助手/}).count(),0);
+    assert.equal(await page.getByRole('button',{name:'撤销上次 AI 修改',exact:true}).count(),0,'The initial generated version has nothing to undo');
+    assert.equal(await page.getByRole('button',{name:'更多预览操作'}).count(),0);
     assert.equal(await page.getByRole('region',{name:'预览版本',exact:true}).count(),0);
-    const geometry=await page.evaluate(()=>{const r=n=>{const b=document.querySelector(n).getBoundingClientRect();return {left:b.left,right:b.right,top:b.top,bottom:b.bottom,height:b.height}};return {header:r('.nf-edit-header'),bar:r('[aria-label="修改说明"]'),result:r('.edit-preview-result'),footer:r('.nf-edit-footer'),composer:r('.nf-edit-composer'),scroll:r('.nf-edit-scroll')}});
-    // One extra compact line identifies the write boundary; keep it visible.
-    assert.match(await page.locator('.nf-edit-scope').innerText(),/本次范围：这一小节/);
-    assert(geometry.header.height<=(width===320?140:100));assert(geometry.footer.height<=90);
-    assert(Math.abs(geometry.bar.left-geometry.result.left)<=1);assert(Math.abs(geometry.composer.left-geometry.result.left)<=1);assert(Math.abs(geometry.composer.right-geometry.result.right)<=1);
-    assert(geometry.result.top<240,'The scope line must not turn into a large instruction panel');
+    const geometry=await page.evaluate(()=>{const r=n=>{const b=document.querySelector(n).getBoundingClientRect();return {left:b.left,right:b.right,top:b.top,bottom:b.bottom,height:b.height}};return {header:r('.nf-edit-header'),result:r('.edit-preview-result'),footer:r('.nf-edit-footer'),composer:r('.nf-edit-composer'),scroll:r('.nf-edit-scroll')}});
+    assert(geometry.header.height<=(width===320?108:74));assert(geometry.footer.height<=90);
+    assert(Math.abs(geometry.composer.left-geometry.result.left)<=1);assert(Math.abs(geometry.composer.right-geometry.result.right)<=1);
+    assert(geometry.result.top<155,'The copy and actions leave room for the draft');
     const instruction=page.getByRole('textbox',{name:'继续修改预览',exact:true});
-    assert.equal(await instruction.getAttribute('placeholder'),'告诉 AI 还需要怎么改…');
+    assert.equal(await instruction.getAttribute('placeholder'),'继续修改…');
     assert.equal(await instruction.evaluate(n=>Math.round(n.getBoundingClientRect().height)),width===1280?22:24);
     await instruction.fill('一行\n二行\n三行\n四行\n五行\n六行');
     assert.equal(await instruction.evaluate(n=>Math.round(n.getBoundingClientRect().height)),width===1280?88:96);assert.equal(await instruction.evaluate(n=>getComputedStyle(n).overflowY),'auto');
     await instruction.fill('');assert.equal(await instruction.evaluate(n=>Math.round(n.getBoundingClientRect().height)),width===1280?22:24);
-    const more=page.getByRole('button',{name:'更多预览操作',exact:true});
-    const openMenu=async()=>{await more.click();await page.getByRole('menu').waitFor();return page.getByRole('menu');};
-    const openHistory=async()=>{await page.locator('.nf-edit-scroll').evaluate(n=>n.scrollTop=n.scrollHeight);const menu=await openMenu();await menu.getByRole('menuitem',{name:'历史版本',exact:true}).click();await page.getByRole('menu').waitFor({state:'detached'});await page.getByRole('region',{name:'预览版本',exact:true}).waitFor();await page.waitForFunction(()=>document.querySelector('.nf-edit-scroll').scrollTop===0);};
-    const closeHistory=async()=>{await page.getByRole('button',{name:'关闭历史版本',exact:true}).click();await page.getByRole('region',{name:'预览版本',exact:true}).waitFor({state:'detached'});};
-    await page.getByRole('button',{name:'展开修改说明',exact:true}).click();assert.equal(await summary.locator('li').count(),4);
-    await screenshot('summary');
-    await page.evaluate(()=>window.previewTest.setSummary(['精简说明']));assert.equal(await summary.locator('li').count(),1);assert(await page.getByRole('button',{name:'收起修改说明',exact:true}).isVisible());
-    await page.evaluate(()=>window.previewTest.setSummary([]));await summary.getByText('修改后的内容已准备好',{exact:true}).waitFor();await page.getByRole('button',{name:'收起修改说明',exact:true}).click();
-    await page.evaluate(()=>window.previewTest.setSummary(['补全模型调用的准备步骤并增加适合初学者阅读的错误处理示例']));
-    if(width===320){const expand=page.getByRole('button',{name:'展开修改说明',exact:true});await expand.waitFor();await expand.click();assert.match(await summary.locator('li').innerText(),/适合初学者阅读的错误处理示例/);await page.getByRole('button',{name:'收起修改说明',exact:true}).click();}
-    await page.evaluate(()=>window.previewTest.setSummary());assert.equal(await summary.locator('li').count(),0);
-    let menu=await openMenu();const menuItems=menu.getByRole('menuitem');assert.equal(await menuItems.count(),2);
-    await more.press('ArrowDown');await page.waitForFunction(()=>document.activeElement?.getAttribute('role')==='menuitem');
-    await page.keyboard.press('End');assert.equal(await menuItems.last().evaluate(n=>document.activeElement===n),true);
-    await page.keyboard.press('Home');assert.equal(await menuItems.first().evaluate(n=>document.activeElement===n),true);
-    await page.keyboard.press('ArrowDown');assert.equal(await menuItems.last().evaluate(n=>document.activeElement===n),true);
-    await page.keyboard.press('ArrowUp');assert.equal(await menuItems.first().evaluate(n=>document.activeElement===n),true);
-    await menuItems.first().dispatchEvent('keydown',{key:'Escape',isComposing:true});assert(await menu.isVisible());
-    await menuItems.first().dispatchEvent('keydown',{key:'Escape',keyCode:229});assert(await menu.isVisible(),'Legacy IME Escape must not enter the shared menu fallback');
-    await page.keyboard.press('Escape');await menu.waitFor({state:'detached'});assert.equal(await more.evaluate(n=>document.activeElement===n),true);
-    await openMenu();await result.locator('p').first().click();await page.getByRole('menu').waitFor({state:'detached'});
+    const versionTrigger=page.getByRole('button',{name:'版本记录',exact:true});
+    const history=page.getByRole('region',{name:'预览版本',exact:true});
+    const historyClose=page.getByRole('button',{name:'关闭版本记录',exact:true});
+    const openHistory=async()=>{await versionTrigger.click();await history.waitFor();};
+    const closeHistory=async()=>{await historyClose.click();await history.waitFor({state:'detached'});};
+    assert.deepEqual(await page.locator('.nf-edit-header button').allTextContents(),['放弃','应用到笔记']);
+    const [discardButton, applyButton] = await page.locator('.nf-edit-header button').all();
+    assert.equal((await discardButton.boundingBox()).height,(await applyButton.boundingBox()).height);
+    assert.equal(await discardButton.evaluate(button=>getComputedStyle(button).borderTopWidth),'1px');
+    assert.notEqual(await versionTrigger.evaluate(button=>getComputedStyle(button).backgroundColor),'rgba(0, 0, 0, 0)');
+    const draftBox=await result.boundingBox();
+    await openHistory();
+    assert.deepEqual(await result.boundingBox(),draftBox,'The version popover does not displace the draft');
+    await historyClose.dispatchEvent('keydown',{key:'Escape',isComposing:true});assert(await history.isVisible());
+    await historyClose.dispatchEvent('keydown',{key:'Escape',keyCode:229});assert(await history.isVisible());
+    await historyClose.press('Escape');await history.waitFor({state:'detached'});assert.equal(await versionTrigger.evaluate(n=>document.activeElement===n),true);
+    await openHistory();await page.locator('.nf-edit-header h1').click();await history.waitFor({state:'detached'});
     const colors=await result.locator('pre span').evaluateAll(nodes=>[...new Set(nodes.map(n=>getComputedStyle(n).color))]);
     assert(colors.length>=2,JSON.stringify({width,colors}));
     assert.equal(await page.locator('.note-content p').first().evaluate(n=>getComputedStyle(n).fontSize),'16px');
@@ -123,24 +114,31 @@ try {
     await page.waitForTimeout(750);
     assert.equal(await page.evaluate(()=>window.previewTest.requests.filter(url=>url.endsWith('/content')).length),0,'Merely mounting or focusing the editor must not reserialize and resave Markdown');
     await editor.evaluate(n=>n.dataset.testRetainedEditor='same-editor');
-    const compare=page.getByRole('button',{name:'对照原文',exact:true});assert.equal(await compare.getAttribute('aria-pressed'),'false');
-    await compare.click();const collapseCompare=page.getByRole('button',{name:'收起对照',exact:true});assert.equal(await collapseCompare.getAttribute('aria-pressed'),'true');
-    const review=page.getByRole('region',{name:'段落对照',exact:true});await review.waitFor();
-    assert.equal(await editor.isVisible(),true,'Comparison adds references to the same visible editing document');
-    assert.equal(await editor.getAttribute('contenteditable'),'true','Looking at originals must not make the draft read-only');
-    assert.equal(await page.getByRole('tablist',{name:'对照内容',exact:true}).count(),0);
-    assert.match(await review.innerText(),/修改后的合成内容/);
-    const changed=review.locator('.nf-edit-review-block[data-kind="replace"],.nf-edit-review-block[data-kind="remove"]').first().getByRole('button').first();await changed.waitFor();
-    const number=(await changed.getAttribute('aria-label')).match(/第 (\d+) 处/)[1];
-    const nearbyOriginal=review.getByRole('region',{name:'第 '+number+' 处改动的原文',exact:true});
-    assert.equal(await nearbyOriginal.count(),0);await changed.click();await nearbyOriginal.waitFor();assert.match(await nearbyOriginal.innerText(),/原来的合成内容/);
-    assert.equal(await nearbyOriginal.locator('[contenteditable="true"]').count(),0,'Original excerpts are read-only');
-    assert.equal(await changed.getAttribute('aria-label'),'收起第 '+number+' 处改动的原文');
-    assert.match(await review.innerText(),/改写/);
-    const blockGeometry=await review.locator('.nf-edit-review-block').evaluateAll(nodes=>nodes.map(n=>{const r=n.getBoundingClientRect();return {left:r.left,right:r.right}}));
-    assert(blockGeometry.length>=2);assert(blockGeometry.every(r=>Math.abs(r.left-blockGeometry[0].left)<1&&Math.abs(r.right-blockGeometry[0].right)<1),'Paragraph review always follows one reading column');
+    const compare=page.getByRole('button',{name:'原文对照',exact:true});assert.equal(await compare.getAttribute('aria-pressed'),'false');
+    assert.equal(await compare.locator('svg').count(),0,'Comparison is a text action');
+    await compare.click();const collapseCompare=page.getByRole('button',{name:'修改稿',exact:true});assert.equal(await collapseCompare.getAttribute('aria-pressed'),'false');assert.equal(await compare.getAttribute('aria-pressed'),'true');
+    const review=page.getByRole('region',{name:'原文对照',exact:true});await review.waitFor();
+    const originalPane=review.getByRole('region',{name:'原文',exact:true});
+    const revisedPane=review.getByRole('region',{name:'修改稿',exact:true});
+    assert.match(await originalPane.innerText(),/原来的合成内容/);
+    assert.match(await revisedPane.innerText(),/修改后的合成内容/);
+    assert.equal(await originalPane.locator('[contenteditable="true"]').count(),0);
+    assert.equal(await revisedPane.getByRole('textbox',{name:'修改稿正文',exact:true}).getAttribute('contenteditable'),'true');
+    assert.equal(await editor.getAttribute('data-test-retained-editor'),'same-editor');
+    const [beforePane,afterPane]=await Promise.all([originalPane.boundingBox(),revisedPane.boundingBox()]);
+    if(width===320){
+      assert(afterPane.y>=beforePane.y+beforePane.height,'On a narrow window the draft follows the original');
+      assert(Math.abs(beforePane.x-afterPane.x)<1);
+    }else{
+      assert(Math.abs(beforePane.y-afterPane.y)<1 && afterPane.x>beforePane.x+beforePane.width);
+      if(width===1280)assert((await review.boundingBox()).width>1000,'Wide comparison uses the full workspace');
+    }
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth),width);
     await screenshot('compare');
-    await changed.click();await nearbyOriginal.waitFor({state:'detached'});
+    const compareBox=await review.boundingBox();
+    await openHistory();
+    assert.deepEqual(await review.boundingBox(),compareBox,'Version records leave the active comparison in place');
+    await closeHistory();
     await editor.focus();await editor.press(process.platform==='darwin'?'Meta+ArrowDown':'Control+End');
     await page.keyboard.insertText(' 对照中直接手改');
     await page.waitForFunction(()=>window.previewTest.state().editPreviewDrafts['synthetic-preview']?.content.includes('对照中直接手改'));
@@ -150,7 +148,7 @@ try {
     await page.waitForFunction(()=>!window.previewTest.state().editPreviewDrafts['synthetic-preview']?.content.includes('对照中直接手改'));
     assert.equal(await editor.getAttribute('data-test-retained-editor'),'same-editor','Typing and undo inside comparison keep the same editor');
     if(width===1280){
-      await page.locator('#root').evaluate(n=>n.style.width='736px');
+      await page.locator('#root').evaluate(n=>n.style.width='680px');
       await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
       assert.equal(await page.getByRole('tablist',{name:'对照内容',exact:true}).count(),0);
       const narrowed=await review.evaluate(n=>({scroll:n.scrollWidth,client:n.clientWidth,overflow:[...n.querySelectorAll('*')].filter(child=>child.getBoundingClientRect().right>n.getBoundingClientRect().right+1).map(child=>({tag:child.tagName,class:child.className,width:child.getBoundingClientRect().width,scroll:child.scrollWidth}))}));
@@ -158,12 +156,27 @@ try {
       await page.locator('#root').evaluate(n=>n.style.width='');
     }
     await collapseCompare.click();await result.waitFor();assert.equal(await editor.getAttribute('data-test-retained-editor'),'same-editor');
-    await page.locator('.nf-edit-scroll').evaluate(n=>n.scrollTop=n.scrollHeight);menu=await openMenu();await menu.getByRole('menuitem',{name:'详细差异',exact:true}).click();await page.getByRole('menu').waitFor({state:'detached'});await page.waitForFunction(()=>document.querySelector('.nf-edit-scroll').scrollTop===0);
+    await compare.click();
+    const showChanges=page.getByRole('button',{name:'显示改动',exact:true});
+    const contentSaves=()=>page.evaluate(()=>window.previewTest.requests.filter(url=>url.endsWith('/content')).length);
+    const savesBeforeHighlights=await contentSaves();
+    await showChanges.click();
+    await originalPane.locator('[data-changed]').first().waitFor();
+    await editor.locator('.nf-edit-highlight').first().waitFor();
+    assert.equal(await page.getByRole('button',{name:/查看第 .*处改动的原文/}).count(),0);
+    await page.waitForTimeout(750);
+    assert.equal(await contentSaves(),savesBeforeHighlights,'Highlighting is a display-only operation');
+    await screenshot('compare-changes');
+    await page.getByRole('button',{name:'逐行差异',exact:true}).click();
     await page.getByRole('region',{name:'详细差异正文',exact:true}).waitFor();
     assert.match(await page.locator('main').innerText(),/原来的合成内容/);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth),width,'Wide diff rows scroll locally');
-    await page.getByRole('button',{name:'返回修改稿',exact:true}).click();await result.waitFor();
-    assert.equal(await editor.getAttribute('data-test-retained-editor'),'same-editor','Detailed diff also preserves the editor instance');
+    await page.getByRole('button',{name:'返回原文对照',exact:true}).click();await review.waitFor();
+    await page.getByRole('button',{name:'隐藏改动',exact:true}).click();
+    await editor.locator('.nf-edit-highlight').first().waitFor({state:'detached'});
+    assert.equal(await originalPane.locator('[data-changed]').count(),0);
+    assert.equal(await editor.getAttribute('data-test-retained-editor'),'same-editor','Highlighting and detailed diff preserve the editor instance');
+    await collapseCompare.click();
     const appendAtEnd=async text=>{await editor.focus();await editor.press(process.platform==='darwin'?'Meta+ArrowDown':'Control+End');await page.keyboard.insertText(text);};
     const replacePreview=async id=>{await page.evaluate(id=>window.previewTest.replace(id),id);await page.waitForFunction(id=>document.querySelector('main').dataset.previewId===id,id);await editor.waitFor();};
     const mutationEvents=async id=>page.evaluate(id=>window.previewTest.events.filter(event=>event.id===id&&/\/(content|revise|restore-revision|apply)$/.test(event.url)),id);
@@ -176,8 +189,8 @@ try {
     await editor.press('ControlOrMeta+z');assert.notEqual(await editor.innerText(),typedText,'Local editor undo actually reverses typing');
     await editor.press('ControlOrMeta+Shift+z');assert.equal(await editor.innerText(),typedText,'Local redo restores typing');
     await editor.evaluate(n=>n.dataset.testUndoOwner='manual-typing');
-    await page.getByRole('button',{name:'对照原文',exact:true}).click();await review.waitFor();
-    await page.getByRole('button',{name:'收起对照',exact:true}).click();await editor.waitFor();
+    await page.getByRole('button',{name:'原文对照',exact:true}).click();await review.waitFor();
+    await page.getByRole('button',{name:'修改稿',exact:true}).click();await editor.waitFor();
     assert.equal(await editor.getAttribute('data-test-undo-owner'),'manual-typing');
     await editor.press('ControlOrMeta+z');assert.notEqual(await editor.innerText(),typedText,'Opening and closing comparison keeps local undo history');
     await editor.press('ControlOrMeta+Shift+z');assert.equal(await editor.innerText(),typedText);
@@ -244,11 +257,23 @@ try {
     assert.match(modelInput.currentContent,/先保存再请求模型/,'AI uses the saved manual draft as its current content');
 
     await page.evaluate(()=>{window.previewTest.seedRevision('manual-before-restore');window.previewTest.replace('manual-before-restore')});await editor.waitFor();
-    const manualUndo=page.getByRole('button',{name:'撤销上次调整',exact:true});await manualUndo.waitFor();await page.waitForFunction(()=>!Array.from(document.querySelectorAll('button')).find(n=>n.textContent==='撤销上次调整')?.disabled);
+    const manualUndo=page.getByRole('button',{name:'撤销上次 AI 修改',exact:true});await manualUndo.waitFor();await page.waitForFunction(()=>!Array.from(document.querySelectorAll('button')).find(n=>n.getAttribute('aria-label')==='撤销上次 AI 修改')?.disabled);
     await appendAtEnd(' 恢复前需保存的内容');await manualUndo.click();
+    const confirmUndo=page.getByRole('region',{name:'撤销上次 AI 修改？'});
+    await confirmUndo.getByRole('button',{name:'继续编辑'}).click();
+    assert.match(await editor.innerText(),/恢复前需保存的内容/);
+    await manualUndo.click();
+    await confirmUndo.getByRole('button',{name:'撤销',exact:true}).click();
     await page.waitForFunction(()=>window.previewTest.events.some(event=>event.phase==='done'&&event.id==='manual-before-restore'&&event.url.endsWith('/restore-revision')));
     await assertSavedBefore('manual-before-restore','restore-revision','恢复前需保存的内容');
-    await openHistory();assert.match(await page.getByRole('region',{name:'预览版本'}).innerText(),/手动/,'Undo or restore retains the saved manual draft in history');await closeHistory();
+    assert.equal(await page.evaluate(()=>window.previewTest.requestBodies.filter(item=>item.url.endsWith('/manual-before-restore/restore-revision')).at(-1).payload.revisionId),'manual-before-restore-r1','Undo restores the base of the last AI adjustment');
+    await openHistory();
+    await page.getByRole('button',{name:/恢复手动修改/}).click();
+    await page.waitForFunction(()=>document.querySelector('.edit-preview-result').textContent.includes('恢复前需保存的内容'));
+    await page.waitForFunction(()=>document.querySelector('[aria-label="撤销上次 AI 修改"]')?.disabled===false);
+    await manualUndo.click();
+    await confirmUndo.waitFor();
+    await confirmUndo.getByRole('button',{name:'继续编辑'}).click();
 
     await replacePreview('manual-before-apply');await page.evaluate(()=>{window.previewTest.holdApply=true;delete window.previewTest.finishApply;});
     await appendAtEnd(' 最终确认的人工稿');await page.getByRole('button',{name:'应用到笔记',exact:true}).click();
@@ -259,31 +284,56 @@ try {
     assert.match(await page.evaluate(()=>window.previewTest.state().fileContents['synthetic-note']),/最终确认的人工稿/);
     await page.evaluate(()=>{window.previewTest.applied=0;window.previewTest.holdApply=true;});
 
-    await page.evaluate(()=>window.previewTest.replaceContent('review-block-kinds','# 标题\n\n旧开场。\n\n## 删除小节\n\n仅旧稿有这段。\n\n## 保留小节\n\n完全相同。\n\n## 改写小节\n\n旧句。\n\n## 结尾\n\n共同结尾。','# 标题\n\n新开场。\n\n## 保留小节\n\n完全相同。\n\n## 改写小节\n\n新句。\n\n## 新增小节\n\n只有新稿有这段。\n\n## 结尾\n\n共同结尾。'));
-    await editor.waitFor();await page.getByRole('button',{name:'对照原文',exact:true}).click();await review.waitFor();
-    await review.locator('.nf-edit-review-block[data-kind="remove"]').waitFor();
-    for(const kind of ['replace','add','remove'])assert(await review.locator('.nf-edit-review-block[data-kind="'+kind+'"]').count()>0,'Review exposes '+kind+' blocks');
-    assert.match(await review.innerText(),/新增/);assert.match(await review.innerText(),/已删除/);assert.match(await review.innerText(),/改写/);
-    assert.equal(await review.locator('h1').count(),1,'An unchanged heading is shown once instead of duplicating complete documents');
+    await page.evaluate(()=>window.previewTest.replaceContent(
+      'selected-paragraph', 'Docker 可以用来运行应用。',
+      'Docker 可以把应用和它需要的环境一起打包，换台电脑也能用同样的方式运行。',
+      'selection'
+    ));
+    await page.getByRole('button',{name:'原文对照',exact:true}).click();
+    assert.equal(await review.count(),1,'Selected text must use the same original/draft comparison as a chapter');
+    const selectionOriginal=review.getByRole('region',{name:'原文',exact:true});
+    const selectionDraft=review.getByRole('region',{name:'修改稿',exact:true});
+    await selectionOriginal.getByText('Docker 可以用来运行应用。',{exact:true}).waitFor();
+    await selectionDraft.getByRole('textbox',{name:'修改稿正文',exact:true}).getByText(/需要的环境一起打包/).waitFor();
+    assert.equal(await selectionOriginal.locator('[contenteditable="true"]').count(),0);
+    assert.equal(await page.getByRole('button',{name:/查看第 .*处改动的原文/}).count(),0);
+    const [selectedOriginalBox,selectedDraftBox]=await Promise.all([selectionOriginal.boundingBox(),selectionDraft.boundingBox()]);
+    assert(width===320 ? selectedDraftBox.y>selectedOriginalBox.y : selectedDraftBox.x>selectedOriginalBox.x+selectedOriginalBox.width);
+    await screenshot('selection-compare');
+    await page.getByRole('button',{name:'修改稿',exact:true}).click();
+    assert.equal(await review.count(),0);
+    assert.equal((await mutationEvents('selected-paragraph')).filter(event=>event.url.endsWith('/content')).length,0);
+
+    await page.evaluate(()=>window.previewTest.replaceContent('review-block-kinds','# 标题\n\n旧开场。\n\n## 删除小节\n\n仅旧稿有这段。\n\n## 保留小节\n\n完全相同。\n\n## 改写小节\n\n旧句。\n\n## 结尾\n\n共同结尾。','# 标题\n\n新开场。\n\n## 保留小节\n\n完全相同。\n\n## 改写小节\n\n新句。\n\n## 新增小节\n\n只有新稿有这段。\n\n## 结尾\n\n共同结尾。','insert'));
+    await editor.waitFor();await page.getByRole('button',{name:'原文对照',exact:true}).click();
+    const paragraphReview=page.getByRole('region',{name:'段落对照',exact:true});
+    await paragraphReview.locator('.nf-edit-review-block[data-kind="remove"]').waitFor();
+    for(const kind of ['replace','add','remove'])assert(await paragraphReview.locator('.nf-edit-review-block[data-kind="'+kind+'"]').count()>0,'Review exposes '+kind+' blocks');
+    assert.match(await paragraphReview.innerText(),/新增/);assert.match(await paragraphReview.innerText(),/已删除/);assert.match(await paragraphReview.innerText(),/改写/);
+    assert.equal(await paragraphReview.locator('h1').count(),1,'An unchanged heading is shown once instead of duplicating complete documents');
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth),width);await screenshot('paragraph-review');
-    await page.getByRole('button',{name:'收起对照',exact:true}).click();
+    await page.getByRole('button',{name:'修改稿',exact:true}).click();
     await page.evaluate(()=>window.previewTest.replaceDelete());await result.waitFor();
     assert.equal(await result.getByRole('textbox',{name:'修改稿正文',exact:true}).count(),0,'Deletion previews are not editable replacement drafts');
     assert.match(await result.innerText(),/删除/);
     await page.evaluate(()=>{window.previewTest.seedRevision('undo-read-old');window.previewTest.replace('undo-read-old')});await editor.waitFor();
-    const pendingUndoRead=page.getByRole('button',{name:'撤销上次调整',exact:true});await pendingUndoRead.waitFor();
-    await page.waitForFunction(()=>{const button=[...document.querySelectorAll('button')].find(n=>n.textContent==='撤销上次调整');return button&&!button.disabled;});
-    await page.evaluate(()=>{window.previewTest.holdRevisions=true;delete window.previewTest.finishRevisions;});
-    await pendingUndoRead.click();await page.waitForFunction(()=>Boolean(window.previewTest.finishRevisions));
-    await replacePreview('undo-read-new');await page.evaluate(()=>window.previewTest.finishRevisions());
-    await page.getByText('预览中，尚未写入笔记',{exact:true}).waitFor();
+    const pendingUndoRead=page.getByRole('button',{name:'撤销上次 AI 修改',exact:true});await pendingUndoRead.waitFor();
+    await page.waitForFunction(()=>{const button=[...document.querySelectorAll('button')].find(n=>n.getAttribute('aria-label')==='撤销上次 AI 修改');return button&&!button.disabled;});
+    await page.evaluate(()=>{window.previewTest.holdSave=true;delete window.previewTest.finishSave;});
+    await appendAtEnd(' 等待保存时切换');
+    await pendingUndoRead.click();
+    await confirmUndo.waitFor();
+    await confirmUndo.getByRole('button',{name:'撤销',exact:true}).click();
+    await page.waitForFunction(()=>Boolean(window.previewTest.finishSave));
+    await replacePreview('undo-read-new');await page.evaluate(()=>window.previewTest.finishSave());
+    await page.waitForFunction(()=>!document.querySelector('.nf-edit-feedback')?.textContent);
     assert.equal(await page.locator('main').getAttribute('data-preview-id'),'undo-read-new');
     assert.equal((await mutationEvents('undo-read-new')).filter(event=>event.url.endsWith('/restore-revision')).length,0,'A late undo lookup must not restore its old revision into the newly opened preview');
     await page.evaluate(()=>{window.previewTest.seedRevision('held-second');window.previewTest.holdRevisions=true;window.previewTest.replace('held-second')});
     await result.waitFor({state:'visible'});
     await openHistory();
     await page.getByText('正在读取版本…',{exact:true}).waitFor();
-    const pendingUndo=page.getByRole('button',{name:'撤销上次调整',exact:true});if(await pendingUndo.count())assert.ok(await pendingUndo.isDisabled(),'a new preview cannot restore the previous preview revisions');
+    const pendingUndo=page.getByRole('button',{name:'撤销上次 AI 修改',exact:true});if(await pendingUndo.count())assert.ok(await pendingUndo.isDisabled(),'a new preview cannot restore the previous preview revisions');
     assert.equal(await page.locator('.nf-edit-revision').count(),0);
     await page.waitForFunction(()=>Boolean(window.previewTest.finishRevisions));
     await page.evaluate(()=>window.previewTest.replace('ownership-current'));
@@ -294,48 +344,83 @@ try {
     await page.waitForFunction(()=>window.previewTest.completedRevisionReads.includes('held-second'));
     await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
     assert.equal(await page.locator('.nf-edit-revision').count(),1,'The late previous preview response cannot replace the current owner’s revision list');assert.equal(await page.getByRole('button',{name:'恢复初始稿',exact:true}).count(),0);
-    await page.getByRole('button',{name:'关闭历史版本',exact:true}).dispatchEvent('keydown',{key:'Escape',isComposing:true});assert(await page.getByRole('region',{name:'预览版本',exact:true}).isVisible());
-    await page.getByRole('button',{name:'关闭历史版本',exact:true}).press('Escape');await page.getByRole('region',{name:'预览版本',exact:true}).waitFor({state:'detached'});assert.equal(await more.evaluate(n=>document.activeElement===n),true);
+    await page.getByRole('button',{name:'关闭版本记录',exact:true}).dispatchEvent('keydown',{key:'Escape',isComposing:true});assert(await page.getByRole('region',{name:'预览版本',exact:true}).isVisible());
+    await page.getByRole('button',{name:'关闭版本记录',exact:true}).press('Escape');await page.getByRole('region',{name:'预览版本',exact:true}).waitFor({state:'detached'});assert.equal(await versionTrigger.evaluate(n=>document.activeElement===n),true);
     const callsBeforeIME=await page.evaluate(()=>window.previewTest.requests.filter(url=>url.endsWith('/revise')).length);
-    await instruction.fill('输入法尚未确认');await instruction.dispatchEvent('keydown',{key:'Enter',ctrlKey:true,isComposing:true});await instruction.dispatchEvent('keydown',{key:'Enter',ctrlKey:true,keyCode:229});
+    await instruction.fill('输入法尚未确认');
+    await instruction.dispatchEvent('keydown',{key:'Enter',isComposing:true});
+    await instruction.dispatchEvent('keydown',{key:'Enter',keyCode:229});
+    await instruction.dispatchEvent('compositionstart');
+    await instruction.dispatchEvent('keydown',{key:'Enter'});
+    await instruction.dispatchEvent('compositionend');
     assert.equal(await page.evaluate(()=>window.previewTest.requests.filter(url=>url.endsWith('/revise')).length),callsBeforeIME,'IME confirmation must not submit a preview adjustment');
     await instruction.fill('失败后保留这条调整要求');
+    await instruction.press('End');
+    await instruction.press('Shift+Enter');
+    await page.keyboard.insertText('第二行要求');
+    const multilineInstruction='失败后保留这条调整要求\n第二行要求';
+    assert.equal(await instruction.inputValue(),multilineInstruction);
+    assert.equal(await page.evaluate(()=>window.previewTest.requests.filter(url=>url.endsWith('/revise')).length),callsBeforeIME);
     await page.evaluate(()=>window.previewTest.failNext='/revise');
-    await page.getByRole('button',{name:'继续修改',exact:true}).click();
+    await instruction.press('Enter');
     await page.getByRole('alert').filter({hasText:'合成请求失败'}).waitFor();
-    assert.equal(await instruction.inputValue(),'失败后保留这条调整要求');
-    assert.equal(await page.getByRole('button',{name:'撤销上次调整',exact:true}).count(),0,'A failed first adjustment does not create an undo version');
-    await page.getByRole('button',{name:'继续修改',exact:true}).click();
+    assert.equal(await instruction.inputValue(),multilineInstruction);
+    assert.equal(await page.getByRole('button',{name:'撤销上次 AI 修改',exact:true}).count(),0,'A failed first adjustment does not create an undo version');
+    assert.equal(await page.evaluate(()=>window.previewTest.requestBodies.filter(item=>item.url.endsWith('/revise')).at(-1).payload.instruction),multilineInstruction);
+    await instruction.press('Enter');
     await page.waitForFunction(()=>!document.querySelector('textarea').value);
     await page.waitForFunction(()=>document.querySelector('.edit-preview-result').textContent.includes('本轮调整'));
-    const undo=page.getByRole('button',{name:'撤销上次调整',exact:true});await undo.waitFor();await page.waitForFunction(()=>{const button=Array.from(document.querySelectorAll('button')).find(n=>n.textContent.includes('撤销上次调整'));return button&&!button.disabled;});
+    const undo=page.getByRole('button',{name:'撤销上次 AI 修改',exact:true});await undo.waitFor();await page.waitForFunction(()=>{const button=Array.from(document.querySelectorAll('button')).find(n=>n.getAttribute('aria-label')==='撤销上次 AI 修改');return button&&!button.disabled;});
     await openHistory();await page.getByRole('button',{name:'恢复初始稿',exact:true}).waitFor();assert.ok(await page.getByRole('button',{name:'第一次调整，当前预览',exact:true}).isDisabled());assert.doesNotMatch(await page.getByRole('region',{name:'预览版本'}).innerText(),/Invalid Date/);await screenshot('versions');await closeHistory();
     await page.evaluate(()=>window.previewTest.failNext='/restore-revision');
     await undo.click();
     await page.getByRole('alert').filter({hasText:'合成请求失败'}).waitFor();
     assert.match(await result.innerText(),/本轮调整/,'failed restore keeps the adjusted preview');
     await undo.click();await page.waitForFunction(()=>!document.querySelector('.edit-preview-result').textContent.includes('本轮调整'));
-    await undo.waitFor({state:'detached'});await page.waitForFunction(()=>document.activeElement===document.querySelector('textarea'));
+    await undo.waitFor({state:'detached'});await page.waitForFunction(()=>document.activeElement?.textContent==='版本记录');
     const restoreBodies=await page.evaluate(()=>window.previewTest.requestBodies.filter(item=>item.url.endsWith('/ownership-current/restore-revision')).map(item=>item.payload.revisionId));assert.deepEqual(restoreBodies,['ownership-current-r1','ownership-current-r1']);
-    await openHistory();await page.getByRole('button',{name:'恢复第一次调整',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.edit-preview-result').textContent.includes('本轮调整'));await page.waitForFunction(()=>document.activeElement?.getAttribute('aria-label')==='更多预览操作');
+    await openHistory();await page.getByRole('button',{name:'恢复第一次调整',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.edit-preview-result').textContent.includes('本轮调整'));await page.waitForFunction(()=>document.activeElement?.textContent==='版本记录');
     if(await page.getByRole('region',{name:'预览版本',exact:true}).count())await closeHistory();
     assert.equal(await page.evaluate(()=>window.previewTest.requestBodies.filter(item=>item.url.endsWith('/restore-revision')).at(-1).payload.revisionId),'ownership-current-r2','An explicit history restore uses the selected revision, not a fixed old body');
     await page.evaluate(()=>delete window.previewTest.finishApply);
     await page.getByRole('button',{name:'应用到笔记',exact:true}).click();
     await page.waitForFunction(()=>Boolean(window.previewTest.finishApply));
     assert.equal((await mutationEvents('ownership-current')).filter(event=>event.phase==='start'&&event.url.endsWith('/apply')).length,1);
-    await page.getByText('正在应用并保存',{exact:true}).waitFor();
+    await page.getByText('正在应用',{exact:true}).waitFor();
     assert.ok(await page.getByRole('button',{name:'应用到笔记',exact:true}).isDisabled());assert.ok(await page.getByRole('button',{name:'放弃',exact:true}).isDisabled());assert.ok(await undo.isDisabled());
-    await instruction.fill('请求中输入的新要求');const callsWhileApplying=await page.evaluate(()=>window.previewTest.requests.length);await instruction.press('Control+Enter');assert.equal(await page.evaluate(()=>window.previewTest.requests.length),callsWhileApplying,'A pending apply cannot start another adjustment');
+    await instruction.fill('请求中输入的新要求');const callsWhileApplying=await page.evaluate(()=>window.previewTest.requests.length);await instruction.press('Enter');assert.equal(await page.evaluate(()=>window.previewTest.requests.length),callsWhileApplying,'A pending apply cannot start another adjustment');
     await page.evaluate(()=>window.previewTest.finishApply());
     await result.waitFor({state:'detached'});
     await replacePreview('post-apply');
-    await page.getByText('预览中，尚未写入笔记',{exact:true}).waitFor();
+    await page.waitForFunction(()=>!document.querySelector('.nf-edit-feedback')?.textContent);
     assert.equal(await instruction.inputValue(),'请求中输入的新要求');await instruction.fill('');
     await page.evaluate(()=>{window.previewTest.holdRevise=true;window.previewTest.replace('pending-input')});await result.waitFor();
     await instruction.fill('本次提交的修改要求');await page.getByRole('button',{name:'继续修改',exact:true}).click();await page.waitForFunction(()=>Boolean(window.previewTest.finishRevise));
+    assert.equal(await instruction.inputValue(),'','Enter or clicking send clears the instruction before the request completes');
+    assert.equal(await page.getByRole('button',{name:'继续修改',exact:true}).getAttribute('aria-busy'),'true');
     await instruction.fill('请求尚未完成时新写的要求');await page.evaluate(()=>window.previewTest.finishRevise());await page.waitForFunction(()=>document.querySelector('.edit-preview-result').textContent.includes('本轮调整'));
     assert.equal(await instruction.inputValue(),'请求尚未完成时新写的要求','A successful adjustment clears only its submitted text, not new input typed while waiting');await instruction.fill('');
+    await page.evaluate(()=>{window.previewTest.holdRevise=true;delete window.previewTest.finishRevise;window.previewTest.replace('pending-failure-with-input')});
+    await instruction.fill('发送后失败的上一条');await instruction.press('Enter');
+    await page.waitForFunction(()=>Boolean(window.previewTest.finishRevise));
+    assert.equal(await instruction.inputValue(),'','Enter clears the composer before the outcome is known');
+    await instruction.fill('处理中先写好的下一条');
+    await page.evaluate(()=>{window.previewTest.failNext='/revise';window.previewTest.finishRevise();});
+    await page.getByRole('button',{name:'重试上一条'}).waitFor();
+    assert.equal(await instruction.inputValue(),'处理中先写好的下一条');
+    await page.getByRole('button',{name:'重试上一条'}).click();
+    await page.waitForFunction(()=>document.querySelector('.edit-preview-result').textContent.includes('本轮调整'));
+    assert.equal(await instruction.inputValue(),'处理中先写好的下一条');
+    assert.equal(await page.evaluate(()=>window.previewTest.requestBodies.filter(item=>item.url.endsWith('/pending-failure-with-input/revise')).at(-1).payload.instruction),'发送后失败的上一条');
+    await instruction.fill('');
+    await page.evaluate(()=>{window.previewTest.holdRevise=true;delete window.previewTest.finishRevise;window.previewTest.replace('pending-failure-during-ime')});
+    await instruction.fill('输入法期间失败的上一条');await instruction.press('Enter');
+    await page.waitForFunction(()=>Boolean(window.previewTest.finishRevise));
+    await instruction.dispatchEvent('compositionstart');
+    await page.evaluate(()=>{window.previewTest.failNext='/revise';window.previewTest.finishRevise();});
+    await page.getByRole('button',{name:'重试上一条'}).waitFor();
+    assert.equal(await instruction.inputValue(),'','A failed request must not replace pending IME composition');
+    await instruction.dispatchEvent('compositionend');
     await page.evaluate(()=>{window.previewTest.failNext='/revisions';window.previewTest.replace('revision-error')});
     await openHistory();await page.getByRole('alert').filter({hasText:'暂时无法读取修订记录'}).waitFor();
     await page.getByRole('button',{name:'重试读取',exact:true}).click();await page.getByRole('button',{name:'初始稿，当前预览',exact:true}).waitFor();await closeHistory();
@@ -366,13 +451,13 @@ try {
     assert.equal(await editor.locator('h2').textContent(),'一、第一章');
     assert.equal(await editor.locator('h2').getAttribute('data-heading-number'),null);
     assert.equal(await editor.locator('h3').getAttribute('data-heading-number'),null);
-    await page.getByRole('button',{name:'对照原文',exact:true}).click();
-    await page.getByRole('region',{name:'段落对照',exact:true}).waitFor();
-    await page.getByRole('button',{name:'收起对照',exact:true}).click();
+    await page.getByRole('button',{name:'原文对照',exact:true}).click();
+    await page.getByRole('region',{name:'原文对照',exact:true}).waitFor();
+    await page.getByRole('button',{name:'修改稿',exact:true}).click();
     await page.waitForTimeout(750);
     assert.equal(await page.evaluate(()=>window.previewTest.requests.filter(url=>url.includes('/whole-note/content')).length),0,'Opening or comparing a code-ending whole-note preview must not save source or trailing-node work');
     assert.deepEqual(errors,[]);assert.deepEqual(requests,[]);
-    reports.push({width,geometry,scopeVisible:true,editableDuringComparison:true,comparisonExcludedFromSavedMarkdown:true,resultFirst:true,summaryDirect:true,summaryExpandable:true,moreMenuKeyboard:true,moreMenuOutsideClose:true,versionPanel:true,openedAuxiliaryVisibleAfterScrolling:true,initialUndoAbsent:true,undoAfterSuccessfulAdjustment:true,compactComposer:true,IME:true,singleColumnReview:true,nearbyOriginal:true,allChangeKinds:true,diff:true,newPreviewReset:true,coloredCode:true,nativeEditorUndo:true,editorRetainedAcrossViews:true,manualAutosave:true,saveWhileTyping:true,saveFailureAndConflictRetainDraft:true,flushBeforeAIApplyRestore:true,manualHistory:true,deleteReadOnly:true,applyStage:true,inFlightNewInstructionRetained:true,revisionOwnership:true,lateRevisionIgnored:true,selectedRevisionRestored:true,revisionReadRetry:true,restoreFailureRetry:true,cancelFailureRetry:true,dark:true,reducedMotion:true,errors,requests});
+    reports.push({width,geometry,compactHeader:true,editableDuringComparison:true,comparisonExcludedFromSavedMarkdown:true,resultFirst:true,cleanIdleUi:true,versionPopoverKeyboard:true,versionPopoverOutsideClose:true,versionPopoverKeepsDraftLayout:true,highlightBothPanes:true,versionPanel:true,openedAuxiliaryVisibleAfterScrolling:true,initialUndoAbsent:true,undoAfterSuccessfulAdjustment:true,undoPreservesManualRevision:true,sendClearsImmediately:true,retryPreservesNewInput:true,compactComposer:true,enterSends:true,shiftEnterInsertsNewline:true,IME:true,splitChapterNoteAndSelection:true,stackedNarrowLayout:true,insertionBlockReview:true,allChangeKinds:true,diff:true,newPreviewReset:true,coloredCode:true,nativeEditorUndo:true,editorRetainedAcrossViews:true,manualAutosave:true,saveWhileTyping:true,saveFailureAndConflictRetainDraft:true,flushBeforeAIApplyRestore:true,manualHistory:true,deleteReadOnly:true,applyStage:true,inFlightNewInstructionRetained:true,revisionOwnership:true,lateRevisionIgnored:true,selectedRevisionRestored:true,revisionReadRetry:true,restoreFailureRetry:true,cancelFailureRetry:true,dark:true,reducedMotion:true,errors,requests});
     await context.close();
   }
   console.log(JSON.stringify({ok:true,productionComponent:true,syntheticOnly:true,output,reports},null,2));

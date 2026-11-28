@@ -74,6 +74,9 @@ export interface GenerateNoteStreamParams {
   extraRequest: string;
   markdown?: string;
   outlinePlan?: string;
+  checkpointId?: string;
+  draftId?: string;
+  sectionId?: string;
   maxTokens?: number;
   temperature?: number;
   memoryEnabled?: boolean;

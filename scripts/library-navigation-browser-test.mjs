@@ -218,6 +218,91 @@ async function resizeChecks(page, panel, width) {
  await handle.press('ArrowRight');await settled(page);assert.equal((await panel.boundingBox()).width,236);
  assert.equal(await page.evaluate(()=>document.body.style.cursor),'');assert.equal(await page.evaluate(()=>document.body.style.userSelect),'');
 }
+async function directoryRowsCheck(page, touch) {
+  await page.evaluate(() => {
+    const {store} = window.navigationTest;
+    const note = {id:'note',type:'file',name:'Git 入门学习笔记.md',pinned:true,favorite:true};
+    store.setState({
+      treeData:[{id:'folder',type:'folder',name:'学习笔记',children:[note,{id:'next',type:'file',name:'另一篇笔记.md'}]}],
+      expandedFolderIds:new Set(['folder']),
+    });
+    const fallback = window.fetch;
+    const fixture = {writes:[],release:null,server:{isPinned:true,isFavorite:true}};
+    window.navigationTest.rows = fixture;
+    window.fetch = async (input, options) => {
+      if (options?.method !== 'PUT' || !String(input).endsWith('/api/notes/note')) return fallback(input,options);
+      const patch = JSON.parse(options.body);
+      fixture.writes.push(patch);
+      if (fixture.writes.length === 1) await new Promise(resolve => { fixture.release=resolve; });
+      Object.assign(fixture.server,patch);
+      return new Response(JSON.stringify({note:{
+        id:'note',title:'Git 入门学习笔记.md',content:'合成正文',...fixture.server,
+      }}),{headers:{'Content-Type':'application/json'}});
+    };
+  });
+  const branch = page.locator('.directory-node-branch');
+  const opener = branch.getByRole('button',{name:'Git 入门学习笔记',exact:true});
+  const selected = branch.locator('.directory-node-row[data-selected="true"]');
+  const sibling = branch.locator('.directory-node-row').filter({has:page.getByRole('button',{name:'另一篇笔记',exact:true})});
+  const favorites = page.getByRole('list',{name:'收藏的笔记'});
+  await opener.waitFor();
+  assert.equal(await opener.getAttribute('title'),null);
+  assert.equal(await favorites.getByRole('button',{name:'Git 入门学习笔记',exact:true}).getAttribute('title'),null);
+  await opener.press('Tab');
+  const pin=selected.getByRole('button',{name:'取消置顶',exact:true});
+  const star=selected.getByRole('button',{name:'取消收藏',exact:true});
+  assert.equal(await pin.evaluate(button => button===document.activeElement),true);
+  assert.equal(await pin.evaluate(button => getComputedStyle(button).boxShadow),'none');
+  await pin.press('Shift+Tab');
+  assert.equal(await opener.evaluate(button => button===document.activeElement),true);
+  assert.equal(await opener.evaluate(button => getComputedStyle(button).boxShadow),'none');
+  assert.equal(await opener.evaluate(button => getComputedStyle(button).outlineWidth),'1px');
+  const selectedStyle = await selected.evaluate(row => {
+    const fill = getComputedStyle(row,'::before');
+    return {left:fill.left,right:fill.right,background:fill.backgroundColor};
+  });
+  assert.notEqual(selectedStyle.background,'rgba(0, 0, 0, 0)');
+  if (!touch) {
+    await sibling.hover();
+    await settled(page);
+    const hoverStyle = await sibling.evaluate(row => {
+      const fill = getComputedStyle(row,'::before');
+      return {left:fill.left,right:fill.right,background:fill.backgroundColor};
+    });
+    assert.equal(hoverStyle.left,selectedStyle.left);
+    assert.equal(hoverStyle.right,selectedStyle.right);
+    assert.notEqual(hoverStyle.background,'rgba(0, 0, 0, 0)');
+    assert.equal(await opener.evaluate(button => getComputedStyle(button).boxShadow),'none');
+  } else {
+    assert.equal((await star.boundingBox()).width,44);
+    assert.equal((await pin.boundingBox()).height,44);
+  }
+  await opener.evaluate(button => button.blur());
+  await page.locator('.directory-node-list').screenshot({path:join(output,'directory-rows-'+(touch?'touch':'desktop')+'.png')});
+  await star.click();
+  await page.waitForFunction(() => typeof window.navigationTest.rows.release==='function');
+  await pin.click();
+  await favorites.waitFor({state:'hidden'});
+  assert.equal(await page.evaluate(() => window.navigationTest.rows.writes.length),1,'Note metadata writes must wait for the same note');
+  await page.evaluate(() => window.navigationTest.rows.release());
+  await page.waitForFunction(() => window.navigationTest.rows.writes.length === 2);
+  assert.equal(await pin.count(),0,'The first response must not restore the pin');
+  assert.equal(await opener.getAttribute('aria-current'),'page');
+  assert.equal(await page.evaluate(() => window.navigationTest.rows.server.isPinned),false);
+  assert.equal(await page.evaluate(() => window.navigationTest.rows.server.isFavorite),false);
+
+  await selected.getByRole('button',{name:'文件操作',exact:true}).click();
+  await page.getByRole('group',{name:'笔记操作',exact:true}).getByRole('button',{name:'收藏',exact:true}).click();
+  await page.waitForFunction(() => window.navigationTest.rows.writes.length===3);
+  const removeFavorite = favorites.getByRole('button',{name:'取消收藏 Git 入门学习笔记',exact:true});
+  await removeFavorite.press('Enter');
+  await favorites.waitFor({state:'hidden'});
+  await page.waitForFunction(() => window.navigationTest.rows.writes.length===4);
+  assert.equal(await star.count(),0);
+  assert.equal(await opener.getAttribute('aria-current'),'page');
+  assert.equal(await page.getByRole('heading',{name:'知识库'}).evaluate(node => node===document.activeElement && getComputedStyle(node).boxShadow==='none'),true);
+}
+
 try {
  for(const {width,touch} of layoutAudit ? [{width:1440,touch:false}] : [{width:1440,touch:false},{width:1277,touch:false},{width:768,touch:false},{width:768,touch:true},{width:320,touch:true}]){
   const context=await browser.newContext({viewport:{width,height:900},hasTouch:touch});
@@ -231,6 +316,12 @@ try {
   try { await page.getByRole('heading',{name:'Git 入门学习笔记'}).waitFor(); }
   catch(error){console.error(JSON.stringify({width,errors,requests,body:await page.locator('body').innerText()}));throw error;}
   if(layoutAudit){reports.push(await adaptiveLayoutCheck(page));assert.deepEqual(errors,[]);assert.deepEqual(requests,[]);await context.close();continue;}
+  if(width===1440 || width===320){
+   if(width===320)await open(page);
+   await directoryRowsCheck(page,touch);
+   await page.reload();
+   await page.getByRole('heading',{name:'Git 入门学习笔记'}).waitFor();
+  }
   const motion = width>=768 ? await motionStress(page) : null;
   await page.evaluate(()=>window.navigationTest.store.setState({workspaceIssues:[{id:'test-issue',label:'移动笔记',message:'合成未同步',busy:false}],retryWorkspaceOperation:id=>window.navigationTest.retries.push(id)}));
   await page.getByRole('alert').waitFor();assert((await page.getByRole('alert').textContent()).includes('合成未同步'));

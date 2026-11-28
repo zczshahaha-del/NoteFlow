@@ -44,18 +44,18 @@ class MemoryService:
         }
         return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:32]
 
-    async def list(self, user_id: str, *, memory_types: list[str], include_deleted: bool) -> list[UserMemory | MemoryRecord]:
+    async def list(self, user_id: str, *, memory_types: list[str], include_deleted: bool, all_records: bool = False) -> list[UserMemory | MemoryRecord]:
         from app.memory.control import uses_engine
         if await uses_engine(user_id):
             from app.memory.gateway import MemoryGateway
-            return await MemoryGateway().read(user_id, memory_types=memory_types)
+            return await MemoryGateway().read(user_id, memory_types=memory_types, limit=None if all_records else 50)
         async with AsyncSessionLocal() as session:
             return await find_memories(
                 session,
                 user_id,
                 memory_types=memory_types,
                 include_deleted=include_deleted,
-                limit=50,
+                limit=None if all_records else 50,
             )
 
     async def search(
@@ -91,8 +91,9 @@ class MemoryService:
             from app.memory.gateway import MemoryGateway
             gateway = MemoryGateway()
             source_id = await gateway.submit(user_id, payload.content, metadata={
-                "memoryType": payload.memoryType, "scope": normalize_scope(payload.scope), "source": "user_explicit"})
-            records = await gateway.wait(user_id, source_id) if source_id else []
+                "dialogue": True, "manual": True, "memoryType": normalize_memory_type(payload.memoryType),
+                "scope": normalize_scope(payload.scope), "source": "user_explicit"})
+            records = await gateway.wait(user_id, source_id, seconds=45) if source_id else []
             if not records:
                 raise ValueError("尚未保存事实，请在记忆管理查看处理状态。")
             return records[0]

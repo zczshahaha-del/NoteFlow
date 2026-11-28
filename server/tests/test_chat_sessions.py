@@ -14,10 +14,9 @@ from app.routers import chat_sessions
 
 class ChatSessionApiTests(unittest.TestCase):
     def test_chat_session_routes_are_registered(self):
-        methods_by_path: dict[str, set[str]] = {}
-        for route in app.routes:
-            if route.path.startswith("/api/chat-sessions"):
-                methods_by_path.setdefault(route.path, set()).update(route.methods or set())
+        # Public schema materializes FastAPI's lazily included routers too.
+        methods_by_path = {path: {method.upper() for method in operations}
+                           for path, operations in app.openapi()["paths"].items()}
         self.assertIn("GET", methods_by_path["/api/chat-sessions"])
         self.assertIn("POST", methods_by_path["/api/chat-sessions"])
         self.assertIn("GET", methods_by_path["/api/chat-sessions/{session_id}/messages"])

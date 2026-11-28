@@ -15,8 +15,9 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.deps import CurrentUser
-from app.models.db import Base, Note, NoteCategory, NoteEditPreview, NoteIndexJob, NoteSection, NoteVersion, User
+from app.models.db import AgentCheckpoint, AgentRun, Base, ChatSession, Note, NoteCategory, NoteEditPreview, NoteIndexJob, NoteSection, NoteVersion, User
 from app.routers import edits, notes
+from app.services import note_write
 
 DATABASE_URL = os.getenv("NOTEFLOW_NOTE_CONCURRENCY_DB_URL")
 BASE_CONTENT = "原始正文"
@@ -40,7 +41,7 @@ class NoteWriteConcurrencyTest(unittest.IsolatedAsyncioTestCase):
         self.user = CurrentUser(id=run_id, email=f"{run_id}@local.test", display_name="测试")
         self.note_id = f"note-{run_id}"
         async with self.engine.begin() as connection:
-            tables = [User, NoteCategory, Note, NoteVersion, NoteSection, NoteEditPreview, NoteIndexJob]
+            tables = [User, NoteCategory, Note, NoteVersion, NoteSection, NoteEditPreview, NoteIndexJob, ChatSession, AgentRun, AgentCheckpoint]
             await connection.run_sync(Base.metadata.create_all, tables=[model.__table__ for model in tables])
         async with self.sessions.begin() as session:
             session.add(User(id=self.user.id, email=self.user.email, display_name=self.user.display_name))
@@ -124,7 +125,7 @@ class NoteWriteConcurrencyTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual({job.source_version for job in jobs}, {notes._content_hash(winner)})
 
     async def test_two_devices_cannot_both_save_the_same_base(self):
-        await self.assert_conflict_after(notes, lambda: self.save("设备一的正文"), "设备一的正文")
+        await self.assert_conflict_after(note_write, lambda: self.save("设备一的正文"), "设备一的正文")
 
     async def test_manual_save_conflicts_with_version_restore(self):
         version_id = f"version-{self.user.id}"
@@ -142,11 +143,7 @@ class NoteWriteConcurrencyTest(unittest.IsolatedAsyncioTestCase):
                 old_content=BASE_CONTENT, new_content="AI 改写",
                 source_content_hash=notes._content_hash(BASE_CONTENT),
             ))
-        # The AI response is already stored. Stub only the runtime confirmation.
-        with patch.object(edits, "_ensure_edit_graph", AsyncMock()), patch.object(
-            edits, "resume_edit_graph", AsyncMock(return_value=True)
-        ):
-            await self.assert_conflict_after(edits, lambda: edits.apply_preview(preview_id, self.user), "AI 改写")
+        await self.assert_conflict_after(edits, lambda: edits.apply_preview(preview_id, self.user), "AI 改写")
 
     async def test_save_waiting_on_delete_does_not_write_deleted_note(self):
         async with self.sessions() as deleting:

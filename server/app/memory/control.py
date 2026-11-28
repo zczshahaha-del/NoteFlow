@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from sqlalchemy import text
+from app.memory.engine import MemoryUnavailable
 from app.services.prompt_templates import render_prompt
 from app.services.user_settings import get_or_create_user_settings
 
@@ -11,7 +13,14 @@ def effective_mission(state: dict) -> str:
 
 async def lock_owner(session, user_id):
     key = int.from_bytes(hashlib.sha256(("memory:" + user_id).encode()).digest()[:8], "big", signed=True)
-    await session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
+    clock = asyncio.get_running_loop().time
+    deadline = clock() + 4
+    # Poll without leaving a lock request queued on PostgreSQL after chat stops.
+    while not await session.scalar(text("SELECT pg_try_advisory_xact_lock(:key)"), {"key": key}):
+        remaining = deadline - clock()
+        if remaining <= 0:
+            raise MemoryUnavailable("记忆正在整理，请稍后再试。")
+        await asyncio.sleep(min(0.2, remaining))
 
 
 async def control(session, user_id):

@@ -169,8 +169,11 @@ export function setMemoryEnabled(enabled: boolean): Promise<UserSettingsRecord> 
   return result;
 }
 
-export async function listMemories(includeDeleted = false): Promise<UserMemoryRecord[]> {
-  const response = await apiFetch(`/api/memories${includeDeleted ? "?includeDeleted=true" : ""}`);
+export async function listMemories(includeDeleted = false, { allRecords = false } = {}): Promise<UserMemoryRecord[]> {
+  const params = new URLSearchParams();
+  if (includeDeleted) params.set("includeDeleted", "true");
+  if (allRecords) params.set("allRecords", "true");
+  const response = await apiFetch(`/api/memories${params.size ? "?" + params : ""}`);
   if (!response.ok) throw new Error(await readApiError(response));
   const data = await readApiJson<{ memories: UserMemoryRecord[] }>(response);
   return data.memories;

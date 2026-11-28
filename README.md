@@ -1,10 +1,10 @@
-# NoteFlow
+# 知流 · NoteFlow
 
-NoteFlow 是一款个人知识库应用，采用 React 前端、FastAPI 后端、PostgreSQL + pgvector 持久化存储和 Redis 基础设施，并集成了 DeepSeek AI 能力。
+知流（NoteFlow）是一款个人知识库应用，采用 React 前端、FastAPI 后端、PostgreSQL + pgvector 持久化存储和 Redis 基础设施，并集成了 DeepSeek AI 能力。
 
 ## 产品方向
 
-NoteFlow 正在统一为登录后的单一工作台：
+知流正在统一为登录后的单一工作台：
 
 - 左侧：知识树、文件夹、笔记、搜索，以及后续的回收站入口
 - 中间：正式笔记的阅读与编辑，以及后续的 AI 草稿和修改预览模式
@@ -77,15 +77,48 @@ http://your-server-ip/
 
 ## 本地开发
 
-本地后端使用 Python 3.12，与生产 Docker 镜像保持一致。
+### 用 `/noteflow/` 本地预览
+
+开发服务仍可从根路径打开。启动后端后，在独立端口跑子路径预览，按实际后端端口设置 `VITE_API_PROXY_TARGET`：
+
+```bash
+NOTEFLOW_BASE_PATH=/noteflow/ VITE_API_PROXY_TARGET=http://127.0.0.1:8081 \
+  npm run dev:vite -- --host 127.0.0.1 --port 5176 --strictPort
+```
+
+打开 `http://127.0.0.1:5176/noteflow/`。验证安装和离线缓存时，用同一组环境变量运行 `npm run build` 和 `npm run preview -- --port 5176 --strictPort`。
+
+共享网站的路径部署使用 `NOTEFLOW_BASE_PATH=/noteflow/` 构建前端 Docker 镜像。上游只转发 `/noteflow/` 及其下的请求，保留路径前缀，不缓存 API，保留登录 Cookie 和 AI 流式响应。镜像内 Nginx 将 `/noteflow/api/` 转到 FastAPI 原有的 `/api/`，并将登录 Cookie 的发送范围限制在 `/noteflow/`。
+
+需要 Node 22、Python 3.12 和运行中的 Docker。使用 nvm 时先执行 `nvm install`、`nvm use`，仓库的 `.nvmrc` 会选择 Node 22。现有启动脚本通过原生加载器读取 `vite.config.ts`，Node 20 无法直接运行该启动方式。
 
 首次运行先创建虚拟环境并安装后端依赖：
 
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
-python -m pip install -r server/requirements.txt
+python -m pip install --require-hashes -r server/requirements.lock
 ```
+
+也可使用 uv 自动准备 Python：
+
+```bash
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python --require-hashes -r server/requirements.lock
+```
+
+首次运行需要从 `server/.env.example` 创建 `server/.env`，已有文件不要覆盖。设置随机的 `JWT_SECRET` 和 `DB_PASSWORD`；在根目录的 `.env` 中设置相同的 `POSTGRES_PASSWORD`。本地使用 `ENVIRONMENT=development`、`AUTH_COOKIE_SECURE=false`。没有供应商密钥时，将 `DEEPSEEK_API_KEY`、`EMBEDDING_API_KEY`、`RERANKER_API_KEY` 留空，避免把模板占位文字当成真实密钥。
+
+暂不接入外部 Hindsight 服务时，可在 `server/.env` 中设置 `MEMORY_ENGINE=local`、`MEMORY_INDEX_PROVIDER=none`，使用项目内置的 PostgreSQL 记忆存储。附件目录可设为绝对路径，或设为相对后端工作目录的 `data/attachments`。
+
+先启动本地基础服务，下面的覆盖文件只把数据库和 Redis 端口绑定到本机；需要 Docker Compose 支持 `!override` 语法：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d postgres redis
+docker compose -f docker-compose.yml -f docker-compose.local.yml ps postgres redis
+```
+
+两项服务健康后，再启动开发服务。数据库使用持久化卷；首次启动是空实例，原有笔记需要另行从备份恢复。未配置邮件渠道时，开发环境会自动填入验证码；AI Key 为空时，基础笔记功能可运行，AI 功能不可用。
 
 推荐方式：使用一个脚本先启动 Python API。脚本会从 `server/.env` 中的 `PORT` 开始尝试绑定 TCP 端口，默认依次尝试 `8080`、`8081`、`8082`……直到找到可用端口。确认 API 可访问后，脚本再启动 Vite。最终选中的端口会写入 `server/.dev-api-port`，确保 `/api` 代理始终指向正确的后端端口：
 
@@ -93,6 +126,8 @@ python -m pip install -r server/requirements.txt
 npm install
 npm run dev
 ```
+
+若默认 npm 源返回缺包错误，可使用 `npm install --registry=https://registry.npmjs.org`。启动后访问 <http://127.0.0.1:5173/>。运行 `npm run check:dev-ports` 检查端口，访问 `/api/health` 查看基础服务是否就绪（`{"ok": true}`）。排查数据库、缓存和模型时查看后端及相关容器日志。
 
 分别使用两个终端启动：
 
@@ -123,3 +158,9 @@ python3 -m alembic -c alembic.ini upgrade head
 ```env
 VITE_API_BASE_URL=http://127.0.0.1:8080
 ```
+
+## 依赖安全检查
+
+`npm run test:dependencies` 使用官方 npm 公告和固定版本 pip-audit 检查锁文件及当前项目虚拟环境；需要 uv 和网络，查询失败不算通过。升级 Python 依赖时修改 `server/requirements.txt`，再执行 `uv pip compile server/requirements.txt --universal --python-version 3.12 --generate-hashes --output-file server/requirements.lock` 并按锁文件重装和回归。Docker 也按带哈希的传递依赖锁安装。单元检查使用 `server/requirements-test.txt`。
+
+知识库备份和恢复范围见 [备份说明](docs/knowledge-backup.md)。

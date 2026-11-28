@@ -23,6 +23,15 @@ npm run test:quality:fast
 
 它不连接数据库、不跑固定 RAG，也不做生产构建。
 
+以下命令只跑核心回归。
+
+```bash
+npx playwright install chromium
+npm run test:quality:core
+```
+
+这组检查覆盖双页修改、聊天停止和保存失败后的重试。浏览器使用隔离测试数据。GitHub Actions 在推送和 PR 时运行同一组检查，并用临时 PostgreSQL 复查搜索索引。
+
 真实 AI Runtime E2E 需要本地 API 已启动且模型 key 可用：
 
 ```bash

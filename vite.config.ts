@@ -1,11 +1,15 @@
 import path from 'node:path'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { defineConfig } from 'vite'
+import { defineConfig, type ProxyOptions } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const base = process.env.NOTEFLOW_BASE_PATH || '/'
+if (!/^\/(?:[a-zA-Z0-9_-]+\/)*$/.test(base)) {
+  throw new Error('NOTEFLOW_BASE_PATH must be an absolute path ending in /')
+}
 
 function devApiProxyTarget(): string {
   const fromEnv = process.env.VITE_API_PROXY_TARGET?.trim()
@@ -24,7 +28,36 @@ function devApiProxyTarget(): string {
   return 'http://127.0.0.1:8080'
 }
 
+const apiPrefix = `${base}api`
+const privateCookiePrefix = base === '/' ? '' : `noteflow_path_${Buffer.from(base).toString('hex')}_`
+const proxy: Record<string, ProxyOptions> = {
+  [`^${apiPrefix}(?:/|\\?|$)`]: {
+    target: devApiProxyTarget(),
+    changeOrigin: true,
+    rewrite: (url: string) => url.slice(base.length - 1),
+    cookiePathRewrite: { '/': base },
+    configure: (server) => {
+      if (!privateCookiePrefix) return
+      // The local backend also serves the root preview. Translate the
+      // subpath's cookie names without changing that backend's sessions.
+      server.on('proxyReq', (forwarded, request) => {
+        const cookies = (request.headers.cookie || '').split(';')
+          .map(cookie => cookie.trim())
+          .filter(cookie => cookie.startsWith(privateCookiePrefix))
+          .map(cookie => cookie.slice(privateCookiePrefix.length))
+        if (cookies.length) forwarded.setHeader('Cookie', cookies.join('; '))
+        else forwarded.removeHeader('Cookie')
+      })
+      server.on('proxyRes', (response) => {
+        const cookies = response.headers['set-cookie']
+        if (cookies) response.headers['set-cookie'] = cookies.map(cookie => privateCookiePrefix + cookie)
+      })
+    },
+  },
+}
+
 export default defineConfig({
+  base,
   plugins: [react(), tailwindcss()],
   build: {
     rolldownOptions: {
@@ -51,12 +84,6 @@ export default defineConfig({
       },
     },
   },
-  server: {
-    proxy: {
-      '/api': {
-        target: devApiProxyTarget(),
-        changeOrigin: true,
-      },
-    },
-  },
+  server: { proxy },
+  preview: { proxy },
 })

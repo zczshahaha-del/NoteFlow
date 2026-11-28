@@ -35,6 +35,7 @@ class NoteGenerateRequest:
     includeExercises: bool = False
     extraRequest: str = ""
     memoryContext: str = ""
+    sourceContext: str = ""
     markdown: str = ""
     outlinePlan: str = ""
     maxTokens: int = 0
@@ -67,6 +68,7 @@ def build_note_generate_prompt(req: NoteGenerateRequest) -> str:
             render_prompt("notes/memory-preference")
             + req.memoryContext.strip()
         )
+    source_rule = render_prompt("notes/source-context", source=req.sourceContext.strip()) if req.sourceContext.strip() else ""
 
     base_info = (
         render_prompt(
@@ -83,13 +85,15 @@ def build_note_generate_prompt(req: NoteGenerateRequest) -> str:
         )
     )
 
+    if source_rule:
+        base_info += "\n\n" + source_rule
     mode = (req.mode or "").strip()
 
     if mode == "outline":
         outline_info = (
             f"Topic: {topic}\n"
             f"{extra_rule.strip()}\n"
-            f"{memory_rule.strip()}"
+            f"{memory_rule.strip()}\n{source_rule}"
         ).strip()
         final_note_expectation = ""
         if req.includeCode:

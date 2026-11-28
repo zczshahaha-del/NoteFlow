@@ -39,6 +39,7 @@ def build_context(
     *,
     token_budget: int | None = None,
     top_k: int | None = None,
+    max_excerpt_chars: int | None = None,
 ) -> BuiltContext:
     budget = max(300, token_budget or cfg.RAG_CONTEXT_TOKEN_BUDGET)
     # Citations are user-facing evidence, not the complete retrieval trace.
@@ -52,7 +53,8 @@ def build_context(
         section_identity = (candidate.note_id, candidate.section_key)
         if section_identity in selected_sections:
             continue
-        cost = estimate_tokens(candidate.content) + 40
+        excerpt = candidate.content[:max_excerpt_chars]
+        cost = estimate_tokens(excerpt) + 40
         if selected and used_tokens + cost > budget:
             continue
         selected.append(candidate)
@@ -84,7 +86,7 @@ def build_context(
             f"[{index}] citation_id={citation.citation_id}\n"
             f"笔记：{citation.note_title}\n"
             f"位置：{' / '.join(citation.section_path) or '正文'}\n"
-            f"证据：{candidate.content}"
+            f"证据：{candidate.content[:max_excerpt_chars]}"
         )
 
     if not citations:

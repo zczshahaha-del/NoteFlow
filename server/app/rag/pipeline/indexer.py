@@ -15,7 +15,8 @@ from app.models.db import (
     RagNode,
 )
 from app.rag.pipeline.parser import CHUNKER_VERSION, PARSER_VERSION, StructuredNode, parse_markdown_nodes
-from app.services.embeddings import chunk_embedding_text, content_hash, embed_texts, embedding_enabled
+from app.services.embedding_index import IndexEmbedding, prepare_embeddings, reusable_embedding
+from app.services.embeddings import chunk_embedding_text, content_hash
 from app.services.observability import record_metric
 from app.utils import random_id
 
@@ -98,126 +99,69 @@ def _node_embedding_text(note: Note, node: StructuredNode) -> str:
     )
 
 
-async def _index_embeddings(
-    session: AsyncSession,
-    note: Note,
-    nodes: list[StructuredNode],
-    stats: V2IndexStats,
-) -> None:
-    if not nodes:
-        return
-    node_ids = [node.id for node in nodes]
-    existing_rows = (
-        await session.execute(
-            select(RagEmbedding).where(
-                RagEmbedding.node_id.in_(node_ids),
-                RagEmbedding.provider == cfg.EMBEDDING_PROVIDER,
-                RagEmbedding.embedding_model == cfg.EMBEDDING_MODEL,
-                RagEmbedding.embedding_dim == cfg.EMBEDDING_DIMENSIONS,
-            )
+def parse_index_nodes(note: Note) -> list[StructuredNode]:
+    return parse_markdown_nodes(
+        note.content or "",
+        note_id=note.id,
+        note_title=note.title,
+        source_version=content_hash(note.content or ""),
+        target_tokens=max(400, min(cfg.RAG_CHUNK_SIZE, 800)),
+        max_tokens=1000,
+        overlap_tokens=max(60, min(cfg.RAG_CHUNK_OVERLAP, 120)),
+    )
+
+
+def rag_embedding_inputs(note: Note, nodes: list[StructuredNode]) -> dict[str, str]:
+    return {node.id: _node_embedding_text(note, node) for node in nodes}
+
+
+async def load_rag_embeddings(
+    session: AsyncSession, note: Note, node_ids: list[str],
+) -> dict[str, RagEmbedding]:
+    if not node_ids:
+        return {}
+    rows = await session.scalars(
+        select(RagEmbedding).where(
+            RagEmbedding.note_id == note.id,
+            RagEmbedding.user_id == note.user_id,
+            RagEmbedding.node_id.in_(node_ids),
+            RagEmbedding.provider == cfg.EMBEDDING_PROVIDER,
+            RagEmbedding.embedding_model == cfg.EMBEDDING_MODEL,
+            RagEmbedding.embedding_dim == cfg.EMBEDDING_DIMENSIONS,
         )
-    ).scalars().all()
-    existing = {row.node_id: row for row in existing_rows}
-    reusable_ids = {
-        row.node_id
-        for row in existing_rows
-        if (row.status == "indexed" and row.embedding is not None)
-        or (not embedding_enabled() and row.status == "skipped")
-    }
-    missing = [node for node in nodes if node.id not in reusable_ids]
+    )
+    return {row.node_id: row for row in rows}
+
+
+async def _index_embeddings(
+    session: AsyncSession, note: Note, nodes: list[StructuredNode], stats: V2IndexStats,
+    prepared: dict[str, IndexEmbedding] | None,
+) -> None:
+    existing = await load_rag_embeddings(session, note, [node.id for node in nodes])
+    reusable_ids = {key for key, row in existing.items() if reusable_embedding(row)}
     stats.embedding_reused = len(reusable_ids)
+    missing = [node for node in nodes if node.id not in reusable_ids]
     if not missing:
         return
+    if prepared is None:
+        prepared = await prepare_embeddings(rag_embedding_inputs(note, missing))
 
-    if not embedding_enabled():
-        for node in missing:
-            row = existing.get(node.id)
-            if row is None:
-                row = RagEmbedding(
-                    id=random_id(),
-                    node_id=node.id,
-                    note_id=note.id,
-                    user_id=note.user_id,
-                    provider=cfg.EMBEDDING_PROVIDER,
-                    embedding_model=cfg.EMBEDDING_MODEL,
-                    embedding_dim=cfg.EMBEDDING_DIMENSIONS,
-                    content_hash=node.content_hash,
-                    embedding=None,
-                    status="skipped",
-                    error_message="embedding provider is not configured",
-                )
-            else:
-                row.content_hash = node.content_hash
-                row.embedding = None
-                row.status = "skipped"
-                row.error_message = "embedding provider is not configured"
-            session.add(row)
+    for node in missing:
+        value = prepared[node.id]
+        row = existing.get(node.id)
+        if row is None:
+            row = RagEmbedding(id=random_id(), node_id=node.id, note_id=note.id, user_id=note.user_id)
+        row.content_hash = node.content_hash
+        for key, field in value.fields().items():
+            setattr(row, key, field)
+        session.add(row)
+        if value.status == "indexed":
+            stats.embedded += 1
+        elif value.status == "skipped":
             stats.skipped += 1
-        await session.flush()
-        return
-
-    batch_size = max(1, min(cfg.EMBEDDING_BATCH_SIZE, 20))
-    for start in range(0, len(missing), batch_size):
-        batch = missing[start : start + batch_size]
-        texts = [_node_embedding_text(note, node) for node in batch]
-        try:
-            result = await embed_texts(texts)
-            indexed_at = datetime.utcnow()
-            for node, vector in zip(batch, result.embeddings):
-                row = existing.get(node.id)
-                if row is None:
-                    row = RagEmbedding(
-                        id=random_id(),
-                        node_id=node.id,
-                        note_id=note.id,
-                        user_id=note.user_id,
-                        provider=result.provider,
-                        embedding_model=result.model,
-                        embedding_dim=result.dimensions,
-                        content_hash=node.content_hash,
-                        embedding=vector,
-                        status="indexed",
-                        indexed_at=indexed_at,
-                    )
-                else:
-                    row.provider = result.provider
-                    row.embedding_model = result.model
-                    row.embedding_dim = result.dimensions
-                    row.content_hash = node.content_hash
-                    row.embedding = vector
-                    row.status = "indexed"
-                    row.error_message = None
-                    row.indexed_at = indexed_at
-                session.add(row)
-                stats.embedded += 1
-        except Exception as exc:
-            message = str(exc)[:1000]
-            for node in batch:
-                row = existing.get(node.id)
-                if row is None:
-                    row = RagEmbedding(
-                        id=random_id(),
-                        node_id=node.id,
-                        note_id=note.id,
-                        user_id=note.user_id,
-                        provider=cfg.EMBEDDING_PROVIDER,
-                        embedding_model=cfg.EMBEDDING_MODEL,
-                        embedding_dim=cfg.EMBEDDING_DIMENSIONS,
-                        content_hash=node.content_hash,
-                        embedding=None,
-                        status="failed",
-                        error_message=message,
-                    )
-                else:
-                    row.content_hash = node.content_hash
-                    row.embedding = None
-                    row.status = "failed"
-                    row.error_message = message
-                session.add(row)
-                stats.failed += 1
-            if cfg.EMBEDDING_FAIL_INDEX_ON_ERROR:
-                raise
-        await session.flush()
+        else:
+            stats.failed += 1
+    await session.flush()
 
 
 async def _current_note_source_version(session: AsyncSession, note_id: str) -> str | None:
@@ -242,7 +186,23 @@ def _mark_v2_retry(job: NoteIndexJob, error: Exception, now: datetime) -> None:
         job.finished_at = now
 
 
-async def run_rag_index_job(session: AsyncSession, note: Note, job: NoteIndexJob) -> NoteIndexJob:
+async def schedule_rag_index_retry(session: AsyncSession, note: Note, job: NoteIndexJob, error: Exception) -> None:
+    _mark_v2_retry(job, error, datetime.utcnow())
+    state = await session.get(RagIndexState, note.id)
+    if state is None:
+        state = RagIndexState(note_id=note.id, user_id=note.user_id, source_version=job.source_version or "")
+    if state.status != "indexed" and state.source_version in {"", job.source_version}:
+        state.status = "failed" if job.status == "failed" else "pending"
+        state.error_code = job.error_code
+        state.error_message = job.error_message
+        state.updated_at = datetime.utcnow()
+        session.add(state)
+
+
+async def run_rag_index_job(
+    session: AsyncSession, note: Note, job: NoteIndexJob, *,
+    prepared: tuple[list[StructuredNode], dict[str, IndexEmbedding]] | None = None,
+) -> NoteIndexJob:
     started = datetime.utcnow()
     job.status = "running"
     job.started_at = job.started_at or started
@@ -260,15 +220,7 @@ async def run_rag_index_job(session: AsyncSession, note: Note, job: NoteIndexJob
             job.heartbeat_at = None
             return job
 
-        nodes = parse_markdown_nodes(
-            note.content or "",
-            note_id=note.id,
-            note_title=note.title,
-            source_version=source_version,
-            target_tokens=max(400, min(cfg.RAG_CHUNK_SIZE, 800)),
-            max_tokens=1000,
-            overlap_tokens=max(60, min(cfg.RAG_CHUNK_OVERLAP, 120)),
-        )
+        nodes, prepared_embeddings = prepared if prepared is not None else (parse_index_nodes(note), None)
         stats = V2IndexStats(nodes=len(nodes))
         existing_nodes = {
             row.id: row
@@ -302,9 +254,9 @@ async def run_rag_index_job(session: AsyncSession, note: Note, job: NoteIndexJob
                 row.active = False
             session.add(row)
         await session.flush()
-        await _index_embeddings(session, note, nodes, stats)
+        await _index_embeddings(session, note, nodes, stats, prepared_embeddings)
 
-        # Source-version fencing is checked again after the slow external call.
+        # Inline callers can still prepare inside their own transaction.
         if await _current_note_source_version(session, note.id) != source_version:
             job.status = "cancelled"
             job.error_code = "STALE_SOURCE_VERSION"
@@ -363,16 +315,9 @@ async def run_rag_index_job(session: AsyncSession, note: Note, job: NoteIndexJob
         await session.flush()
         return job
     except Exception as exc:
-        _mark_v2_retry(job, exc, datetime.utcnow())
-        state = await session.get(RagIndexState, note.id)
-        if state is None or state.source_version in {"", job.source_version}:
-            if state is None:
-                state = RagIndexState(note_id=note.id, user_id=note.user_id, source_version=job.source_version or "")
-            state.status = "failed" if job.status == "failed" else "pending"
-            state.error_code = job.error_code
-            state.error_message = job.error_message
-            state.updated_at = datetime.utcnow()
-            session.add(state)
+        if prepared is not None:
+            raise
+        await schedule_rag_index_retry(session, note, job, exc)
         record_metric("rag_v2_index", "note", status="failed", duration_ms=(datetime.utcnow() - started).total_seconds() * 1000)
         await session.flush()
         return job

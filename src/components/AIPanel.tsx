@@ -43,27 +43,7 @@ import { useChatPresentation } from "../hooks/useChatPresentation";
 import SoftMenu from "./SoftMenu";
 import "./ai-conversation.css";
 import DraftBriefCard from "./DraftBriefCard";
-
-// Older chat history can contain only the status text, without a tool trace.
-const legacyEditPreviewStatuses = new Set([
-  "我正在生成修改预览，不会直接改正式笔记。",
-  "请先打开一篇正式笔记，再让我生成修改预览。",
-  "当前没有等待确认的修改预览。请先让我生成修改预览。",
-  "已生成 AI 修改预览，正式笔记还没有变化。你可以在中间区域查看原文和修改后内容，再决定应用或取消。",
-  "我会基于当前预览继续调整，仍然不会写回正式笔记。",
-  "预览已更新。请在中间区域确认修改效果。",
-  "已取消本次修改预览，正式笔记没有变化。",
-  "修改已应用到正式笔记，并已保存旧版本和更新索引。",
-]);
-
-function canSupplementSelection(message: ChatMessage) {
-  const text = message.text.trim();
-  return message.role === "assistant" && Boolean(text)
-    && message.streamState !== "failed" && message.streamState !== "stopped"
-    && message.kind !== "edit_preview_status" && !message.draftCard
-    && !message.toolTraces?.some((trace) => trace.toolName === "note_edit_tool")
-    && !legacyEditPreviewStatuses.has(text);
-}
+import { CHAT_SELECTION_LIMIT } from "../editor/selectionChatContext";
 
 type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
 
@@ -396,7 +376,6 @@ export default function AIPanel({ onCollapse }: { onCollapse?: () => void }) {
   const lastVisibleMessage = visibleMessages[visibleMessages.length - 1];
   const {
     activeEditPreview,
-    createEditPreviewRequest,
     applyEditPreviewRequest,
     cancelEditPreviewRequest,
     focusChatSource,
@@ -420,6 +399,8 @@ export default function AIPanel({ onCollapse }: { onCollapse?: () => void }) {
   const { agentSessionId, agentTask, agentRunHistory, agentTaskDetailOpen } = useAgentSlice();
   const [input, setInput] = useState("");
   const [composerMode, setComposerMode] = useState<"chat" | "ask_notes">("chat");
+  const activeComposerMode = chatSelection ? "chat" : composerMode;
+  const selectionTooLong = (chatSelection?.text.length ?? 0) > CHAT_SELECTION_LIMIT;
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [currentNoteReferenced, setCurrentNoteReferenced] = useState(true);
   const [inputComposing, setInputComposing] = useState(false);
@@ -897,33 +878,37 @@ export default function AIPanel({ onCollapse }: { onCollapse?: () => void }) {
   const handleSend = useCallback(
     (text?: string) => {
       const msg = (text ?? input).trim();
-      if (!msg || replyBusy) return;
+      if (!msg || replyBusy || selectionTooLong) return;
       if (voiceListening) stopVoiceRecognition();
       const selectedText = chatSelection?.text.trim() || "";
       const contextScope =
-        composerMode === "ask_notes"
-          ? "knowledge_base"
-          : selectedText
-            ? "selection"
+        selectedText
+          ? "selection"
+          : activeComposerMode === "ask_notes"
+            ? "knowledge_base"
             : currentNoteReferenced && selectedFile
               ? "current_note"
-              : "auto";
+              : "none";
       sendMessage(
         msg,
         {
           selectedText,
           contextScope,
         },
-        { mode: composerMode }
+        { mode: activeComposerMode }
       );
-      if (chatSelection) clearChatSelection();
+      if (chatSelection) {
+        setComposerMode("chat");
+        clearChatSelection();
+      }
       setInput("");
     },
     [
       input,
       replyBusy,
       sendMessage,
-      composerMode,
+      activeComposerMode,
+      selectionTooLong,
       chatSelection,
       clearChatSelection,
       currentNoteReferenced,
@@ -1110,10 +1095,9 @@ export default function AIPanel({ onCollapse }: { onCollapse?: () => void }) {
                       </>
                     ) : (
                       <>
-                        <button type="button" onClick={() => void handleSwitchChat(session.id)} className="nf-history-name min-w-0 flex-1 truncate px-1 py-2 text-left" title={session.title}>
+                        <button type="button" onClick={() => void handleSwitchChat(session.id)} className="nf-history-name min-w-0 flex-1 truncate px-1 py-2 text-left" aria-current={session.id === agentSessionId || undefined} title={session.title}>
                           {session.title}
                         </button>
-                        {session.id === agentSessionId && <Check size={13} className="nf-history-check mr-1 shrink-0" />}
                         <button
                           type="button"
                           onClick={(event) => { renameRowRef.current = event.currentTarget.closest(".nf-history-row"); setEditingSessionId(session.id); setEditingSessionTitle(session.title); }}
@@ -1169,14 +1153,6 @@ export default function AIPanel({ onCollapse }: { onCollapse?: () => void }) {
           const sourceRefs =
             msg.role === "assistant" ? displayedSources(msg.text, msg.sources) : [];
           const sourceGroups = groupSourcesByNote(sourceRefs);
-          const precedingSelection = (() => {
-            if (msg.role !== "assistant") return null;
-            for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
-              const candidate = chatMessages[cursor];
-              if (candidate.role === "user") return candidate.attachedSelection ?? null;
-            }
-            return null;
-          })();
           return (
           <Fragment key={msg.id}>
           <div data-role={msg.role} className={`nf-chat-message-row flex flex-col ${msg.role === "user" ? "items-end" : "items-start"}`}>
@@ -1225,22 +1201,6 @@ export default function AIPanel({ onCollapse }: { onCollapse?: () => void }) {
                     </div>
                   )}
                 </div>
-              )}
-              {precedingSelection && !isStreaming && canSupplementSelection(msg) && (
-                <button
-                  type="button"
-                  className="mt-3 inline-flex h-7 items-center rounded-full border border-[#d9e8f1] bg-[#f7fbfd] px-3 text-[11px] font-medium text-[#47708a] transition-colors hover:bg-[#edf6fa]"
-                  onClick={() =>
-                    createEditPreviewRequest(
-                      `保留选中的原文，在它后面补充一段简洁、自然的“补充理解”提示块。可参考下面这段解释，但请重新组织成适合直接放进技术学习笔记的内容：\n\n${msg.text}`,
-                      precedingSelection.text,
-                      "insert",
-                      null
-                    )
-                  }
-                >
-                  补充理解
-                </button>
               )}
               {sourceRefs.length > 0 && (
                 <div className="mt-2 border-t border-jelly-border pt-2">
@@ -1354,6 +1314,7 @@ export default function AIPanel({ onCollapse }: { onCollapse?: () => void }) {
               </span>
             )}
           </div>
+          {selectionTooLong && <p className="text-xs text-jelly-text-muted" role="alert">选中文字超过 4000 字，请缩小选区后再发送。</p>}
           <textarea
             ref={inputRef}
             value={input}
@@ -1365,7 +1326,7 @@ export default function AIPanel({ onCollapse }: { onCollapse?: () => void }) {
             placeholder={
               activeEditPreview
                 ? "继续调整，或输入“应用吧 / 取消”..."
-                : composerMode === "ask_notes"
+                : activeComposerMode === "ask_notes"
                   ? "在全部笔记中提问..."
                   : "使用 AI 处理各种任务..."
             }
@@ -1380,8 +1341,8 @@ export default function AIPanel({ onCollapse }: { onCollapse?: () => void }) {
                 aria-haspopup="listbox"
                 aria-expanded={modeMenuOpen}
               >
-                {composerMode === "ask_notes" ? <Search size={15} strokeWidth={1.7} /> : <MessageCircle size={15} strokeWidth={1.7} />}
-                <span>{composerMode === "ask_notes" ? "全库搜索" : "对话"}</span>
+                {activeComposerMode === "ask_notes" ? <Search size={15} strokeWidth={1.7} /> : <MessageCircle size={15} strokeWidth={1.7} />}
+                <span>{activeComposerMode === "ask_notes" ? "全库搜索" : "对话"}</span>
                 <ChevronDown size={13} strokeWidth={1.7} />
               </button>
               {modeMenuOpen && (
@@ -1394,7 +1355,7 @@ export default function AIPanel({ onCollapse }: { onCollapse?: () => void }) {
                       setModeMenuOpen(false);
                     }}
                     role="option"
-                    aria-selected={composerMode === "chat"}
+                    aria-selected={activeComposerMode === "chat"}
                   >
                     <MessageCircle size={15} strokeWidth={1.9} />
                     对话
@@ -1403,11 +1364,12 @@ export default function AIPanel({ onCollapse }: { onCollapse?: () => void }) {
                     type="button"
                     className="nf-chat-mode-option flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left"
                     onClick={() => {
+                      clearChatSelection();
                       setComposerMode("ask_notes");
                       setModeMenuOpen(false);
                     }}
                     role="option"
-                    aria-selected={composerMode === "ask_notes"}
+                    aria-selected={activeComposerMode === "ask_notes"}
                   >
                     <Search size={15} strokeWidth={1.9} />
                     全库搜索
@@ -1424,7 +1386,7 @@ export default function AIPanel({ onCollapse }: { onCollapse?: () => void }) {
                   handleSend();
                 }
               }}
-              disabled={!replyBusy && !input.trim()}
+              disabled={!replyBusy && (!input.trim() || selectionTooLong)}
               aria-label={replyBusy ? "停止生成" : "发送"}
               className="nf-chat-send"
             >

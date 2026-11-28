@@ -14,7 +14,7 @@ from app.memory.gateway import MemoryGateway, public_record
 from app.memory.portability import (
     copied_source_memories, is_hindsight_copy, portable_memory_graph, portable_source_document,
 )
-from app.models.db import MemorySource, IntegrationOutbox, UserMemory
+from app.models.db import ChatMessage, MemorySource, IntegrationOutbox, UserMemory
 from app.repositories.memories import MemoryRepository
 
 router = APIRouter(prefix="/memory-console", tags=["memory-console"])
@@ -157,7 +157,19 @@ async def source(source_id: str, user: CurrentUser = Depends(console_user)):
         if source is None or (not managed and not await copied_source_memories(session, user.id, source_id)):
             raise HTTPException(404, "来源不存在。")
         document = portable_source_document(source)
-        if managed:
+        if managed and (source.metadata_json or {}).get("claim"):
+            meta = source.metadata_json
+            turn = await session.get(MemorySource, meta["turn"])
+            lines = []
+            if turn and turn.user_id == user.id and meta.get("contextIds"):
+                rows = (await session.scalars(select(ChatMessage).where(
+                    ChatMessage.user_id == user.id, ChatMessage.session_id == turn.metadata_json.get("sessionId"),
+                    ChatMessage.id.in_(meta["contextIds"])).order_by(ChatMessage.created_at))).all()
+                lines.extend(("你" if row.role == "user" else "助手") + "：" + row.text[:1200] for row in rows)
+            if meta.get("evidence"):
+                lines.append("你：" + meta["evidence"])
+            document = {"id": source.id, "content": "\n".join(lines)}
+        elif managed:
             remote = await configured_engine().document(user.id, source.id)
             document = {"id": remote.id, "content": remote.content} if remote else None
         return {"id": source.id, "status": source.status, "ruleVersion": source.rule_version,

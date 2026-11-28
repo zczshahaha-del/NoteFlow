@@ -11,12 +11,16 @@ const original = '## 标题\n\n前面 原句。 后面。\n\n重复 原句。 �
 const css = readdirSync(new URL('../dist/assets/', import.meta.url)).filter(n => /^(index-|NoteEditor-).*\.css$/.test(n)).map(n => readFileSync(new URL('../dist/assets/' + n, import.meta.url), 'utf8')).join('\n');
 const entry = `import React from 'react';import{createRoot}from'react-dom/client';
 import NoteEditor from ${JSON.stringify(path('components/NoteEditor.tsx'))};
+import AIPanel from ${JSON.stringify(path('components/AIPanel.tsx'))};
 import{useAppStore}from ${JSON.stringify(path('store/index.tsx'))};
 const source=${JSON.stringify(original)};
 const api=window.quickTest={store:useAppStore,editor:null,calls:[],next:'改好的句子。',hold:false,failure:false};
+api.openChat=()=>{const panel=document.createElement('aside');document.body.appendChild(panel);createRoot(panel).render(React.createElement(AIPanel));};
 useAppStore.setState({treeData:[{id:'note',name:'合成笔记.md',type:'file',content:source,indexStatus:'indexed'},{id:'other',name:'其他笔记.md',type:'file',content:'别的正文',indexStatus:'indexed'}],selectedFileId:'note',fileContents:{note:source,other:'别的正文'},serverSyncReady:false,hydratedUserId:'quick-test'});
 window.fetch=async(url,init={})=>{url=String(url);const body=init.body?JSON.parse(init.body):null;api.calls.push({url,body});
  if(url.endsWith('/outline'))return new Response('{"sections":[]}',{headers:{'Content-Type':'application/json'}});
+ if(url.endsWith('/api/agent/chat'))return new Response(${JSON.stringify('data: {"choices":[{"delta":{"content":"合成聊天回答"}}]}\n\ndata: [DONE]\n\n')},{headers:{'Content-Type':'text/event-stream'}});
+ if(url.includes('/api/agent/runs'))return new Response('{"runs":[]}',{headers:{'Content-Type':'application/json'}});
  if(url.endsWith('/note-selection-rewrite')){const text=api.next;if(api.hold)await new Promise(resolve=>api.release=resolve);if(api.failure)return new Response('{"detail":"合成网络错误，请重试"}',{status:503,headers:{'Content-Type':'application/json'}});return new Response(JSON.stringify({newContent:text}),{headers:{'Content-Type':'application/json'}});}
  throw Error('Unexpected API '+url);};
 createRoot(document.getElementById('root')).render(React.createElement(React.StrictMode,null,React.createElement(NoteEditor)));`;
@@ -46,23 +50,49 @@ try {
   };
   const panel=page.getByRole('dialog',{name:'AI 改一下',exact:true});
   const input=panel.getByRole('textbox',{name:'快捷修改意见'});
+  const composer=panel.locator('.nf-selection-edit-input');
+  const result=panel.getByRole('region',{name:'选区修改结果',exact:true});
+  const polish=composer.getByRole('button',{name:'润色',exact:true});
+  const send=composer.getByRole('button',{name:'发送改写指令',exact:true});
+  const replace=result.getByRole('button',{name:'替换选中文字',exact:true});
+  const close=panel.getByRole('button',{name:'关闭快捷修改',exact:true});
   await choose('原句。',true);
   await page.getByRole('button',{name:'AI 改一下',exact:true}).waitFor({state:'hidden'});
   assert.equal(await input.inputValue(),'');
+  assert.equal(await input.getAttribute('placeholder'),'想怎么改？');
+  assert.equal(await replace.count(),0);
   await input.fill('更通俗一点');
+  await input.press('Shift+Enter');
+  assert.equal(await input.inputValue(),'更通俗一点\n');
+  await send.waitFor();
   const beforeComposition=await page.evaluate(()=>window.quickTest.calls.length);
-  await input.dispatchEvent('keydown',{key:'Enter',ctrlKey:true,isComposing:true});
+  await input.dispatchEvent('keydown',{key:'Enter',isComposing:true});
+  await input.dispatchEvent('keydown',{key:'Enter',keyCode:229});
   assert.equal(await page.evaluate(()=>window.quickTest.calls.length),beforeComposition,'IME composition must not submit');
   await input.fill('');
-  await panel.getByRole('button',{name:'直接润色',exact:true}).click();
-  try { await panel.getByRole('button',{name:'采用',exact:true}).waitFor(); }
+  await polish.click();
+  try { await replace.waitFor(); }
   catch(error) { console.error(JSON.stringify({width,errors,panel:await panel.innerText(),calls:await page.evaluate(()=>window.quickTest.calls)})); throw error; }
   assert.equal(await markdown(),baseline,'Generation must not modify the note');
   const sent=await page.evaluate(()=>window.quickTest.calls.filter(c=>c.url.endsWith('/note-selection-rewrite')).at(-1).body);
   assert.equal(sent.selectedMarkdown.trim(),'原句。');assert.equal(sent.instruction,'');assert(!('currentDraft' in sent));
-  await input.fill('更通俗一点');await page.evaluate(()=>window.quickTest.next='更通俗的句子。');
-  await input.press('ControlOrMeta+Enter');
-  await panel.getByRole('region',{name:'选区修改结果'}).getByText('更通俗的句子。',{exact:true}).waitFor();
+  assert.equal(await replace.innerText(),'替换');
+  assert.equal(await input.getAttribute('placeholder'),'继续调整…');
+  assert.equal(await composer.getByRole('button').count(),0);
+  const resultBox=await result.boundingBox();
+  const replaceBox=await replace.boundingBox();
+  const copyBox=await result.locator('.nf-selection-edit-result-copy').boundingBox();
+  assert.ok(Math.abs(resultBox.x+resultBox.width-replaceBox.x-replaceBox.width)<1,'Replace is aligned to the right of the result');
+  assert.ok(copyBox.y >= replaceBox.y+replaceBox.height,'The result text occupies its own full-width row');
+  const beforeBlank=await page.evaluate(()=>window.quickTest.calls.length);
+  await input.press('Enter');
+  assert.equal(await page.evaluate(()=>window.quickTest.calls.length),beforeBlank,'Empty follow-up must not submit');
+  await input.fill('更通俗一点');
+  await send.waitFor();
+  await page.evaluate(()=>window.quickTest.next='更通俗的句子。');
+  await input.press('Enter');
+  await result.getByText('更通俗的句子。',{exact:true}).waitFor();
+  assert.equal(await composer.getByRole('button').count(),0);
   assert.equal(await page.evaluate(()=>window.quickTest.calls.at(-1).body.currentDraft),'改好的句子。');
   const geometry=await panel.boundingBox();assert(geometry.x>=0&&geometry.x+geometry.width<=width+1&&geometry.y>=0&&geometry.y+geometry.height<=850);
   await page.screenshot({path:join(output,'result-'+width+'.png')});
@@ -70,50 +100,60 @@ try {
   assert.equal(await panel.evaluate(n=>getComputedStyle(n).borderTopColor),'rgb(58, 66, 77)','Dark panel uses the shared dark border');
   await page.screenshot({path:join(output,'dark-'+width+'.png')});
   await page.evaluate(()=>document.documentElement.classList.remove('theme-dark'));
-  await panel.getByRole('button',{name:'采用',exact:true}).click();await panel.waitFor({state:'detached'});
+  await replace.click();await panel.waitFor({state:'detached'});
   assert.equal(await markdown(),baseline.replace('重复 原句。','重复 更通俗的句子。'),'Duplicate text uses captured editor position, never first occurrence');
   assert.equal(await page.evaluate(()=>window.quickTest.store.getState().centerMode),'note');
   assert.equal(await page.evaluate(()=>window.quickTest.store.getState().fileContents.note),await markdown(),'Normal note update pipeline receives adoption');
   await page.getByTestId('tiptap-editor-content').press('ControlOrMeta+z');assert.equal(await markdown(),baseline,'One native undo restores the entire adoption');
 
   await choose('标题');await input.fill('换一个标题');await page.evaluate(()=>window.quickTest.next='新标题');
-  await panel.getByRole('button',{name:'开始修改',exact:true}).click();await panel.getByRole('button',{name:'采用',exact:true}).click();
+  await send.click();await replace.click();
   assert.equal(await markdown(),baseline.replace('标题','新标题'),'Title remains a heading, surrounding content retained');
   await page.getByTestId('tiptap-editor-content').press('ControlOrMeta+z');assert.equal(await markdown(),baseline);
 
   await choose();await page.evaluate(()=>window.quickTest.next='');
-  await panel.getByRole('button',{name:'直接润色',exact:true}).click();
-  await panel.getByText('采用后将删除选中文字。',{exact:true}).waitFor();
-  await panel.getByRole('button',{name:'采用',exact:true}).click();
+  await polish.click();
+  await result.getByText('替换后将删除选中文字。',{exact:true}).waitFor();
+  await replace.click();
   assert.equal(await markdown(),baseline.replace('原句。',''),'Empty result deletes only the selected text');
   await page.getByTestId('tiptap-editor-content').press('ControlOrMeta+z');assert.equal(await markdown(),baseline);
 
   await choose('粗体');await page.evaluate(()=>window.quickTest.next='**更清晰**');
-  await panel.getByRole('button',{name:'直接润色',exact:true}).click();await panel.getByRole('button',{name:'采用',exact:true}).click();
+  await polish.click();await replace.click();
   assert.equal(await markdown(),baseline.replace('**粗体**','**更清晰**'),'Rich marks and unselected inline code are preserved');
   await page.getByTestId('tiptap-editor-content').press('ControlOrMeta+z');assert.equal(await markdown(),baseline);
 
   await page.evaluate(()=>{const e=window.quickTest.editor,r=[];e.state.doc.descendants((n,p)=>{if(n.isText&&n.text.includes('原句。'))r.push({from:p+n.text.indexOf('原句。'),to:p+n.text.indexOf('原句。')+'原句。'.length})});e.chain().focus().setTextSelection({from:r[0].from,to:r[1].to}).run();});
   await page.getByRole('button',{name:'AI 改一下',exact:true}).click();
   await page.evaluate(()=>window.quickTest.next='新的第一段。\n\n新的第二段。');
-  await panel.getByRole('button',{name:'直接润色',exact:true}).click();await panel.getByRole('button',{name:'采用',exact:true}).click();
+  await polish.click();await replace.click();
   assert.equal(await markdown(),baseline.replace('原句。 后面。\n\n重复 原句。','新的第一段。\n\n新的第二段。'),'Multi-paragraph replacement retains unselected prefixes and suffixes');
   await page.getByTestId('tiptap-editor-content').press('ControlOrMeta+z');assert.equal(await markdown(),baseline);
 
-  await choose();await page.evaluate(()=>window.quickTest.failure=true);await panel.getByRole('button',{name:'直接润色',exact:true}).click();
-  await panel.getByRole('alert').getByText('合成网络错误，请重试').waitFor();assert.equal(await markdown(),baseline);
-  await page.evaluate(()=>window.quickTest.failure=false);await panel.getByRole('button',{name:'直接润色',exact:true}).click();await panel.getByRole('button',{name:'采用',exact:true}).waitFor();
-  await panel.getByRole('button',{name:'取消',exact:true}).click();assert.equal(await markdown(),baseline);
+  await choose();
+  await input.fill('保留这条指令');
+  await page.evaluate(()=>{window.quickTest.failure=true;window.quickTest.hold=true;});
+  await send.click();
+  await page.waitForFunction(()=>typeof window.quickTest.release==='function');
+  assert.equal(await input.inputValue(),'');
+  assert.equal(await input.evaluate(node=>document.activeElement===node),true,'The composer keeps focus while waiting');
+  await page.evaluate(()=>{window.quickTest.hold=false;window.quickTest.release();});
+  await panel.getByRole('alert').getByText('合成网络错误，请重试').waitFor();
+  assert.equal(await input.inputValue(),'保留这条指令');
+  assert.equal(await markdown(),baseline);
+  await page.evaluate(()=>window.quickTest.failure=false);
+  await send.click();await replace.waitFor();
+  await close.click();assert.equal(await markdown(),baseline);
 
   await choose();await page.evaluate(()=>{window.quickTest.hold=true;window.quickTest.next='迟到结果'});
-  await panel.getByRole('button',{name:'直接润色',exact:true}).click();await page.waitForFunction(()=>typeof window.quickTest.release==='function');
-  await panel.getByRole('button',{name:'取消',exact:true}).click();await page.evaluate(()=>{window.quickTest.hold=false;window.quickTest.release()});
+  await polish.click();await page.waitForFunction(()=>typeof window.quickTest.release==='function');
+  await close.click();await page.evaluate(()=>{window.quickTest.hold=false;window.quickTest.release()});
   await panel.waitFor({state:'detached'});assert.equal(await markdown(),baseline);
 
   await choose();await page.evaluate(()=>window.quickTest.editor.commands.insertContentAt(1,'正文变化'));
   await panel.getByRole('alert').getByText('正文已变化，请重新选中文字。当前结果未应用。').waitFor();
-  assert.equal(await panel.getByRole('button',{name:'直接润色',exact:true}).isEnabled(),false);
-  await panel.getByRole('button',{name:'取消',exact:true}).press('Escape');await panel.waitFor({state:'detached'});
+  assert.equal(await polish.isEnabled(),false);
+  await close.press('Escape');await panel.waitFor({state:'detached'});
   await page.getByTestId('tiptap-editor-content').press('ControlOrMeta+z');assert.equal(await markdown(),baseline);
 
   await choose();await page.evaluate(()=>window.quickTest.store.getState().setSelectedFileId('other'));
@@ -121,6 +161,36 @@ try {
   await page.evaluate(()=>window.quickTest.store.getState().setSelectedFileId('note'));
   await page.waitForFunction(()=>window.quickTest.editor&&!window.quickTest.editor.isDestroyed&&window.quickTest.editor.getText().includes('原句。'));
   await choose();await input.press('Escape');await panel.waitFor({state:'detached'});
+  if (width === 1280) {
+    const longNote = '## 第一节\n\n重复句。\n\n' + ('重复的长笔记背景。'.repeat(210) + '\n\n').repeat(15)
+      + '## 当前小节\n\n远侧前文' + '前'.repeat(500) + '最近上文。\n\n重复句。\n\n最近下文。' + '后'.repeat(500) + '远侧后文\n\n## 结尾\n\n不应发送的远处标记';
+    await page.evaluate(text => {
+      const api = window.quickTest;
+      const editor = api.editor;
+      editor.commands.setContent(text, { contentType: 'markdown' });
+      let to = 0;
+      editor.state.doc.descendants((node, position) => {
+        if (node.isText && node.text === '重复句。') to = position + node.text.length;
+      });
+      editor.chain().focus().setTextSelection({ from: to - '重复句。'.length, to }).scrollIntoView().run();
+    }, longNote);
+    await page.getByRole('button', { name: '加入对话', exact: true }).click();
+    await page.evaluate(() => window.quickTest.openChat());
+    await page.getByRole('textbox', { name: '消息输入框' }).fill('解释这一段');
+    await page.getByRole('button', { name: '发送', exact: true }).click();
+    const sent = await page.evaluate(() => window.quickTest.calls.find(call => call.url.endsWith('/api/agent/chat'))?.body);
+    assert.equal(sent.documentContent, '');
+    assert.equal(sent.pageState.unsavedContent, '');
+    assert.equal(sent.pageState.currentNoteId, 'note');
+    assert.equal(sent.pageState.selectedText, '重复句。');
+    assert.equal(sent.pageState.contextScope, 'selection');
+    const { heading, before, after } = sent.pageState.selectionContext;
+    assert.equal(heading, '当前小节');
+    assert(before.endsWith('最近上文。') && before.length === 400);
+    assert(after.startsWith('最近下文。') && after.length === 400);
+    assert(!JSON.stringify(sent).match(/远侧前文|远侧后文|不应发送的远处标记/));
+    await page.getByText('合成聊天回答', { exact: true }).waitFor();
+  }
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth),width);
   assert.deepEqual(errors,[]);assert.deepEqual(unexpected,[]);
   reports.push({width,lockedSelection:true,duplicatePosition:true,customInstruction:true,continueCurrentDraft:true,headingPreserved:true,richMarks:true,multiParagraph:true,emptyDeletion:true,compositionGuard:true,nativeUndo:true,cancelLateResult:true,staleBlocked:true,errorRetry:true,noteSwitch:true,geometry,errors,unexpected});

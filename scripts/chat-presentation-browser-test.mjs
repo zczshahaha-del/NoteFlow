@@ -111,6 +111,10 @@ try{
     assert.equal(await historySearch.getAttribute('aria-label'),'搜索历史对话');
     const historySearchBox=await historySearch.boundingBox();
     assert.equal(await historyMenu.locator('.nf-history-row').count(),2);
+    const currentHistory=historyMenu.locator('.nf-history-row[data-selected="true"]');
+    assert.equal(await currentHistory.getByRole('button',{name:'当前对话',exact:true}).getAttribute('aria-current'),'true');
+    assert.equal(await currentHistory.locator('svg.lucide-check').count(),0);
+    assert.notEqual(await currentHistory.evaluate(node=>getComputedStyle(node).backgroundColor),'rgba(0, 0, 0, 0)');
     await historySearch.fill('资料');assert.equal(await historyMenu.locator('.nf-history-row').count(),1);
     assert.equal(await historyMenu.locator('.nf-history-name').textContent(),'资料整理');
     await historySearch.fill('不存在');await historyMenu.getByText('没有找到对话',{exact:true}).waitFor();
@@ -378,15 +382,16 @@ try{
       const style=getComputedStyle(n),bar=getComputedStyle(n,'::-webkit-scrollbar');
       const edge=n.getBoundingClientRect().left+n.clientWidth;
       const contentFits=[...n.querySelectorAll('.nf-chat-message,.chat-markdown,.chat-table-scroll,.rendered-code-block,img')].every(x=>x.getBoundingClientRect().right<=edge+1);
-      return {clientWidth:n.clientWidth,scrollWidth:n.scrollWidth,clientHeight:n.clientHeight,scrollHeight:n.scrollHeight,overflowX:style.overflowX,barWidth:bar.width,barHeight:bar.height,contentFits};
+      return {clientWidth:n.clientWidth,scrollWidth:n.scrollWidth,clientHeight:n.clientHeight,scrollHeight:n.scrollHeight,overflowX:style.overflowX,scrollbarWidth:style.scrollbarWidth,barDisplay:bar.display,contentFits};
     });
     console.log(JSON.stringify({mobile,scrollSurface}));
-    // Allow only a scrollbar-sized counting residual; check actual content bounds separately.
-    assert.ok(scrollSurface.scrollWidth<=scrollSurface.clientWidth+parseFloat(scrollSurface.barWidth)+1,'wide history must not overflow beyond the native scrollbar gutter');
+    // Chromium can count the 5px from nested scrollbar styling in scrollWidth.
+    // Check visible content bounds independently of that residual.
+    assert.ok(scrollSurface.scrollWidth<=scrollSurface.clientWidth+6,'wide history must not overflow the conversation');
     assert.equal(scrollSurface.contentFits,true,'message, image, code and table viewports must fit without clipping');
     assert.equal(scrollSurface.overflowX,'hidden','the conversation itself must not expose a horizontal scrollbar');
     assert.ok(scrollSurface.scrollHeight>scrollSurface.clientHeight,'vertical history scrolling must remain available');
-    assert.equal(scrollSurface.barWidth,'5px');assert.equal(scrollSurface.barHeight,'5px');
+    assert.equal(scrollSurface.scrollbarWidth,'none');assert.equal(scrollSurface.barDisplay,'none');
     const table=page.locator('.chat-table-scroll');
     await table.focus();await page.keyboard.press('ArrowRight');
     await page.waitForFunction(()=>document.querySelector('.chat-table-scroll')?.scrollLeft>0);
@@ -397,15 +402,14 @@ try{
     assert.ok(codeScroll.total>codeScroll.width);assert.ok(codeScroll.left>0);assert.equal(codeScroll.text.trim(),longCode);
     assert.equal(await page.locator('.ai-message-list').evaluate(n=>n.scrollLeft),0);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth),mobile?320:600);
-    // Default, hover, dark and forced-colors scrollbar states stay scoped.
-    const defaultThumb=await page.locator('.ai-message-list').evaluate(n=>getComputedStyle(n,'::-webkit-scrollbar-thumb').backgroundColor);
-    await page.locator('.ai-message-list').hover();
+    const defaultThumb=await table.evaluate(n=>getComputedStyle(n,'::-webkit-scrollbar-thumb').backgroundColor);
     await page.evaluate(()=>document.documentElement.classList.add('theme-dark'));
-    const darkThumb=await page.locator('.ai-message-list').evaluate(n=>getComputedStyle(n,'::-webkit-scrollbar-thumb').backgroundColor);
+    const darkThumb=await table.evaluate(n=>getComputedStyle(n,'::-webkit-scrollbar-thumb').backgroundColor);
     assert.notEqual(darkThumb,defaultThumb);
     await page.emulateMedia({forcedColors:'active'});
-    assert.equal(await page.locator('.ai-message-list').evaluate(n=>getComputedStyle(n).scrollbarColor),'auto');
-    assert.notEqual(await page.locator('.ai-message-list').evaluate(n=>getComputedStyle(n,'::-webkit-scrollbar-thumb').backgroundColor),'rgba(0, 0, 0, 0)');
+    assert.equal(await page.locator('.ai-message-list').evaluate(n=>getComputedStyle(n).scrollbarWidth),'none');
+    assert.equal(await table.evaluate(n=>getComputedStyle(n).scrollbarColor),'auto');
+    assert.notEqual(await table.evaluate(n=>getComputedStyle(n,'::-webkit-scrollbar-thumb').backgroundColor),'rgba(0, 0, 0, 0)');
     await page.emulateMedia({forcedColors:'none'});await page.evaluate(()=>document.documentElement.classList.remove('theme-dark'));
     if(process.env.NOTEFLOW_CHAT_SCREENSHOT_DIR){
       mkdirSync(process.env.NOTEFLOW_CHAT_SCREENSHOT_DIR,{recursive:true});

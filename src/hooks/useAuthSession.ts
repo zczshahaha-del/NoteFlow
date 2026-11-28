@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   loadCurrentSession,
@@ -8,6 +8,7 @@ import {
   register,
   type AuthSession,
 } from "../services/auth";
+import { sessionRejectedEvent } from "../services/api";
 
 const authSessionQueryKey = ["auth-session"] as const;
 
@@ -15,34 +16,42 @@ export function useAuthSession() {
   const queryClient = useQueryClient();
   const sessionQuery = useQuery<AuthSession | null>({
     queryKey: authSessionQueryKey,
-    queryFn: loadCurrentSession,
+    queryFn: ({ signal }) => loadCurrentSession(signal),
     staleTime: Number.POSITIVE_INFINITY,
   });
 
-  const signIn = useCallback(async (email: string, password: string) => {
-    const nextSession = await login({ email, password });
+  useEffect(() => {
+    const recheck = () => {
+      if (queryClient.getQueryData(authSessionQueryKey)) {
+        void queryClient.invalidateQueries({ queryKey: authSessionQueryKey }, { cancelRefetch: false });
+      }
+    };
+    window.addEventListener(sessionRejectedEvent, recheck);
+    return () => window.removeEventListener(sessionRejectedEvent, recheck);
+  }, [queryClient]);
+
+  const updateSession = useCallback((nextSession: AuthSession | null) => {
+    void queryClient.cancelQueries({ queryKey: authSessionQueryKey });
     queryClient.setQueryData(authSessionQueryKey, nextSession);
   }, [queryClient]);
+
+  const signIn = useCallback(async (email: string, password: string) => {
+    updateSession(await login({ email, password }));
+  }, [updateSession]);
 
   const signUp = useCallback(async (email: string, code: string) => {
-    const nextSession = await register({ email, code });
-    queryClient.setQueryData(authSessionQueryKey, nextSession);
-  }, [queryClient]);
+    updateSession(await register({ email, code }));
+  }, [updateSession]);
 
   const signInWithEmailCode = useCallback(async (email: string, code: string) => {
-    const nextSession = await loginWithEmailCode(email, code);
-    queryClient.setQueryData(authSessionQueryKey, nextSession);
-  }, [queryClient]);
-
-  const updateSession = useCallback((nextSession: AuthSession) => {
-    queryClient.setQueryData(authSessionQueryKey, nextSession);
-  }, [queryClient]);
+    updateSession(await loginWithEmailCode(email, code));
+  }, [updateSession]);
 
   const signOut = useCallback(() => {
     void logout();
-    queryClient.setQueryData(authSessionQueryKey, null);
+    updateSession(null);
     queryClient.removeQueries({ queryKey: ["knowledge-base"] });
-  }, [queryClient]);
+  }, [queryClient, updateSession]);
 
   return {
     loading: sessionQuery.isLoading,

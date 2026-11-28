@@ -52,3 +52,21 @@ class EditRepository(Repository):
                 NoteEditPreviewRevision.user_id == user_id,
             )
         )
+
+    async def current_revision_id(self, user_id: str, preview: NoteEditPreview) -> str | None:
+        user_id = require_user_id(user_id)
+        if preview.user_id != user_id:
+            return None
+        if preview.current_revision_id:
+            return preview.current_revision_id
+        # Pre-migration previews have no saved pointer. Only link a unique match.
+        rows = await self.session.scalars(
+            select(NoteEditPreviewRevision).where(
+                NoteEditPreviewRevision.user_id == user_id,
+                NoteEditPreviewRevision.edit_id == preview.id,
+                NoteEditPreviewRevision.new_content == preview.new_content,
+                NoteEditPreviewRevision.instruction == preview.instruction,
+            )
+        )
+        matches = [row.id for row in rows if row.change_summary == preview.change_summary]
+        return matches[0] if len(matches) == 1 else None

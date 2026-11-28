@@ -104,6 +104,12 @@ def _route_after_validation(state: TurnGraphState) -> str:
     if state.get("error_code"):
         return "error"
     plan = TurnPlan.model_validate(state.get("turn_plan") or {})
+    if "target_note" in plan.missing_fields:
+        return "select_note"
+    if "target_draft" in plan.missing_fields:
+        # A draft is chosen by the session binding, never by a guessed name in
+        # a clarification reply. Let the executor explain without parking the chat.
+        return "ready"
     if plan.result == PlanResult.CLARIFY:
         return "clarify"
     if plan.result == PlanResult.UNKNOWN:
@@ -152,7 +158,7 @@ def build_turn_graph(dependencies: TurnGraphDependencies | None = None, *, check
         plan = TurnPlan.model_validate(state.get("turn_plan") or {})
         return {
             "clarification_question": clarification_question(plan),
-            "status": "waiting_user_input",
+            "status": "select_note" if "target_note" in plan.missing_fields else "waiting_user_input",
         }
 
     async def clarify_wait(state: TurnGraphState) -> dict[str, Any]:
@@ -227,12 +233,17 @@ def build_turn_graph(dependencies: TurnGraphDependencies | None = None, *, check
         _route_after_validation,
         {
             "clarify": "clarify_prompt",
+            "select_note": "clarify_prompt",
             "unknown": "unknown",
             "ready": "ready",
             "error": "error",
         },
     )
-    builder.add_edge("clarify_prompt", "clarify_wait")
+    builder.add_conditional_edges(
+        "clarify_prompt",
+        lambda state: "end" if state.get("status") == "select_note" else "wait",
+        {"end": END, "wait": "clarify_wait"},
+    )
     builder.add_conditional_edges(
         "clarify_wait",
         lambda state: "cancelled" if state.get("status") == "cancelled" else "validator",
@@ -281,4 +292,7 @@ async def graph_waiting_for_clarification(
         }
     }
     snapshot = await graph.aget_state(config)
+    # Older checkpoints could wait for a note that must be selected in the UI.
+    if "target_note" in (snapshot.values.get("turn_plan") or {}).get("missing_fields", []):
+        return False
     return any(getattr(task, "interrupts", ()) for task in snapshot.tasks)

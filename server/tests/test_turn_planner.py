@@ -45,6 +45,18 @@ async def fallback_resume(_state, plan: TurnPlan, answer: str) -> TurnPlan:
 
 
 class TurnPlannerTest(unittest.TestCase):
+    def test_personal_fact_dependency_routes_chat_writing_through_current_records(self) -> None:
+        plan = validate_turn_plan(TurnPlan(
+            primary_intent=PrimaryIntent.GENERAL_CHAT,
+            intent_parameters=IntentParameters(requires_personal_data=True, memory_query="常住城市"),
+        ))
+        self.assertEqual(plan.primary_intent, PrimaryIntent.MEMORY)
+        self.assertEqual(plan.intent_parameters.memory_action, "read")
+        self.assertEqual(plan.context_sources, [ContextSource.USER_MEMORY])
+
+        follow_up = validate_turn_plan(TurnPlan(primary_intent=PrimaryIntent.GENERAL_CHAT))
+        self.assertEqual(follow_up.primary_intent, PrimaryIntent.GENERAL_CHAT)
+
     def test_document_title_preserves_internal_book_punctuation(self) -> None:
         for title in ("《两小儿辩日》教案", "《两小儿辩日》 教案", "比较《甲》和《乙》"):
             with self.subTest(title=title):
@@ -391,6 +403,25 @@ class TurnPlannerTest(unittest.TestCase):
         self.assertEqual(plan.source, "resume")
         self.assertEqual(plan.intent_parameters.topic, "Go 语言")
         self.assertEqual(plan.result, PlanResult.EXECUTE)
+
+    def test_missing_note_does_not_capture_the_next_turn(self) -> None:
+        async def exercise():
+            dependencies = TurnGraphDependencies(plan_turn=AsyncMock(side_effect=[
+                TurnPlan(primary_intent=PrimaryIntent.NOTE_EDIT,
+                         intent_parameters=IntentParameters(instruction="修改标题")),
+                TurnPlan(primary_intent=PrimaryIntent.MEMORY,
+                         intent_parameters=IntentParameters(memory_action="write")),
+            ]))
+            options = dict(checkpointer=memory_saver(), thread_id="switch", dependencies=dependencies)
+            state = dict(user_id="u", session_id="switch", mode="chat")
+            first = await invoke_turn_graph(new_turn_state(**state, question="修改标题"), **options)
+            self.assertEqual(first["status"], "select_note")
+            self.assertFalse(await graph_waiting_for_clarification(**options))
+            second = await invoke_turn_graph(new_turn_state(**state, question="记住这个偏好"), **options)
+            self.assertEqual(second["status"], "ready")
+            self.assertEqual(second["turn_plan"]["primary_intent"], "memory")
+
+        asyncio.run(exercise())
 
     def test_langgraph_interrupt_resumes_original_note_intent(self) -> None:
         async def fake_plan(_state):

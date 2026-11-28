@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from app.database import AsyncSessionLocal
+from app.services.agent_checkpoints import bind_created_draft, settle_linked_checkpoints
 from app.deps import CurrentUser, get_current_user
 from app.models.db import (
     Note,
@@ -15,13 +17,13 @@ from app.models.db import (
     NoteDraftSection,
     NoteDraftSectionVersion,
     NoteIndexJob,
-    NoteVersion,
 )
 from app.repositories.drafts import DraftRepository
-from app.repositories.index_jobs import IndexJobRepository
 from app.repositories.notes import NoteRepository
-from app.agent.write_runtime import authorize_draft_save, initialize_draft_graph, resume_draft_generation
-from app.services.markdown_index import index_note_now
+from app.repositories.runs import RunRepository
+from app.services.draft_content import assemble_draft_content, clean_draft_title
+from app.services.draft_save import DraftSaveError, save_confirmed_draft
+from app.services.draft_trace import DraftRunLink, draft_run_link, draft_stage
 from app.services.draft_brief import DraftBrief, generation_request
 from app.services.heading_numbers import draft_numbering_style, number_generated_section, number_markdown_headings
 from app.utils import random_id
@@ -77,10 +79,12 @@ class DraftCreatePayload(BaseModel):
     outline: str = ""
     sections: list[DraftSectionPayload] = []
     idempotencyKey: Optional[str] = None
+    checkpointId: str | None = Field(default=None, max_length=64)
     bodyInstruction: str = ""
 
 
 class DraftUpdatePayload(BaseModel):
+    expectedUpdatedAt: Optional[str] = None
     title: Optional[str] = None
     categoryId: Optional[str] = None
     outline: Optional[str] = None
@@ -103,10 +107,12 @@ class DraftSectionUpdatePayload(BaseModel):
     content: Optional[str] = None
     status: Optional[str] = None
     source: str = "revise_section"
+    generationKey: Optional[str] = None
 
 
 class DraftAssemblePayload(BaseModel):
     content: Optional[str] = None
+    expectedUpdatedAt: Optional[str] = None
 
 
 class DraftSavePayload(BaseModel):
@@ -125,11 +131,6 @@ def _now() -> datetime:
 
 def _dt(value: Optional[datetime]) -> Optional[str]:
     return value.isoformat() if value else None
-
-
-def _clean_title(value: str) -> str:
-    title = value.strip().removesuffix(".md").strip()
-    return title[:255] or "未命名笔记"
 
 
 def _clean_section_title(value: str) -> str:
@@ -242,18 +243,6 @@ def _make_section_version(section: NoteDraftSection, source: str) -> NoteDraftSe
     )
 
 
-def _make_note_version(note: Note) -> NoteVersion:
-    return NoteVersion(
-        id=random_id(),
-        note_id=note.id,
-        user_id=note.user_id,
-        title=note.title,
-        content=note.content or "",
-        change_summary="AI 草稿保存为正式笔记",
-        source="draft_save",
-    )
-
-
 def _parse_outline_sections(outline: str) -> list[DraftSectionPayload]:
     from app.services.heading_numbers import unnumber_generated_headings
     outline = unnumber_generated_headings(outline)
@@ -309,28 +298,8 @@ def _parse_outline_sections(outline: str) -> list[DraftSectionPayload]:
     return sections
 
 
-def _assemble_from_sections(draft: NoteDraft, sections: list[NoteDraftSection]) -> str:
-    title_pattern = re.compile(rf"(^|\n{{2,}})#\s+{re.escape(draft.title)}\s*\n+", re.IGNORECASE)
-    ordered = sorted(
-        [section for section in sections if section.deleted_at is None],
-        key=lambda item: item.sort_order,
-    )
-    body_parts: list[str] = []
-    for section in ordered:
-        content = (section.content or "").strip()
-        if content:
-            body_parts.append(title_pattern.sub(lambda match: match.group(1), content).strip())
-            continue
-        heading = "#" * max(1, min(section.level, 4))
-        outline_text = section.outline_text.strip()
-        body_parts.append(outline_text if re.match(r"^#{1,6}\s+", outline_text) else f"{heading} {section.title}\n\n{outline_text}".strip())
-    if body_parts:
-        return number_markdown_headings("\n\n".join(body_parts).strip(), draft.title, style=draft_numbering_style(draft))
-    return number_markdown_headings((draft.assembled_content or draft.outline or "").strip(), draft.title, style=draft_numbering_style(draft))
-
-
 def _outline_from_sections(draft: NoteDraft, sections: list[NoteDraftSection]) -> str:
-    parts = [f"# {_clean_title(draft.title)}"]
+    parts = [f"# {clean_draft_title(draft.title)}"]
     ordered = sorted(
         [section for section in sections if section.deleted_at is None],
         key=lambda item: item.sort_order,
@@ -350,11 +319,18 @@ async def _ensure_category(session, user_id: str, category_id: Optional[str]):
         raise HTTPException(status_code=404, detail="category not found")
 
 
-async def _get_draft(session, user_id: str, draft_id: str) -> NoteDraft:
-    draft = await DraftRepository(session).get(user_id, draft_id)
+async def _get_draft(session, user_id: str, draft_id: str, *, for_update: bool = False) -> NoteDraft:
+    repository = DraftRepository(session)
+    get_draft = repository.get_for_update if for_update else repository.get
+    draft = await get_draft(user_id, draft_id)
     if draft is None:
         raise HTTPException(status_code=404, detail="draft not found")
     return draft
+
+
+def _require_section_draft(draft: NoteDraft) -> None:
+    if draft.status == "assembled" and (draft.draft_config or {}).get("assembledRevision"):
+        raise HTTPException(status_code=409, detail="草稿正文已整篇更新，请重新打开查看修改后的正文。")
 
 
 async def _get_sections(session, user_id: str, draft_id: str) -> list[NoteDraftSection]:
@@ -408,11 +384,35 @@ async def create_draft(
     payload: DraftCreatePayload,
     user: CurrentUser = Depends(get_current_user),
 ):
+    started = time.perf_counter()
+    link = None
     async with AsyncSessionLocal() as session:
+        drafts = DraftRepository(session)
+        checkpoint = None
+        config = dict(payload.draftConfig)
+        if payload.checkpointId:
+            checkpoint = await RunRepository(session).get_checkpoint(user.id, payload.checkpointId, for_update=True)
+            if checkpoint is None or checkpoint.checkpoint_type != "draft_workspace":
+                raise HTTPException(404, detail="草稿任务不存在。")
+            bound_id = (checkpoint.payload or {}).get("draftId")
+            if bound_id:
+                existing = await drafts.get(user.id, bound_id)
+                if existing is None:
+                    raise HTTPException(409, detail="任务关联的草稿已不可用。")
+                return {"draft": _draft_out(existing, await _get_sections(session, user.id, existing.id)),
+                        "idempotentReplay": True}
+            if checkpoint.status != "waiting_user_confirm":
+                raise HTTPException(409, detail="草稿任务已结束。")
+            config.pop("sourceNoteId", None)
+            if source := (checkpoint.payload or {}).get("sourceNoteId"):
+                config["sourceNoteId"] = source
+            link = await DraftRunLink.from_checkpoint(session, checkpoint)
         idempotency_key = (payload.idempotencyKey or "").strip()
         if idempotency_key:
-            existing = await DraftRepository(session).get_by_idempotency_key(user.id, idempotency_key)
+            existing = await drafts.get_by_idempotency_key(user.id, idempotency_key)
             if existing is not None:
+                if checkpoint:
+                    raise HTTPException(409, detail="该保存请求已用于另一份草稿。")
                 return {
                     "draft": _draft_out(existing, await _get_sections(session, user.id, existing.id)),
                     "idempotentReplay": True,
@@ -424,8 +424,8 @@ async def create_draft(
         draft = NoteDraft(
             id=random_id(),
             user_id=user.id,
-            title=_clean_title(payload.title or payload.topic),
-            topic=_clean_title(payload.topic),
+            title=clean_draft_title(payload.title or payload.topic),
+            topic=clean_draft_title(payload.topic),
             category_id=payload.categoryId,
             note_type=payload.noteType,
             writing_tone=payload.writingTone,
@@ -435,37 +435,34 @@ async def create_draft(
             include_exercises=payload.includeExercises,
             extra_request=payload.extraRequest,
             draft_config={
-                **payload.draftConfig,
+                **config,
                 "bodyInstruction": (
                     payload.bodyInstruction
                     or str((payload.draftConfig or {}).get("bodyInstruction") or "")
                 ).strip()[:4000],
                 "orchestration": {
                     **dict((payload.draftConfig or {}).get("orchestration") or {}),
-                    "runtime": "langgraph",
+                    "runtime": "database",
                     "stage": "outline_ready" if status == "outline_ready" else "requirements",
                 },
             },
             outline=outline,
             status=status,
             idempotency_key=idempotency_key or None,
-            runtime="langgraph",
-            graph_thread_id=f"draft-{random_id()}",
+            runtime="database",
         )
         session.add(draft)
         await session.flush()
         await _replace_sections(session, draft, sections)
         draft.outline = number_markdown_headings(outline, draft.title, style=draft_numbering_style(draft)) if outline else _outline_from_sections(draft, await _get_sections(session, user.id, draft.id))
-        initialized = await initialize_draft_graph(
-            user_id=user.id, thread_id=draft.graph_thread_id,
-            draft_id=draft.id, topic=draft.topic, outline=draft.outline,
-        )
-        if not initialized:
-            await session.rollback()
-            raise HTTPException(status_code=503, detail="LangGraph 草稿流程初始化失败，请稍后重试")
+        if checkpoint:
+            bind_created_draft(checkpoint, draft.id)
         await session.commit()
         await session.refresh(draft)
-        return {"draft": _draft_out(draft, await _get_sections(session, user.id, draft.id))}
+        response = {"draft": _draft_out(draft, await _get_sections(session, user.id, draft.id))}
+        draft_id = draft.id
+    async with draft_stage(link, "create_draft", started=started, draftId=draft_id):
+        return response
 
 
 @router.get("/note-drafts/{draft_id}")
@@ -486,9 +483,15 @@ async def update_draft(
     user: CurrentUser = Depends(get_current_user),
 ):
     async with AsyncSessionLocal() as session:
-        draft = await DraftRepository(session).get_for_update(user.id, draft_id) if payload.generationBrief else await _get_draft(session, user.id, draft_id)
-        if draft is None:
-            raise HTTPException(status_code=404, detail="draft not found")
+        draft = await _get_draft(session, user.id, draft_id, for_update=True)
+        if payload.regenerateGenerated or payload.model_fields_set.intersection({
+            "outline", "assembledContent", "status", "sections", "sectionOrder", "generationBrief",
+        }):
+            _require_section_draft(draft)
+        if payload.expectedUpdatedAt and (
+            draft.status != "outline_ready" or _dt(draft.updated_at) != payload.expectedUpdatedAt
+        ):
+            raise HTTPException(status_code=409, detail="草稿已变化，请重新打开后再修改。")
         if payload.generationBrief is not None:
             if draft.status in {"generating", "saved", "canceled"}:
                 raise HTTPException(status_code=409, detail="草稿当前状态不允许重新生成大纲")
@@ -508,7 +511,7 @@ async def update_draft(
             config.pop("generationJob", None)
             draft.draft_config = config
             draft.topic = brief["title"].strip()
-            draft.title = _clean_title(brief["title"])
+            draft.title = clean_draft_title(brief["title"])
             draft.extra_request = generation_request(brief)
             if payload.includeCode is not None:
                 draft.include_code = payload.includeCode
@@ -517,7 +520,7 @@ async def update_draft(
         if payload.categoryId is not None:
             await _ensure_category(session, user.id, payload.categoryId)
         if payload.title is not None:
-            draft.title = _clean_title(payload.title)
+            draft.title = clean_draft_title(payload.title)
         if "categoryId" in payload.model_fields_set:
             draft.category_id = payload.categoryId
         if payload.outline is not None:
@@ -527,18 +530,16 @@ async def update_draft(
         if payload.status is not None:
             draft.status = _normalize_status(payload.status, DRAFT_STATUSES, draft.status)
         if payload.sections is not None:
+            if payload.expectedUpdatedAt and any(
+                section.deleted_at is None and section.content.strip()
+                for section in await _get_sections(session, user.id, draft.id)
+            ):
+                raise HTTPException(status_code=409, detail="这篇草稿已有部分正文，请在工作台选择要修改的章节。")
             await _replace_sections(session, draft, payload.sections)
             if payload.status is None:
                 draft.status = "outline_ready"
         if payload.outline is not None:
             draft.outline = number_markdown_headings(draft.outline, draft.title, style=draft_numbering_style(draft))
-        if payload.generationBrief is not None and payload.outline is not None:
-            draft.graph_thread_id = f"draft-{random_id()}"
-            initialized = await initialize_draft_graph(user_id=user.id, thread_id=draft.graph_thread_id,
-                draft_id=draft.id, topic=draft.topic, outline=draft.outline)
-            if not initialized:
-                await session.rollback()
-                raise HTTPException(status_code=503, detail="LangGraph 草稿流程初始化失败，请稍后重试")
         if payload.sectionOrder is not None:
             sections = await _get_sections(session, user.id, draft.id)
             active_sections = [section for section in sections if section.deleted_at is None]
@@ -595,8 +596,30 @@ async def update_draft_section(
     user: CurrentUser = Depends(get_current_user),
 ):
     async with AsyncSessionLocal() as session:
-        draft = await _get_draft(session, user.id, draft_id)
+        draft = await _get_draft(session, user.id, draft_id, for_update=True)
+        _require_section_draft(draft)
         section = await _get_section(session, user.id, draft.id, section_id)
+        generation_key = None
+        single_generation = payload.source in {"generate_section", "generation_stopped"}
+        if single_generation:
+            if draft.status in {"saved", "canceled"} or section.deleted_at is not None:
+                raise HTTPException(409, detail="草稿状态已变化，请查看最新章节。")
+            if payload.source == "generate_section" and payload.status == "generating":
+                if draft.status == "generating":
+                    raise HTTPException(409, detail="草稿正在批量生成，请稍后再修改这一章。")
+                generation_key = f"single:{random_id()}"
+            elif (
+                not payload.generationKey
+                or not payload.generationKey.startswith("single:")
+                or section.generation_key != payload.generationKey
+                or section.status != "generating"
+            ):
+                raise HTTPException(409, detail="这次生成已失效，请查看最新章节。")
+            section.generation_key = generation_key
+        elif (section.generation_key or "").startswith("single:"):
+            section.generation_key = None
+            if section.status == "generating" and payload.status is None:
+                section.status = "generated" if section.content.strip() else "outline_only"
         session.add(_make_section_version(section, payload.source))
 
         if payload.title is not None:
@@ -634,9 +657,13 @@ async def update_draft_section(
                 draft,
                 await _get_sections(session, user.id, draft.id),
             )
+        draft.updated_at = _now()
         await session.commit()
         await session.refresh(draft)
-        return {"draft": _draft_out(draft, await _get_sections(session, user.id, draft.id))}
+        result = {"draft": _draft_out(draft, await _get_sections(session, user.id, draft.id))}
+        if generation_key:
+            result["generationKey"] = generation_key
+        return result
 
 
 @router.post("/note-drafts/{draft_id}/sections")
@@ -646,7 +673,8 @@ async def create_draft_section(
     user: CurrentUser = Depends(get_current_user),
 ):
     async with AsyncSessionLocal() as session:
-        draft = await _get_draft(session, user.id, draft_id)
+        draft = await _get_draft(session, user.id, draft_id, for_update=True)
+        _require_section_draft(draft)
         if draft.status in {"generating", "saved", "canceled"}:
             raise HTTPException(status_code=409, detail="current draft cannot add sections")
         sections = await _get_sections(session, user.id, draft.id)
@@ -682,10 +710,11 @@ async def generate_draft_section(
     payload: DraftSectionUpdatePayload,
     user: CurrentUser = Depends(get_current_user),
 ):
-    payload.status = payload.status or "generated"
-    if "source" not in payload.model_fields_set:
-        payload.source = "generate_section"
-    return await update_draft_section(draft_id, section_id, payload, user)
+    link = await draft_run_link(user.id, draft_id, sessions=AsyncSessionLocal)
+    async with draft_stage(link, "save_section", draftId=draft_id, sectionId=section_id, entry="single"):
+        return await update_draft_section(
+            draft_id, section_id, payload.model_copy(update={"status": "generated", "source": "generate_section"}), user
+        )
 
 
 @router.post("/note-drafts/{draft_id}/sections/{section_id}/confirm")
@@ -725,14 +754,24 @@ async def assemble_draft(
     user: CurrentUser = Depends(get_current_user),
 ):
     async with AsyncSessionLocal() as session:
-        draft = await _get_draft(session, user.id, draft_id)
+        draft = await _get_draft(session, user.id, draft_id, for_update=True)
+        if not payload.expectedUpdatedAt:
+            _require_section_draft(draft)
+        if draft.status in {"saved", "canceled"} or (payload.expectedUpdatedAt and (
+            draft.status != "assembled" or _dt(draft.updated_at) != payload.expectedUpdatedAt
+        )):
+            raise HTTPException(status_code=409, detail="草稿已变化，请重新打开后再修改。")
+        if payload.expectedUpdatedAt and not (payload.content or "").strip():
+            raise HTTPException(status_code=400, detail="修改后的草稿正文不能为空。")
         sections = await _get_sections(session, user.id, draft.id)
-        content = payload.content.strip() if payload.content else _assemble_from_sections(draft, sections)
+        content = payload.content.strip() if payload.content else assemble_draft_content(draft, sections)
         content = number_markdown_headings(content, draft.title, style=draft_numbering_style(draft))
         if not content:
             raise HTTPException(status_code=400, detail="draft content is empty")
         draft.assembled_content = content
         draft.status = "assembled"
+        if payload.expectedUpdatedAt:
+            draft.draft_config = {**(draft.draft_config or {}), "assembledRevision": True}
         await session.commit()
         await session.refresh(draft)
         return {"draft": _draft_out(draft, await _get_sections(session, user.id, draft.id))}
@@ -747,7 +786,8 @@ async def generate_all_draft_sections(
     from app.services.draft_worker import notify_draft_worker
 
     async with AsyncSessionLocal() as session:
-        draft = await _get_draft(session, user.id, draft_id)
+        draft = await _get_draft(session, user.id, draft_id, for_update=True)
+        _require_section_draft(draft)
         if draft.status == "saved":
             return {"draft": _draft_out(draft, await _get_sections(session, user.id, draft.id))}
         if draft.status == "canceled":
@@ -773,18 +813,6 @@ async def generate_all_draft_sections(
             "startedAt": previous_job.get("startedAt") or _now().isoformat(),
             "updatedAt": _now().isoformat(),
         }
-        if not draft.graph_thread_id:
-            draft.runtime = "langgraph"
-            draft.graph_thread_id = f"draft-{random_id()}"
-            initialized = await initialize_draft_graph(
-                user_id=user.id, thread_id=draft.graph_thread_id,
-                draft_id=draft.id, topic=draft.topic, outline=draft.outline,
-            )
-            if not initialized:
-                raise HTTPException(status_code=503, detail="LangGraph 草稿流程初始化失败，请稍后重试")
-        resumed = await resume_draft_generation(thread_id=draft.graph_thread_id)
-        if not resumed:
-            raise HTTPException(status_code=503, detail="LangGraph 草稿流程恢复失败，请稍后重试")
         draft.draft_config = config
         draft.status = "generating"
         await session.commit()
@@ -806,7 +834,7 @@ async def stop_all_draft_sections(
     )
 
     async with AsyncSessionLocal() as session:
-        draft = await _get_draft(session, user.id, draft_id)
+        draft = await _get_draft(session, user.id, draft_id, for_update=True)
         if draft.status not in {"generating", "failed"}:
             return {"draft": _draft_out(draft, await _get_sections(session, user.id, draft.id))}
         config = dict(draft.draft_config or {})
@@ -834,73 +862,38 @@ async def save_draft_to_notes(
     payload: DraftSavePayload,
     user: CurrentUser = Depends(get_current_user),
 ):
-    if not payload.confirm:
-        raise HTTPException(status_code=400, detail="save confirmation is required")
-
-    async with AsyncSessionLocal() as session:
-        draft = await DraftRepository(session).get_for_update(user.id, draft_id)
-        if draft is None:
-            raise HTTPException(status_code=404, detail="draft not found")
-        if draft.saved_note_id:
-            note = await NoteRepository(session).get(user.id, draft.saved_note_id)
-            job = await IndexJobRepository(session).latest_for_note(user.id, draft.saved_note_id)
-            if note is None:
-                raise HTTPException(status_code=409, detail="draft saved note is unavailable")
-            return {
-                "draft": _draft_out(draft, await _get_sections(session, user.id, draft.id)),
-                "note": _note_out(note),
-                "job": _index_job_out(job) if job else None,
-                "idempotentReplay": True,
-            }
-        category_id = payload.categoryId if "categoryId" in payload.model_fields_set else draft.category_id
-        await _ensure_category(session, user.id, category_id)
-        sections = await _get_sections(session, user.id, draft.id)
-        content = (draft.assembled_content or _assemble_from_sections(draft, sections)).strip()
-        if not content:
-            raise HTTPException(status_code=400, detail="draft content is empty")
-        if not draft.graph_thread_id:
-            draft.runtime = "langgraph"
-            draft.graph_thread_id = f"draft-{random_id()}"
-            initialized = await initialize_draft_graph(
-                user_id=user.id, thread_id=draft.graph_thread_id,
-                draft_id=draft.id, topic=draft.topic, outline=draft.outline,
+    link = await draft_run_link(user.id, draft_id, sessions=AsyncSessionLocal)
+    async with draft_stage(link, "save_note", draftId=draft_id) as trace:
+        try:
+            result = await save_confirmed_draft(
+                user_id=user.id,
+                draft_id=draft_id,
+                confirmed=payload.confirm,
+                title=payload.title,
+                category_id=payload.categoryId,
+                use_draft_category="categoryId" not in payload.model_fields_set,
             )
-            if not initialized:
-                raise HTTPException(status_code=503, detail="LangGraph 草稿流程初始化失败，请稍后重试")
-        authorized = await authorize_draft_save(
-            thread_id=draft.graph_thread_id, assembled_content=content,
-        )
-        if not authorized:
-            raise HTTPException(status_code=503, detail="LangGraph 草稿保存授权失败，请稍后重试")
-        note = Note(
-            id=random_id(),
-            user_id=user.id,
-            title=_clean_title(payload.title or draft.title),
-            category_id=category_id,
-            summary=None,
-            tags=[],
-            content=content,
-            is_pinned=False,
-            is_favorite=False,
-            index_status="pending",
-        )
-        session.add(note)
-        await session.flush()
-        session.add(_make_note_version(note))
-        job = await index_note_now(session, note)
-        draft.status = "saved"
-        draft.saved_note_id = note.id
-        draft.saved_at = _now()
-        draft.assembled_content = content
-        await session.commit()
-        await session.refresh(draft)
-        await session.refresh(note)
-        await session.refresh(job)
-        return {
-            "draft": _draft_out(draft, await _get_sections(session, user.id, draft.id)),
-            "note": _note_out(note),
-            "job": _index_job_out(job),
-        }
+        except DraftSaveError as exc:
+            status, detail = {
+                "confirmation_required": (400, "save confirmation is required"),
+                "draft_missing": (404, "draft not found"),
+                "saved_note_missing": (409, "draft saved note is unavailable"),
+                "category_missing": (404, "category not found"),
+                "empty_draft": (400, "draft content is empty"),
+                "draft_canceled": (409, "canceled draft cannot be saved"),
+            }[str(exc)]
+            trace["reason"] = str(exc)
+            raise HTTPException(status_code=status, detail=detail) from exc
+        trace.update(noteId=result.note.id, replayed=result.replayed)
+
+    response = {
+        "draft": _draft_out(result.draft, result.sections),
+        "note": _note_out(result.note),
+        "job": _index_job_out(result.job) if result.job else None,
+    }
+    if result.replayed:
+        response["idempotentReplay"] = True
+    return response
 
 
 @router.post("/note-drafts/{draft_id}/cancel")
@@ -909,11 +902,14 @@ async def cancel_draft(
     user: CurrentUser = Depends(get_current_user),
 ):
     async with AsyncSessionLocal() as session:
-        draft = await _get_draft(session, user.id, draft_id)
-        if draft.status == "saved":
+        draft = await _get_draft(session, user.id, draft_id, for_update=True)
+        if draft.saved_note_id or draft.status == "saved":
             raise HTTPException(status_code=409, detail="saved draft cannot be canceled")
         draft.status = "canceled"
         draft.canceled_at = _now()
+        await settle_linked_checkpoints(
+            session, user_id=user.id, checkpoint_type="draft_workspace", object_id=draft.id, status="cancelled",
+        )
         await session.commit()
         await session.refresh(draft)
         return {"draft": _draft_out(draft, await _get_sections(session, user.id, draft.id))}

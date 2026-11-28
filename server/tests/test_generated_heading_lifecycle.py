@@ -5,29 +5,64 @@ from unittest.mock import AsyncMock, patch
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
+from fastapi import HTTPException
 
 from app.deps import CurrentUser
-from app.models.db import User, Note, NoteCategory, NoteVersion, NoteIndexJob, NoteDraft, NoteDraftSection, NoteDraftSectionVersion, NoteEditPreview
-from app.routers import drafts, notes
-from app.services import draft_worker
+from app.models.db import AgentCheckpoint, User, Note, NoteCategory, NoteVersion, NoteIndexJob, NoteDraft, NoteDraftSection, NoteDraftSectionVersion, NoteEditPreview
+from app.routers import agent, drafts, notes
+from app.services import draft_save, draft_worker, note_write
 from app.services.heading_number_repair import repair_heading_numbers, content_hash
 from app.services import heading_number_repair
 
 
 class GeneratedHeadingLifecycleTest(unittest.IsolatedAsyncioTestCase):
+    async def test_chat_revision_checks_the_assembled_draft_version(self):
+        draft = await self.create()
+        original = (await drafts.assemble_draft(
+            draft["id"], drafts.DraftAssemblePayload(content="原草稿"), self.user,
+        ))["draft"]
+        checkpoint = {"checkpointType": "draft_workspace", "payload": {"draftId": draft["id"]}}
+        with (patch.object(agent, "AsyncSessionLocal", self.sessions),
+              patch.object(agent, "_latest_waiting_checkpoint", AsyncMock(return_value=checkpoint)) as load_checkpoint):
+            _, bound = await agent._bound_draft(self.user.id, "session", draft["id"])
+            load_checkpoint.assert_awaited_once_with(self.user.id, "session")
+            self.assertEqual(bound.id, draft["id"])
+            self.assertEqual(await agent._bound_draft(self.user.id, "session", "another-draft"), (None, None))
+            self.assertEqual(await agent._bound_draft("another-owner", "session", draft["id"]), (None, None))
+        revised = (await drafts.assemble_draft(
+            draft["id"], drafts.DraftAssemblePayload(content="缩短后", expectedUpdatedAt=original["updatedAt"]), self.user,
+        ))["draft"]
+        self.assertEqual(revised["id"], draft["id"])
+        self.assertEqual(revised["assembledContent"], "缩短后")
+        self.assertTrue(revised["draftConfig"]["assembledRevision"])
+        with self.assertRaises(HTTPException) as conflict:
+            await drafts.assemble_draft(
+                draft["id"], drafts.DraftAssemblePayload(content="迟到的修改", expectedUpdatedAt=original["updatedAt"]), self.user,
+            )
+        self.assertEqual(conflict.exception.status_code, 409)
+        with self.assertRaises(HTTPException) as outdated_section:
+            await drafts.update_draft_section(draft["id"], draft["sections"][0]["id"],
+                                            drafts.DraftSectionUpdatePayload(content="另一处的分章改写"), self.user)
+        self.assertEqual(outdated_section.exception.status_code, 409)
+        async with self.sessions() as session:
+            self.assertEqual((await session.get(NoteDraft, draft["id"])).assembled_content, "缩短后")
+            self.assertEqual(list((await session.execute(select(Note))).scalars()), [])
+        with patch.object(draft_save, "index_note_now", self.index):
+            saved = await drafts.save_draft_to_notes(draft["id"], drafts.DraftSavePayload(confirm=True), self.user)
+        self.assertEqual(saved["note"]["content"], "缩短后")
+
     async def asyncSetUp(self):
         self.engine = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool)
         self.addAsyncCleanup(self.engine.dispose)
         async with self.engine.begin() as connection:
-            for model in (User, NoteCategory, Note, NoteVersion, NoteIndexJob, NoteDraft, NoteDraftSection, NoteDraftSectionVersion, NoteEditPreview):
+            for model in (User, NoteCategory, Note, NoteVersion, NoteIndexJob, NoteDraft, NoteDraftSection, NoteDraftSectionVersion, NoteEditPreview, AgentCheckpoint):
                 await connection.run_sync(model.__table__.create)
         self.sessions = async_sessionmaker(self.engine, expire_on_commit=False)
         self.user = CurrentUser(id="heading-user", email="headings@example.invalid", display_name="合成用户")
         async with self.sessions() as session:
             session.add(User(id=self.user.id, email=self.user.email, display_name=self.user.display_name))
             await session.commit()
-        self.patches = [patch.object(module, "AsyncSessionLocal", self.sessions) for module in (drafts, notes, draft_worker)]
-        self.patches.extend([patch.object(drafts, "initialize_draft_graph", AsyncMock(return_value=True)), patch.object(drafts, "authorize_draft_save", AsyncMock(return_value=True))])
+        self.patches = [patch.object(module, "AsyncSessionLocal", self.sessions) for module in (drafts, notes, draft_save, draft_worker)]
         for item in self.patches:
             item.start()
             self.addCleanup(item.stop)
@@ -46,13 +81,60 @@ class GeneratedHeadingLifecycleTest(unittest.IsolatedAsyncioTestCase):
         await session.flush()
         return job
 
+    async def start_section(self, draft_id, section_id):
+        result = await drafts.update_draft_section(
+            draft_id, section_id, drafts.DraftSectionUpdatePayload(status="generating", source="generate_section"), self.user,
+        )
+        return result["generationKey"]
+
+    async def finish_section(self, draft_id, section_id, generation_key, content):
+        return await drafts.generate_draft_section(
+            draft_id, section_id, drafts.DraftSectionUpdatePayload(content=content, generationKey=generation_key), self.user,
+        )
+
+    async def test_older_single_section_attempt_cannot_write_or_reset_a_newer_result(self):
+        draft_id = (await self.create())["id"]
+        older_key = await self.start_section(draft_id, "2")
+        newer_key = await self.start_section(draft_id, "2")
+        self.assertNotEqual(older_key, newer_key)
+        with self.assertRaises(HTTPException) as conflict:
+            await self.finish_section(draft_id, "2", older_key, "旧请求提前返回")
+        self.assertEqual(conflict.exception.status_code, 409)
+        await self.finish_section(draft_id, "2", newer_key, "较新的生成结果")
+        for status, source in (("generated", "generate_section"), ("failed", "generate_section"), ("needs_revision", "generation_stopped")):
+            with self.subTest(status=status), self.assertRaises(HTTPException) as conflict:
+                await drafts.update_draft_section(
+                    draft_id, "2", drafts.DraftSectionUpdatePayload(
+                        generationKey=older_key, status=status, source=source, content="迟到的旧结果",
+                    ), self.user,
+                )
+            self.assertEqual(conflict.exception.status_code, 409)
+        with self.assertRaises(HTTPException) as conflict:
+            await self.finish_section(draft_id, "2", None, "旧客户端未提供生成标识")
+        self.assertEqual(conflict.exception.status_code, 409)
+        result = await drafts.get_draft(draft_id, self.user)
+        section = next(section for section in result["draft"]["sections"] if section["id"] == "2")
+        self.assertEqual(section["status"], "generated")
+        self.assertIn("较新的生成结果", section["content"])
+
+    async def test_manual_section_change_invalidates_pending_generation(self):
+        draft_id = (await self.create())["id"]
+        generation_key = await self.start_section(draft_id, "2")
+        await drafts.update_draft_section(draft_id, "2", drafts.DraftSectionUpdatePayload(content="手动修改"), self.user)
+        with self.assertRaises(HTTPException) as conflict:
+            await self.finish_section(draft_id, "2", generation_key, "模型旧内容")
+        self.assertEqual(conflict.exception.status_code, 409)
+        result = await drafts.get_draft(draft_id, self.user)
+        self.assertEqual(result["draft"]["sections"][2]["content"], "手动修改")
+
     async def test_outline_chapter_assembly_save_and_manual_delete_reopen(self):
         draft = await self.create()
         self.assertIn("## 1. 基础", draft["outline"])
         self.assertIn("## 3. 运行", draft["outline"])
         self.assertEqual([s["title"] for s in draft["sections"]], ["基础", "安装", "运行"])
         self.assertEqual(draft["sections"][2]["outlineText"], "## 3. 运行")
-        generated = await drafts.update_draft_section(draft["id"], "2", drafts.DraftSectionUpdatePayload(content="## 一、运行\n\n### 9.1 示例\n\n```md\n## 一、代码\n```", source="generate_section", status="generated"), self.user)
+        generation_key = await self.start_section(draft["id"], "2")
+        generated = await self.finish_section(draft["id"], "2", generation_key, "## 一、运行\n\n### 9.1 示例\n\n```md\n## 一、代码\n```")
         section_content = next(s["content"] for s in generated["draft"]["sections"] if s["id"] == "2")
         self.assertIn("## 3. 运行", section_content)
         self.assertIn("### 3.1 示例", section_content)
@@ -60,13 +142,17 @@ class GeneratedHeadingLifecycleTest(unittest.IsolatedAsyncioTestCase):
         assembled = await drafts.assemble_draft(draft["id"], drafts.DraftAssemblePayload(content="# 合成笔记\n\n## 基础\n\n## 安装\n\n" + section_content), self.user)
         content = assembled["draft"]["assembledContent"]
         self.assertIn("### 3.1 示例", content)
-        with patch.object(drafts, "index_note_now", self.index):
+        with patch.object(draft_save, "index_note_now", self.index):
             saved = await drafts.save_draft_to_notes(draft["id"], drafts.DraftSavePayload(confirm=True), self.user)
             replay = await drafts.save_draft_to_notes(draft["id"], drafts.DraftSavePayload(confirm=True), self.user)
         self.assertEqual(saved["note"]["content"], content)
         self.assertEqual(replay["note"]["content"], content)
+        self.assertEqual(replay["note"]["id"], saved["note"]["id"])
+        self.assertEqual(replay["job"]["id"], saved["job"]["id"])
+        self.assertNotIn("idempotentReplay", saved)
+        self.assertTrue(replay["idempotentReplay"])
         edited = content.replace("### 3.1 示例", "### 示例")
-        with patch.object(notes, "index_note_now", AsyncMock()):
+        with patch.object(note_write, "index_note_now", AsyncMock()):
             await notes.update_note(saved["note"]["id"], notes.NoteUpdatePayload(content=edited, expectedContentHash=saved["note"]["contentHash"]), self.user)
         async with self.sessions() as session:
             reopened = await session.get(Note, saved["note"]["id"])
@@ -80,7 +166,7 @@ class GeneratedHeadingLifecycleTest(unittest.IsolatedAsyncioTestCase):
         result = await drafts.update_draft_section(draft["id"], "2", drafts.DraftSectionUpdatePayload(content=manual, source="manual_edit"), self.user)
         self.assertEqual(next(s["content"] for s in result["draft"]["sections"] if s["id"] == "2"), manual)
         await drafts.update_draft(draft["id"], drafts.DraftUpdatePayload(assembledContent=manual, status="assembled"), self.user)
-        with patch.object(drafts, "index_note_now", self.index):
+        with patch.object(draft_save, "index_note_now", self.index):
             saved = await drafts.save_draft_to_notes(draft["id"], drafts.DraftSavePayload(confirm=True), self.user)
         self.assertEqual(saved["note"]["content"], manual.strip())
 
@@ -124,14 +210,15 @@ class GeneratedHeadingLifecycleTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_unassembled_outline_save_does_not_duplicate_heading(self):
         draft = await self.create()
-        with patch.object(drafts, "index_note_now", self.index):
+        with patch.object(draft_save, "index_note_now", self.index):
             saved = await drafts.save_draft_to_notes(draft["id"], drafts.DraftSavePayload(confirm=True), self.user)
         self.assertEqual(saved["note"]["content"], "## 1. 基础\n\n## 2. 安装\n\n## 3. 运行")
 
     async def test_explicit_workspace_reorder_reforms_numbers_and_keeps_section_versions(self):
         draft = await self.create()
         for section in draft["sections"]:
-            await drafts.update_draft_section(draft["id"], section["id"], drafts.DraftSectionUpdatePayload(content=f'## {section["title"]}\n\n### 示例\n\n正文', source="generate_section", status="generated"), self.user)
+            generation_key = await self.start_section(draft["id"], section["id"])
+            await self.finish_section(draft["id"], section["id"], generation_key, f'## {section["title"]}\n\n### 示例\n\n正文')
         result = await drafts.update_draft(draft["id"], drafts.DraftUpdatePayload(sectionOrder=["2", "0", "1"]), self.user)
         sections = result["draft"]["sections"]
         self.assertEqual(sections[0]["id"], "2")

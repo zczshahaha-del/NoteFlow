@@ -140,6 +140,43 @@ try {
   assert.equal(store.getState().fileContents.note, "将应用的手动稿");
   assert.equal(store.getState().editPreviewDrafts.apply, undefined);
 
+  seed("chat-apply");
+  store.getState().updateEditPreviewDraft("聊天入口的手动稿");
+  store.setState({ chatLoading: true, chatMessages: [{ id: "chat-answer", role: "assistant", text: "待应用" }] });
+  const applyFromChat = () => store.getState().applyEditPreviewRequest({
+    editId: "chat-apply", noteId: "note", assistantMessageId: "chat-answer",
+  });
+  const chatFailure = applyFromChat();
+  reply(await request("/chat-apply/content", "PATCH"), { preview: preview("chat-apply", "聊天入口的手动稿", "chat-base") });
+  reply(await request("/chat-apply/apply", "POST"), { detail: "暂时无法保存" }, 503);
+  await chatFailure;
+  assert.equal(store.getState().activeEditPreview.id, "chat-apply");
+  assert.equal(store.getState().fileContents.note, note.content);
+  assert.equal(store.getState().chatMessages[0].text, "暂时无法保存");
+
+  const chatRetry = applyFromChat();
+  reply(await request("/chat-apply/apply", "POST"), {
+    preview: { ...preview("chat-apply", "聊天入口的手动稿"), status: "applied" },
+    note: { ...note, content: "聊天入口的手动稿" },
+  });
+  await chatRetry;
+  assert.equal(store.getState().fileContents.note, "聊天入口的手动稿");
+  assert.equal(store.getState().activeEditPreview, null);
+  assert.equal(store.getState().chatLoading, true, "The chat stream still owns its busy state");
+  assert.equal(store.getState().chatMessages.length, 1);
+  assert.match(store.getState().chatMessages[0].text, /修改已应用/);
+
+  seed("chat-cancel");
+  store.setState({ chatLoading: true, chatMessages: [{ id: "cancel-answer", role: "assistant", text: "待取消" }] });
+  const cancelFromChat = store.getState().cancelEditPreviewRequest({
+    editId: "chat-cancel", assistantMessageId: "cancel-answer",
+  });
+  reply(await request("/chat-cancel/cancel", "POST"), { preview: { ...preview("chat-cancel"), status: "cancelled" } });
+  await cancelFromChat;
+  assert.equal(store.getState().fileContents.note, note.content);
+  assert.equal(store.getState().activeEditPreview, null);
+  assert.match(store.getState().chatMessages[0].text, /已取消/);
+
   seed("cancel");
   store.getState().updateEditPreviewDraft("放弃前的手动稿");
   const cancelling = store.getState().cancelEditPreviewRequest();
@@ -236,7 +273,7 @@ try {
   await switched;
   assert(!requests.some(item => item.url.endsWith("/flush-then-switch/apply")), "Switching before the write starts aborts old apply intent");
   assert.equal(store.getState().activeEditPreview.id, "switched-preview");
-  console.log(JSON.stringify({ ok: true, cases: 18, actualStore: true, syntheticOnly: true }));
+  console.log(JSON.stringify({ ok: true, cases: 20, actualStore: true, syntheticOnly: true }));
 } finally {
   await vite.close();
   dom.window.close();

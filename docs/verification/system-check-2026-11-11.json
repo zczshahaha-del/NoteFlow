@@ -1,0 +1,499 @@
+{
+  "date": "2026-11-11",
+  "sourceCommit": "5e6b11744268b31138903ef984729140746d6e1e",
+  "scope": "Local system check; no product source or runtime configuration changes",
+  "conclusion": "Common runtime paths pass; confirmed unresolved product risks and validation gaps remain.",
+  "qualityGate": {
+    "summary": {
+      "total": 22,
+      "passed": 15,
+      "failed": 7,
+      "durationSeconds": 27.71
+    },
+    "results": [
+      {
+        "category": "frontend",
+        "name": "tiptap-codec",
+        "status": "passed",
+        "exitCode": 0,
+        "durationSeconds": 1.065
+      },
+      {
+        "category": "frontend",
+        "name": "tiptap-selection",
+        "status": "passed",
+        "exitCode": 0,
+        "durationSeconds": 0.534
+      },
+      {
+        "category": "frontend",
+        "name": "editor-ui-contract",
+        "status": "passed",
+        "exitCode": 0,
+        "durationSeconds": 0.122
+      },
+      {
+        "category": "frontend",
+        "name": "wiki-links",
+        "status": "passed",
+        "exitCode": 0,
+        "durationSeconds": 0.148
+      },
+      {
+        "category": "frontend",
+        "name": "knowledge-import",
+        "status": "passed",
+        "exitCode": 0,
+        "durationSeconds": 0.147
+      },
+      {
+        "category": "frontend",
+        "name": "markdown-diff",
+        "status": "passed",
+        "exitCode": 0,
+        "durationSeconds": 0.148
+      },
+      {
+        "category": "frontend",
+        "name": "offline-conflict",
+        "status": "passed",
+        "exitCode": 0,
+        "durationSeconds": 0.142
+      },
+      {
+        "category": "frontend",
+        "name": "component-store",
+        "status": "passed",
+        "exitCode": 0,
+        "durationSeconds": 12.291
+      },
+      {
+        "category": "frontend",
+        "name": "pwa",
+        "status": "passed",
+        "exitCode": 0,
+        "durationSeconds": 0.148
+      },
+      {
+        "category": "frontend",
+        "name": "input-composition",
+        "status": "passed",
+        "exitCode": 0,
+        "durationSeconds": 0.139
+      },
+      {
+        "category": "backend-unit",
+        "name": "unittest-discovery",
+        "status": "passed",
+        "exitCode": 0,
+        "durationSeconds": 4.103
+      },
+      {
+        "category": "backend-contract",
+        "name": "context-planner",
+        "status": "failed",
+        "exitCode": 1,
+        "durationSeconds": 0.456
+      },
+      {
+        "category": "backend-contract",
+        "name": "runtime-events",
+        "status": "passed",
+        "exitCode": 0,
+        "durationSeconds": 0.41
+      },
+      {
+        "category": "backend-contract",
+        "name": "diagnostics",
+        "status": "passed",
+        "exitCode": 0,
+        "durationSeconds": 0.201
+      },
+      {
+        "category": "backend-memory",
+        "name": "memory-stage1",
+        "status": "failed",
+        "exitCode": 1,
+        "durationSeconds": 0.418
+      },
+      {
+        "category": "backend-memory",
+        "name": "memory-stage2",
+        "status": "failed",
+        "exitCode": 1,
+        "durationSeconds": 0.437
+      },
+      {
+        "category": "backend-memory",
+        "name": "memory-stage3",
+        "status": "failed",
+        "exitCode": 1,
+        "durationSeconds": 0.444
+      },
+      {
+        "category": "backend-memory",
+        "name": "memory-stage4",
+        "status": "failed",
+        "exitCode": 1,
+        "durationSeconds": 0.45
+      },
+      {
+        "category": "database",
+        "name": "postgres-pgvector-integration",
+        "status": "failed",
+        "exitCode": 1,
+        "durationSeconds": 1.928
+      },
+      {
+        "category": "rag",
+        "name": "rag-fixed-eval",
+        "status": "passed",
+        "exitCode": 0,
+        "durationSeconds": 0.954
+      },
+      {
+        "category": "memory",
+        "name": "memory-safety-eval",
+        "status": "failed",
+        "exitCode": 1,
+        "durationSeconds": 0.202
+      },
+      {
+        "category": "build",
+        "name": "production-build",
+        "status": "passed",
+        "exitCode": 0,
+        "durationSeconds": 2.814
+      }
+    ],
+    "failures": [
+      {
+        "name": "context-planner",
+        "classification": "stale test API or fixture assumptions",
+        "evidence": "references removed _classify_intent"
+      },
+      {
+        "name": "memory-stage1",
+        "classification": "stale test API or fixture assumptions",
+        "evidence": "references removed _classify_intent"
+      },
+      {
+        "name": "memory-stage2",
+        "classification": "stale test API or fixture assumptions",
+        "evidence": "references removed _classify_intent"
+      },
+      {
+        "name": "memory-stage3",
+        "classification": "stale test API or fixture assumptions",
+        "evidence": "references removed _classify_intent"
+      },
+      {
+        "name": "memory-stage4",
+        "classification": "stale test API or fixture assumptions",
+        "evidence": "references removed _classify_intent"
+      },
+      {
+        "name": "postgres-pgvector-integration",
+        "classification": "stale test API or fixture assumptions",
+        "evidence": "expects migration 0009 instead of 0012 and uses legacy local-memory fixture with Hindsight backend"
+      },
+      {
+        "name": "memory-safety-eval",
+        "classification": "stale test API or fixture assumptions",
+        "evidence": "references removed fallback_context_plan"
+      }
+    ]
+  },
+  "browserRegression": {
+    "total": 12,
+    "passedCommands": 10,
+    "failedCommands": 2,
+    "usesSyntheticServices": true,
+    "results": [
+      {
+        "name": "auth-ui",
+        "status": "failed",
+        "exitCode": 1,
+        "durationSeconds": 23.53
+      },
+      {
+        "name": "note-entry",
+        "status": "failed",
+        "exitCode": 1,
+        "durationSeconds": 2.54
+      },
+      {
+        "name": "workspace-layout",
+        "status": "passed",
+        "exitCode": 0,
+        "durationSeconds": 12.63
+      },
+      {
+        "name": "edit-preview",
+        "status": "passed",
+        "exitCode": 0,
+        "durationSeconds": 30.16
+      },
+      {
+        "name": "draft-ui",
+        "status": "passed",
+        "exitCode": 0,
+        "durationSeconds": 16.21
+      },
+      {
+        "name": "search-ui",
+        "status": "passed",
+        "exitCode": 0,
+        "durationSeconds": 13.27
+      },
+      {
+        "name": "account-menu",
+        "status": "passed",
+        "exitCode": 0,
+        "durationSeconds": 16.09
+      },
+      {
+        "name": "library-navigation",
+        "status": "passed",
+        "exitCode": 0,
+        "durationSeconds": 56.6
+      },
+      {
+        "name": "chat-ui",
+        "status": "passed",
+        "exitCode": 0,
+        "durationSeconds": 27.71
+      },
+      {
+        "name": "memory-console",
+        "status": "passed",
+        "exitCode": 0,
+        "durationSeconds": 2.14
+      },
+      {
+        "name": "workspace-flow",
+        "status": "passed",
+        "exitCode": 0,
+        "durationSeconds": 20.14
+      },
+      {
+        "name": "functional-diagnostic",
+        "status": "passed",
+        "exitCode": 0,
+        "durationSeconds": 4.6
+      }
+    ],
+    "failures": [
+      {
+        "name": "auth-ui",
+        "evidence": "six-digit code/placeholder width assertion failed; visual cause not isolated",
+        "classification": "layout validation gap, needs investigation"
+      },
+      {
+        "name": "note-entry",
+        "evidence": "expected rgb(234,240,245), actual rgb(231,238,242)",
+        "classification": "style expectation mismatch; downstream scenarios not executed"
+      }
+    ]
+  },
+  "storeRaceDiagnostics": {
+    "auditCompleted": true,
+    "mutatesProduct": false,
+    "allProbedRisksAbsent": true,
+    "actualStore": true,
+    "syntheticOnly": true,
+    "realNetworkRequests": 0,
+    "findings": [
+      {
+        "scenario": "late-create-vs-typing",
+        "riskConfirmed": false,
+        "expected": "新建后立即输入",
+        "observed": "新建后立即输入"
+      },
+      {
+        "scenario": "rapid-note-switch-cancels-save",
+        "riskConfirmed": false,
+        "putNoteIds": [
+          "timer-a",
+          "timer-b"
+        ],
+        "localAKept": true
+      },
+      {
+        "scenario": "other-note-save-status",
+        "riskConfirmed": false,
+        "selected": "status-b",
+        "status": "unsaved",
+        "bPutStarted": false
+      },
+      {
+        "scenario": "workspace-refresh-vs-typing",
+        "riskConfirmed": false,
+        "expected": "刷新请求期间输入",
+        "observed": "刷新请求期间输入"
+      },
+      {
+        "scenario": "failed-memory-toggle-cache",
+        "riskConfirmed": false,
+        "expectedEnabled": true,
+        "observedEnabled": true,
+        "persistedEnabled": "true"
+      }
+    ]
+  },
+  "postgresConcurrency": {
+    "run": 6,
+    "passed": 6,
+    "disposableDatabaseRemoved": true
+  },
+  "runtimeApi": {
+    "checks": {
+      "sessionAuthentication": true,
+      "folderAndNoteCreate": true,
+      "crossAccountNoteIsolation": true,
+      "editRenameMoveFavoriteAndConflict": true,
+      "versionHistoryAndRestore": true,
+      "editPreviewApplyAndIdempotentRetry": true,
+      "draftCreateConfirmAssembleSave": true,
+      "attachmentNormalUploadReadDeleteAndAccountIsolation": true,
+      "trashAndRestore": true,
+      "chatSessionLifecycle": true,
+      "realAgentChatStream": true
+    },
+    "risks": {
+      "signedAttachmentReadableWithoutSession": true,
+      "mixedCaseHtmlAccepted": true
+    },
+    "syntheticAccountsCleaned": true,
+    "emailDeliveryNotExercised": true
+  },
+  "memoryHttp": {
+    "ok": true,
+    "realHttp": true,
+    "sessionAuth": true,
+    "backgroundWorker": true,
+    "sharedContext": true,
+    "normalizedSourceAndGraph": true,
+    "capabilities": true,
+    "realOutage": false
+  },
+  "attachmentCommitFailure": {
+    "uploadFailure": {
+      "commitFailed": true,
+      "metadataRows": 0,
+      "orphanFiles": 1
+    },
+    "deleteFailure": {
+      "commitFailed": true,
+      "metadataRemains": true,
+      "fileMissing": true
+    },
+    "productFixed": false,
+    "isolatedSqliteAndTemporaryFiles": true
+  },
+  "linkSanitizer": {
+    "normalScriptLink": {
+      "hrefRetained": false,
+      "resolvedProtocol": null
+    },
+    "controlCharacterScriptLink": {
+      "hrefRetained": true,
+      "resolvedProtocol": "javascript:"
+    },
+    "actualNetworkRequests": 0,
+    "scriptExecuted": false
+  },
+  "exportRoundtrip": {
+    "exportedKeys": [
+      "format",
+      "version",
+      "exportedAt",
+      "treeData",
+      "fileContents"
+    ],
+    "importedRecordKeys": [
+      "title",
+      "content",
+      "sourcePath",
+      "tags"
+    ],
+    "contentPreserved": true,
+    "originalIdPreserved": false,
+    "favoritePreserved": false,
+    "pinPreserved": false,
+    "creationTimePreserved": false,
+    "fullRestoreContract": false,
+    "syntheticOnly": true
+  },
+  "dependencyAudit": {
+    "npmAllPackageEntries": {
+      "info": 0,
+      "low": 0,
+      "moderate": 33,
+      "high": 6,
+      "critical": 0,
+      "total": 39
+    },
+    "npmRuntimePackageEntries": {
+      "info": 0,
+      "low": 0,
+      "moderate": 32,
+      "high": 2,
+      "critical": 0,
+      "total": 34
+    },
+    "npmRuntimeUniqueAdvisories": [
+      {
+        "name": "@tiptap/core",
+        "title": "Tiptap: mergeAttributes() turns an own __proto__ key into inherited executable DOM attributes",
+        "severity": "moderate",
+        "range": ">=2.0.0-alpha.0 <3.30.4",
+        "url": "https://github.com/advisories/GHSA-cp6q-959q-f8rh"
+      },
+      {
+        "name": "@tiptap/core",
+        "title": "Tiptap: Quadratic ReDoS in block and inline Markdown attribute parsing",
+        "severity": "high",
+        "range": ">=3.7.0 <3.30.5",
+        "url": "https://github.com/advisories/GHSA-j95f-988m-3j2f"
+      },
+      {
+        "name": "prosemirror-view",
+        "title": "ProseMirror has a XSS vulnerability in prosemirror-view's paste handling",
+        "severity": "high",
+        "range": "<1.42.3",
+        "url": "https://github.com/advisories/GHSA-c8x8-7fp4-3x9w"
+      }
+    ],
+    "pythonAffectedPackages": [
+      {
+        "name": "langgraph-checkpoint-postgres",
+        "version": "3.1.0",
+        "matchingIdCount": 2
+      },
+      {
+        "name": "pyjwt",
+        "version": "2.10.1",
+        "matchingIdCount": 17
+      },
+      {
+        "name": "starlette",
+        "version": "0.41.3",
+        "matchingIdCount": 7
+      }
+    ],
+    "exploitabilityNotEstablishedByPackageMatch": true,
+    "advisoryAliasesCanOverlap": true
+  },
+  "cleanup": {
+    "syntheticCheckpointThreadsCleaned": 6,
+    "selectionRestrictedToThisRunTimeWindowAndTestPrefixes": true
+  },
+  "limitations": [
+    "Selected browser checks use isolated Edge and synthetic services, not real-device or all-browser acceptance",
+    "Runtime API test sessions are seeded synthetic sessions; real email delivery and account recovery not exercised",
+    "No production, long-running load, process-crash recovery or complete backup restore acceptance",
+    "No product fixes or dependency upgrades performed",
+    "A passing test command or diagnostic exit code does not negate the confirmed findings"
+  ]
+}

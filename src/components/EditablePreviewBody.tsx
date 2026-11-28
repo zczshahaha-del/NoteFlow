@@ -5,14 +5,16 @@ import { createNoteFlowTiptapExtensions } from "../editor/tiptapExtensions";
 import { getEditorMarkdown } from "../editor/documentCache";
 import { updateHeadingDocumentTitle } from "../editor/headingDecorations";
 import { PreviewReview, updatePreviewReview } from "../editor/previewReview";
+import type { MarkdownReviewBlock } from "../utils/markdownReview";
 import "./document-prose.css";
 
 /** An isolated document: editing here never invokes the note autosave pipeline. */
-export default function EditablePreviewBody({ previewId, content, oldContent, showComparison, disabled, onChange, onBlur, documentTitle = "" }: {
+export default function EditablePreviewBody({ previewId, content, oldContent, showComparison, highlights, disabled, onChange, onBlur, documentTitle = "" }: {
   previewId: string;
   content: string;
   oldContent: string;
   showComparison: boolean;
+  highlights: MarkdownReviewBlock[] | null;
   disabled: boolean;
   onChange: (content: string) => void;
   onBlur: () => void;
@@ -71,10 +73,10 @@ export default function EditablePreviewBody({ previewId, content, oldContent, sh
     if (!editor || editor.isDestroyed) return;
     // Keep composition and typing synchronous; comparison is decorative work.
     const timer = window.setTimeout(() => {
-      if (!editor.isDestroyed && !editor.view.composing) updatePreviewReview(editor, oldContent, content, showComparison, expandedOriginals.current);
-    }, showComparison ? 120 : 0);
+      if (!editor.isDestroyed && !editor.view.composing) updatePreviewReview(editor, oldContent, content, showComparison, expandedOriginals.current, highlights);
+    }, showComparison || highlights ? 120 : 0);
     return () => window.clearTimeout(timer);
-  }, [editor, oldContent, content, showComparison]);
+  }, [editor, oldContent, content, showComparison, highlights]);
 
   return <div role={showComparison ? "region" : undefined} aria-label={showComparison ? "段落对照" : undefined}>
     <EditorContent editor={editor} />

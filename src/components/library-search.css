@@ -4,7 +4,6 @@
   --nf-search-muted: var(--nf-ui-muted, #66717d);
   --nf-search-icon: var(--nf-ui-icon, #7e8791);
   --nf-search-surface: var(--nf-ui-surface, #fcfcfd);
-  --nf-search-soft: var(--nf-ui-soft, #f3f4f6);
   --nf-search-selected: var(--nf-ui-selected, #eceff2);
   --nf-search-highlight: #eee5d7;
   --nf-search-danger: var(--nf-ui-danger, #b34c49);
@@ -25,7 +24,6 @@
   --nf-search-muted: var(--nf-ui-muted, #a7b0bc);
   --nf-search-icon: var(--nf-ui-icon, #a8b1be);
   --nf-search-surface: var(--nf-ui-surface, #252b33);
-  --nf-search-soft: var(--nf-ui-soft, #2d3540);
   --nf-search-selected: var(--nf-ui-selected, #363f4a);
   --nf-search-highlight: #544735;
   --nf-search-danger: var(--nf-ui-danger, #ee9e97);
@@ -100,11 +98,10 @@
 .nf-library-search :where(.nf-search-clear, .nf-search-close, .nf-search-scope, .nf-search-retry):hover {
   background: var(--nf-search-selected);
 }
-.nf-library-search .nf-search-controls {
-  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
-  flex-shrink: 0; gap: 8px; padding: 0 12px 8px;
+.nf-library-search .nf-search-scopes {
+  display: flex; align-items: center; flex-shrink: 0;
+  gap: 3px; padding: 0 12px 8px;
 }
-.nf-library-search .nf-search-scopes { display: flex; align-items: center; gap: 3px; }
 .nf-library-search .nf-search-scope {
   min-height: 30px; padding: 4px 10px; border-radius: var(--nf-radius-icon, 8px);
   font-size: var(--nf-font-caption, 12px); color: var(--nf-search-muted);
@@ -112,7 +109,6 @@
 .nf-library-search .nf-search-scope[aria-pressed="true"] {
   background: var(--nf-search-selected); color: var(--nf-search-text); font-weight: 500;
 }
-.nf-library-search .nf-search-summary { font-size: var(--nf-font-caption, 12px); color: var(--nf-search-muted); overflow-wrap: anywhere; }
 .nf-library-search .nf-search-viewport {
   min-width: 0; min-height: 0; flex-shrink: 1; overflow-y: auto;
   overscroll-behavior: contain;
@@ -129,11 +125,10 @@
 }
 .nf-library-search .nf-search-empty {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 6px; min-height: 136px; padding: 18px 16px; text-align: center;
+  gap: 6px; min-height: 64px; padding: 12px 16px; text-align: center;
 }
 .nf-library-search .nf-search-empty p { overflow-wrap: anywhere; max-width: 100%; }
 .nf-library-search .nf-search-empty-title { font-weight: 500; }
-.nf-library-search .nf-search-empty-detail { font-size: var(--nf-font-caption, 12px); color: var(--nf-search-muted); }
 .nf-library-search .nf-search-error { color: var(--nf-search-danger); }
 .nf-library-search .nf-search-retry {
   display: flex; align-items: center; gap: 8px; min-height: 32px;
@@ -157,15 +152,6 @@
 }
 .nf-library-search .nf-search-more { display: block; margin-top: 7px; font-size: 11px; color: var(--nf-search-muted); }
 .nf-library-search .nf-search-highlight { border-radius: 3px; padding: 0 2px; background: var(--nf-search-highlight); color: inherit; }
-.nf-library-search .nf-search-footer {
-  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; flex-shrink: 0;
-  gap: 10px; margin: 0 4px; padding: 10px 8px 4px; font-size: 11px; color: var(--nf-search-muted);
-  border-top: 1px solid color-mix(in srgb, var(--nf-search-muted) 14%, transparent);
-}
-.nf-library-search .nf-search-key-hint { display: inline-flex; align-items: center; gap: 4px; }
-.nf-library-search .nf-search-key-hint > span { margin: 0 5px 0 1px; }
-.nf-library-search .nf-search-key-hint > span:last-child { margin-right: 0; }
-.nf-library-search kbd { min-width: 18px; height: 18px; padding: 0 4px; border-radius: 4px; background: var(--nf-search-soft); font: inherit; font-size: 10px; line-height: 18px; text-align: center; }
 .nf-library-search svg { flex: none; width: 17px; height: 17px; color: var(--nf-search-icon); stroke-width: 1.65; }
 .nf-library-search .nf-search-close svg { width: 15px; height: 15px; }
 @keyframes nf-search-fade-in { from { opacity: 0; } to { opacity: 1; } }
@@ -177,9 +163,8 @@
   .nf-library-search { --nf-search-top: 16px; padding-inline: 12px; }
   .nf-library-search .nf-search-field { gap: 8px; padding: 6px 8px; }
   .nf-library-search .nf-search-input { width: 0; flex: 1 1 0; }
-  .nf-library-search .nf-search-controls { padding: 0 8px 8px; }
+  .nf-library-search .nf-search-scopes { padding: 0 8px 8px; }
   .nf-library-search .nf-search-result { gap: 9px; }
-  .nf-library-search .nf-search-footer { padding: 10px 8px 5px; }
 }
 @media (pointer: coarse) {
   .nf-library-search .nf-search-close { width: 44px; height: 44px; }

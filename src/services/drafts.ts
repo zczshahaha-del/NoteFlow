@@ -83,12 +83,14 @@ export interface DraftCreatePayload {
   includeExercises: boolean;
   extraRequest: string;
   draftConfig?: Record<string, unknown>;
+  checkpointId?: string;
   outline?: string;
   sections?: DraftSectionPayload[];
   bodyInstruction?: string;
 }
 
 export interface DraftUpdatePayload {
+  expectedUpdatedAt?: string;
   title?: string;
   categoryId?: string | null;
   outline?: string;
@@ -111,7 +113,10 @@ export interface DraftSectionUpdatePayload {
   content?: string;
   status?: NoteDraftSectionStatus;
   source?: string;
+  generationKey?: string;
 }
+
+export class DraftSectionConflictError extends Error {}
 
 export async function createNoteDraft(payload: DraftCreatePayload): Promise<NoteDraftRecord> {
   const response = await apiFetch("/api/note-drafts", {
@@ -145,22 +150,43 @@ export async function updateNoteDraft(
   return data.draft;
 }
 
+async function writeDraftSection(
+  draftId: string,
+  sectionId: string,
+  payload: DraftSectionUpdatePayload,
+  method: "PUT" | "POST" = "PUT",
+) {
+  const response = await apiFetch(
+    `/api/note-drafts/${encodeURIComponent(draftId)}/sections/${encodeURIComponent(sectionId)}${method === "POST" ? "/generate" : ""}`,
+    {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }
+  );
+  if (!response.ok) {
+    const message = await readApiError(response);
+    if (response.status === 409) throw new DraftSectionConflictError(message);
+    throw new Error(message);
+  }
+  return readApiJson<{ draft: NoteDraftRecord; generationKey?: string }>(response);
+}
+
 export async function updateDraftSection(
   draftId: string,
   sectionId: string,
   payload: DraftSectionUpdatePayload
 ): Promise<NoteDraftRecord> {
-  const response = await apiFetch(
-    `/api/note-drafts/${encodeURIComponent(draftId)}/sections/${encodeURIComponent(sectionId)}`,
-    {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    }
-  );
-  if (!response.ok) throw new Error(await readApiError(response));
-  const data = await readApiJson<{ draft: NoteDraftRecord }>(response);
-  return data.draft;
+  return (await writeDraftSection(draftId, sectionId, payload)).draft;
+}
+
+export async function startDraftSectionGeneration(draftId: string, sectionId: string): Promise<string> {
+  const { generationKey } = await writeDraftSection(draftId, sectionId, {
+    status: "generating",
+    source: "generate_section",
+  });
+  if (!generationKey) throw new Error("未能启动章节生成，请刷新后重试。");
+  return generationKey;
 }
 
 export async function createDraftSection(
@@ -182,17 +208,7 @@ export async function generateDraftSection(
   sectionId: string,
   payload: DraftSectionUpdatePayload
 ): Promise<NoteDraftRecord> {
-  const response = await apiFetch(
-    `/api/note-drafts/${encodeURIComponent(draftId)}/sections/${encodeURIComponent(sectionId)}/generate`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    }
-  );
-  if (!response.ok) throw new Error(await readApiError(response));
-  const data = await readApiJson<{ draft: NoteDraftRecord }>(response);
-  return data.draft;
+  return (await writeDraftSection(draftId, sectionId, payload, "POST")).draft;
 }
 
 export async function confirmDraftSection(
@@ -236,12 +252,13 @@ export async function restoreDraftSection(
 
 export async function assembleNoteDraft(
   draftId: string,
-  content?: string
+  content?: string,
+  expectedUpdatedAt?: string
 ): Promise<NoteDraftRecord> {
   const response = await apiFetch(`/api/note-drafts/${encodeURIComponent(draftId)}/assemble`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({ content, expectedUpdatedAt }),
   });
   if (!response.ok) throw new Error(await readApiError(response));
   const data = await readApiJson<{ draft: NoteDraftRecord }>(response);

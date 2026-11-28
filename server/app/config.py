@@ -49,6 +49,12 @@ def _env_bool(key: str, default: bool = False) -> bool:
     return value.strip().lower() not in {"0", "false", "no", "off"}
 
 
+def _auth_cookie_name() -> str:
+    name = _env("AUTH_COOKIE_NAME", "noteflow_session")
+    base = _env("NOTEFLOW_BASE_PATH", "/")
+    return name if base == "/" else f"noteflow_path_{base.encode().hex()}_{name}"
+
+
 class Config:
     ENVIRONMENT: str = _env("ENVIRONMENT", "development")
     PROMPT_RELEASE_ROOT: str = _env("PROMPT_RELEASE_ROOT")
@@ -60,7 +66,7 @@ class Config:
     DB_PASSWORD: str = _env("DB_PASSWORD", "noteflow_password")
     DB_NAME: str = _env("DB_NAME", "noteflow")
     JWT_SECRET: str = _env("JWT_SECRET", "dev-only-change-this-secret")
-    AUTH_COOKIE_NAME: str = _env("AUTH_COOKIE_NAME", "noteflow_session")
+    AUTH_COOKIE_NAME: str = _auth_cookie_name()
     AUTH_COOKIE_SECURE: bool = _env_bool("AUTH_COOKIE_SECURE", ENVIRONMENT == "production")
     AUTH_ACCESS_TTL_MINUTES: int = _env_int("AUTH_ACCESS_TTL_MINUTES", 30)
     AUTH_SESSION_TTL_DAYS: int = _env_int("AUTH_SESSION_TTL_DAYS", 7)
@@ -100,7 +106,7 @@ class Config:
         "EMBEDDING_BASE_URL",
         "https://dashscope.aliyuncs.com/compatible-mode/v1",
     ).rstrip("/")
-    EMBEDDING_MODEL: str = _env("EMBEDDING_MODEL", "text-embedding-v4")
+    EMBEDDING_MODEL: str = _env("EMBEDDING_MODEL", "qwen3.7-text-embedding")
     EMBEDDING_DIMENSIONS: int = _env_int("EMBEDDING_DIMENSIONS", 1024)
     EMBEDDING_BATCH_SIZE: int = _env_int("EMBEDDING_BATCH_SIZE", 10)
     EMBEDDING_TIMEOUT_SECONDS: int = _env_int("EMBEDDING_TIMEOUT_SECONDS", 60)
@@ -138,7 +144,7 @@ class Config:
     # Alibaba Cloud Model Studio uses the same API key for embeddings and reranking.
     # A dedicated key can still override this for another reranker provider.
     RERANKER_API_KEY: str = _env("RERANKER_API_KEY", EMBEDDING_API_KEY)
-    RERANKER_MODEL: str = _env("RERANKER_MODEL", "")
+    RERANKER_MODEL: str = _env("RERANKER_MODEL", "qwen3.7-text-rerank")
     RERANKER_BATCH_SIZE: int = max(1, min(100, _env_int("RERANKER_BATCH_SIZE", 50)))
     MEM0_COLLECTION_NAME: str = _env("MEM0_COLLECTION_NAME", "noteflow_mem0_v1")
     MEM0_HISTORY_DB_PATH: str = _env("MEM0_HISTORY_DB_PATH", "/tmp/noteflow-mem0-history.db")

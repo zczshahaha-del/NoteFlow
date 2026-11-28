@@ -95,7 +95,7 @@ def memory_tool_context(action: str, memories: list[dict], question: str) -> str
             "请基于查询结果自然回答用户。"
             "不要说自己没有长期记忆能力。"
             "不要提‘长期记忆’‘记忆工具’‘保存记录’等内部机制，除非用户明确问记忆功能本身。"
-            "如果查到了名字、偏好、兴趣或目标，直接自然回答。"
+            "用与问题有关的事实直接回答，尊重每条事实的适用场景和项目；局部偏好仅用于对应场景。"
             "如果没查到相关信息，就自然说明还不知道，不要假装知道。"
         )
 
@@ -159,7 +159,7 @@ async def auto_save_memory_from_question(
     if await uses_engine(user_id):
         from app.memory.gateway import MemoryGateway
         try:
-            await MemoryGateway().submit(user_id, question)
+            await MemoryGateway().submit_turn(user_id, question, automatic=True)
         except Exception:
             logger.warning("Implicit memory queue submission failed")
         return []
@@ -179,20 +179,35 @@ async def save_memory_from_question(
     history: list[AgentChatMessageIn] | None = None,
     *,
     explicit: bool = True,
+    expected_revision: tuple[int, int] | None = None,
 ) -> tuple[str, list[dict]]:
     from app.memory.control import control, effective_mission, lock_owner, uses_engine
     if await uses_engine(user_id):
         from app.memory.gateway import MemoryGateway, public_record
         gateway = MemoryGateway()
-        source_id = await gateway.submit(user_id, question, metadata={"source": "user_explicit"})
+        source_id = await gateway.submit_turn(user_id, question, automatic=False)
         if source_id is None:
             return "没有保存记忆：功能已关闭或内容不适合长期保存。", []
-        records = await gateway.wait(user_id, source_id)
-        return (f"已保存 {len(records)} 条记忆。" if records else "整理尚未完成或没有形成长期事实，请到记忆管理查看处理状态。"), [public_record(r) for r in records]
+        records = await gateway.wait(user_id, source_id, seconds=45)
+        if records:
+            return f"已保存 {len(records)} 条记忆。", [public_record(r) for r in records]
+        from app.models.db import MemorySource
+        async with AsyncSessionLocal() as db:
+            turn = await db.get(MemorySource, source_id)
+            if turn and turn.user_id == user_id:
+                if turn.status == "organized" and turn.metadata_json.get("retired"):
+                    return "已撤下被纠正的记忆。", []
+                if turn.status == "empty":
+                    return "这段话没有形成新的长期记忆。", []
+        return "记忆尚未确认保存，请到记忆管理查看处理状态。", []
     async with AsyncSessionLocal() as db:
         settings, original_state = await control(db, user_id)
         if not settings.memory_enabled:
             return "长期记忆已关闭。", []
+        if expected_revision is not None and expected_revision != (
+            original_state.get("generation", 0), original_state.get("ruleVersion", 1),
+        ):
+            return "记忆设置已更新，请重新保存。", []
     candidates = await extract_memory_candidates_smart(
         question, "global", chat_history_for_memory(history), mission=effective_mission(original_state),
     )
@@ -614,7 +629,7 @@ async def history_recall_context(user_id: str, question: str) -> tuple[str, list
     if await uses_engine(user_id):
         from app.memory.gateway import MemoryGateway, public_record
         from app.memory.presentation import format_context
-        records = await MemoryGateway().read(user_id, query=question, limit=8)
+        records = await MemoryGateway().read(user_id, query=question, limit=8, historical=True)
         return format_context(records), [public_record(r) for r in records]
     async with AsyncSessionLocal() as db:
         memories = await find_memories(

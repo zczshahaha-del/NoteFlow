@@ -26,7 +26,21 @@ class GateCommand:
     env: dict[str, str] | None = None
 
 
+CORE_STORE_COMMANDS = [
+    GateCommand("core", "chat-stop-and-retry", ["npm", "run", "test:chat-retry"]),
+    GateCommand("core", "draft-lifecycle", ["npm", "run", "test:draft-lifecycle"]),
+    GateCommand("core", "note-save-scheduler", ["npm", "run", "test:note-save-scheduler"]),
+]
+
+CORE_BROWSER_COMMANDS = [
+    GateCommand("build", "production-build", ["npm", "run", "build"]),
+    GateCommand("browser", "draft-two-tabs-and-save-retry", ["npm", "run", "test:draft-ui"]),
+    GateCommand("browser", "note-two-tabs-and-offline-conflict", ["npm", "run", "test:note-conflict"]),
+    GateCommand("browser", "note-save-failure-and-retry", ["npm", "run", "test:note-entry"]),
+]
+
 FRONTEND_COMMANDS = [
+    GateCommand("frontend", "content-safety", ["npm", "run", "test:content-safety"]),
     GateCommand("frontend", "tiptap-codec", ["npm", "run", "test:tiptap-codec"]),
     GateCommand("frontend", "tiptap-selection", ["npm", "run", "test:tiptap-selection"]),
     GateCommand("frontend", "editor-ui-contract", ["npm", "run", "test:editor-ui"]),
@@ -132,18 +146,23 @@ def _write_markdown(report: dict, path: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run categorized NoteFlow quality gates")
-    parser.add_argument("--profile", choices=("fast", "full"), default="full")
+    parser.add_argument("--profile", choices=("core", "fast", "full"), default="full")
     parser.add_argument("--include-live-ai", action="store_true")
     parser.add_argument("--report-name", default="quality-gate-latest")
     args = parser.parse_args()
     if not re.fullmatch(r"[a-zA-Z0-9._-]+", args.report_name):
         parser.error("--report-name may contain only letters, digits, dot, underscore and dash")
 
-    commands = [*FRONTEND_COMMANDS, *BACKEND_COMMANDS]
+    commands = (
+        [*CORE_STORE_COMMANDS, BACKEND_COMMANDS[0], *CORE_BROWSER_COMMANDS]
+        if args.profile == "core"
+        else [*CORE_STORE_COMMANDS, *FRONTEND_COMMANDS, *BACKEND_COMMANDS]
+    )
     if args.profile == "full":
         commands.extend(DATABASE_AND_EVAL_COMMANDS)
-        commands.append(GateCommand("build", "production-build", ["npm", "run", "build"]))
+        commands.extend(CORE_BROWSER_COMMANDS)
     if args.include_live_ai:
+        commands.append(GateCommand("chat-live-regression", "chat-live", ["npm", "run", "test:chat-live"]))
         commands.append(GateCommand("e2e-live", "runtime-e2e", [sys.executable, "server/tests/runtime_e2e.py"]))
 
     results: list[dict] = []

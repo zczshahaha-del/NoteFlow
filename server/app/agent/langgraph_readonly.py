@@ -2,15 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import aclosing, asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional, TypedDict
 from urllib.parse import quote
+
+import anyio
 
 from app.agent.contracts import RuntimeEvent
 from app.config import cfg
 from app.providers.contracts import ChatProviderRequest, ProviderChatMessage
 from app.rag.pipeline.context import validate_citation_indexes
+from app.services.selection_context import has_selection_scope, selection_context_text, whole_note_id
+
+
+OPTIONAL_MEMORY_TIMEOUT_SECONDS = 8
 
 
 class ReadonlyAgentState(TypedDict, total=False):
@@ -25,7 +31,6 @@ class ReadonlyAgentState(TypedDict, total=False):
     page_state: dict[str, Any]
     turn_plan: dict[str, Any]
     memory_enabled: bool
-    suppress_memory_write: bool
     status: str
     intent: str
     route: str
@@ -36,7 +41,6 @@ class ReadonlyAgentState(TypedDict, total=False):
     sources: list[dict[str, Any]]
     rag_called: bool
     answer: str
-    memory_write_count: int
     error_code: str
     error_message: str
 
@@ -45,7 +49,6 @@ EmitEvent = Callable[[RuntimeEvent], Awaitable[None]]
 MemoryRecall = Callable[[ReadonlyAgentState], Awaitable[str]]
 RagSearch = Callable[[ReadonlyAgentState], Awaitable[dict[str, Any]]]
 AnswerStream = Callable[[ReadonlyAgentState], AsyncIterator[dict[str, Any]]]
-MemoryWrite = Callable[[ReadonlyAgentState], Awaitable[int]]
 
 
 async def _ignore_event(_event: RuntimeEvent) -> None:
@@ -75,6 +78,26 @@ async def _default_memory_recall(state: ReadonlyAgentState) -> str:
 async def _default_rag_search(state: ReadonlyAgentState) -> dict[str, Any]:
     from app.rag.service import RagRequest, configured_rag_service
     page_state = state.get("page_state") or {}
+    if page_state.get("contextScope") == "none" and state.get("mode") != "ask_notes":
+        return {"context_mode": "general", "context_text": "", "sources": [], "rag_called": False}
+    selection_scope = has_selection_scope(page_state)
+    selection = selection_context_text(page_state) if selection_scope else ""
+    note_id = whole_note_id(page_state, state["question"])
+    if note_id:
+        result = await configured_rag_service().retrieve(RagRequest(
+            user_id=state["user_id"],
+            question=state["question"],
+            note_id=note_id,
+            limit_note_excerpts=True,
+        ))
+        related = result.context_text if result.sources else "没有找到这篇笔记中可引用的段落。"
+        return {
+            "context_mode": "note_excerpt",
+            "context_text": f"{selection}\n\n同一篇笔记的检索结果：\n{related}".strip(),
+            "sources": result.sources,
+        }
+    if selection_scope:
+        return {"context_mode": "selection", "context_text": selection, "sources": [], "rag_called": False}
     plan = state.get("turn_plan") or {}
     context_sources = set(plan.get("context_sources") or [])
     library_scope = "knowledge_base" in context_sources
@@ -110,25 +133,9 @@ async def _default_answer_stream(state: ReadonlyAgentState) -> AsyncIterator[dic
         history=history,
         strict_note_answer=bool(state.get("requires_sources")),
     )
-    async for chunk in provider.stream(request):
-        yield chunk
-
-
-async def _default_memory_write(state: ReadonlyAgentState) -> int:
-    from app.schemas.agent import AgentChatMessageIn
-    from app.memory.agent import auto_save_memory_from_question
-
-    history = [
-        AgentChatMessageIn.model_validate(item)
-        for item in state.get("history", [])[-8:]
-        if isinstance(item, dict)
-    ]
-    memories = await auto_save_memory_from_question(
-        state["user_id"],
-        state["question"],
-        history,
-    )
-    return len(memories)
+    async with aclosing(provider.stream(request)) as chunks:
+        async for chunk in chunks:
+            yield chunk
 
 
 @dataclass
@@ -137,7 +144,6 @@ class ReadonlyGraphDependencies:
     memory_recall: MemoryRecall = _default_memory_recall
     rag_search: RagSearch = _default_rag_search
     answer_stream: AnswerStream = _default_answer_stream
-    memory_write: MemoryWrite = _default_memory_write
 
 
 def new_readonly_state(
@@ -162,7 +168,7 @@ def new_readonly_state(
         turn_plan=resolved_plan,
         memory_enabled=memory_enabled,
         status="running", sources=[], rag_called=False, answer="",
-        memory_write_count=0, error_code="", error_message="",
+        error_code="", error_message="",
     )
 
 
@@ -220,7 +226,11 @@ def build_readonly_graph(
     async def planner(state: ReadonlyAgentState) -> dict[str, Any]:
         plan = state.get("turn_plan") or {}
         context_sources = set(plan.get("context_sources") or [])
-        use_note_context = bool(
+        page_state = state.get("page_state") or {}
+        if page_state.get("contextScope") == "none" and state.get("mode") != "ask_notes":
+            context_sources &= {"user_memory"}
+        bounded_note_scope = has_selection_scope(page_state) or bool(whole_note_id(page_state, state["question"]))
+        use_note_context = bounded_note_scope or bool(
             context_sources.intersection({"knowledge_base", "current_note", "selected_text"})
         )
         intent = "note_qa" if use_note_context else "general_chat"
@@ -240,7 +250,7 @@ def build_readonly_graph(
         return {
             "intent": intent,
             "route": route,
-            "requires_sources": "knowledge_base" in context_sources,
+            "requires_sources": not bounded_note_scope and "knowledge_base" in context_sources,
         }
 
     async def memory_recall(state: ReadonlyAgentState) -> dict[str, Any]:
@@ -253,7 +263,8 @@ def build_readonly_graph(
         ):
             return {"memory_context": ""}
         try:
-            return {"memory_context": await deps.memory_recall(state)}
+            async with asyncio.timeout(OPTIONAL_MEMORY_TIMEOUT_SECONDS):
+                return {"memory_context": await deps.memory_recall(state)}
         except Exception as exc:
             # Personalization is optional in this read-only answer flow. Keep
             # explicit memory-management failures on their separate tool path.
@@ -267,7 +278,7 @@ def build_readonly_graph(
                     "metadata": {"degraded": True, "reason": type(exc).__name__},
                 },
             ))
-            return {"memory_context": "", "suppress_memory_write": True}
+            return {"memory_context": ""}
 
     async def general_chat(state: ReadonlyAgentState) -> dict[str, Any]:
         return {"context_mode": "general", "context_text": "", "sources": [], "rag_called": False}
@@ -276,15 +287,16 @@ def build_readonly_graph(
         try:
             result = await deps.rag_search(state)
             sources = list(result.get("sources") or [])
+            rag_called = bool(result.get("rag_called", True))
             await deps.emit(RuntimeEvent(
                 type="context", status="success", sessionId=state.get("session_id"), runId=state.get("run_id"),
                 contextMode=str(result.get("context_mode") or "library"),
-                payload={"sources": sources, "ragCalled": True, "readOnly": True},
+                payload={"sources": sources, "ragCalled": rag_called, "readOnly": True},
             ))
             return {
                 "context_mode": str(result.get("context_mode") or "library"),
                 "context_text": str(result.get("context_text") or ""),
-                "sources": sources, "rag_called": True,
+                "sources": sources, "rag_called": rag_called,
             }
         except Exception as exc:
             return {"error_code": "rag_read_failed", "error_message": str(exc), "status": "failed", "rag_called": True}
@@ -296,17 +308,18 @@ def build_readonly_graph(
             return {"answer": text}
         parts: list[str] = []
         try:
-            async for chunk in deps.answer_stream(state):
-                if chunk.get("type") in {"stream_error", "agent_error"}:
-                    return {
-                        "error_code": str(chunk.get("code") or "ai_stream_failed"),
-                        "error_message": str(chunk.get("message") or "AI 流式回答失败"),
-                        "status": "failed",
-                    }
-                parts.append(_chunk_text(chunk))
-                await deps.emit(RuntimeEvent.from_wire(chunk))
+            async with aclosing(deps.answer_stream(state)) as chunks:
+                async for chunk in chunks:
+                    if chunk.get("type") in {"stream_error", "agent_error"}:
+                        return {
+                            "error_code": str(chunk.get("code") or "ai_stream_failed"),
+                            "error_message": str(chunk.get("message") or "AI 流式回答失败"),
+                            "status": "failed",
+                        }
+                    parts.append(_chunk_text(chunk))
+                    await deps.emit(RuntimeEvent.from_wire(chunk))
             answer_text = "".join(parts)
-            if state.get("requires_sources"):
+            if state.get("requires_sources") or state.get("context_mode") == "note_excerpt":
                 cleaned, validation = validate_citation_indexes(
                     answer_text,
                     set(range(1, len(state.get("sources") or []) + 1)),
@@ -323,29 +336,6 @@ def build_readonly_graph(
             return {"answer": answer_text}
         except Exception as exc:
             return {"error_code": "ai_stream_failed", "error_message": str(exc), "status": "failed"}
-
-    async def memory_writer(state: ReadonlyAgentState) -> dict[str, Any]:
-        if not state.get("memory_enabled") or state.get("suppress_memory_write"):
-            return {"memory_write_count": 0}
-        try:
-            count = await deps.memory_write(state)
-            if count:
-                await deps.emit(RuntimeEvent(
-                    type="tool_trace",
-                    status="success",
-                    sessionId=state.get("session_id"),
-                    runId=state.get("run_id"),
-                    payload={
-                        "toolName": "memory_writer",
-                        "action": "implicit_upsert",
-                        "durationMs": 0,
-                        "metadata": {"memoryCount": count, "silent": True},
-                    },
-                ))
-            return {"memory_write_count": count}
-        except Exception:
-            # A failed enrichment must not invalidate the primary answer.
-            return {"memory_write_count": 0}
 
     async def finalize(state: ReadonlyAgentState) -> dict[str, Any]:
         await deps.emit(RuntimeEvent(
@@ -372,7 +362,7 @@ def build_readonly_graph(
         ("ingress", ingress), ("policy", policy), ("planner", planner),
         ("memory_recall", memory_recall), ("general_chat", general_chat),
         ("note_qa", note_qa), ("answer_node", answer),
-        ("memory_writer", memory_writer), ("finalize", finalize), ("error_node", error),
+        ("finalize", finalize), ("error_node", error),
     ):
         builder.add_node(name, node)
     builder.add_edge(START, "ingress")
@@ -387,10 +377,9 @@ def build_readonly_graph(
     builder.add_conditional_edges("note_qa", _error_or_next("answer_node"), {"answer_node": "answer_node", "error": "error_node"})
     builder.add_conditional_edges(
         "answer_node",
-        _error_or_next("memory_writer"),
-        {"memory_writer": "memory_writer", "error": "error_node"},
+        _error_or_next("finalize"),
+        {"finalize": "finalize", "error": "error_node"},
     )
-    builder.add_edge("memory_writer", "finalize")
     builder.add_edge("finalize", END)
     builder.add_edge("error_node", END)
     kwargs = {"checkpointer": checkpointer}
@@ -425,7 +414,6 @@ async def stream_readonly_graph(
             runtime_dependencies = ReadonlyGraphDependencies(
                 emit=emit, memory_recall=base.memory_recall,
                 rag_search=base.rag_search, answer_stream=base.answer_stream,
-                memory_write=base.memory_write,
             )
             await invoke_readonly_graph(
                 state, dependencies=runtime_dependencies,
@@ -448,7 +436,10 @@ async def stream_readonly_graph(
                 break
             yield item  # type: ignore[misc]
     finally:
-        await task
+        if not task.done():
+            task.cancel()
+        with anyio.CancelScope(shield=True):
+            await asyncio.gather(task, return_exceptions=True)
 
 
 def postgres_checkpoint_uri() -> str:

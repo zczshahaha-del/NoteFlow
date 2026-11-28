@@ -4,6 +4,7 @@ import { BubbleMenu } from "@tiptap/react/menus";
 import {
   Bold,
   Code2,
+  Eraser,
   Highlighter,
   Italic,
   Link,
@@ -12,7 +13,6 @@ import {
   Menu,
   MessageSquarePlus,
   Quote,
-  RefreshCw,
   Strikethrough,
   Sparkles,
   Underline as UnderlineIcon,
@@ -39,7 +39,9 @@ import { headingNumberPrefixLength } from "../utils/headingNumbering";
 import { updateHeadingDocumentTitle } from "../editor/headingDecorations";
 import { getDocumentHeadings, getDocumentOutlineHeadings, getEditorMarkdown, type TiptapHeading } from "../editor/documentCache";
 import { captureSelectionEdit, type SelectionEditSnapshot } from "../editor/quickSelectionEdit";
+import { captureSelectionSurroundings } from "../editor/selectionChatContext";
 import SelectionQuickEdit from "./SelectionQuickEdit";
+import NoteConflictNotice from "./NoteConflictNotice";
 
 const VersionHistoryPanel = lazy(() => import("./VersionHistoryPanel"));
 const selectionToolbarAppendTo = () => document.body;
@@ -229,7 +231,7 @@ function NoteSelectionToolbar({
         <Quote size={15} />
       </SelectionToolbarButton>
       <SelectionToolbarButton label="清除格式" onClick={() => editor.chain().focus().unsetAllMarks().clearNodes().run()}>
-        <RefreshCw size={15} />
+        <Eraser size={15} />
       </SelectionToolbarButton>
     </>
   );
@@ -286,6 +288,7 @@ function NoteEditorDocument({ onReady, presented = true }: {
     fileContents,
     noteSaveState,
     retryNoteSave,
+    setSelectedFileId,
     pendingEditorSelection,
     pendingSourceFocus,
     updateFileContent,
@@ -300,6 +303,7 @@ function NoteEditorDocument({ onReady, presented = true }: {
   const rawContent = selectedFile
     ? (fileContents[selectedFile.id] ?? selectedFile.content ?? "")
     : "";
+  const saveConflict = noteSaveState.conflict;
   const [titleDraft, setTitleDraft] = useState(
     selectedFile?.name.replace(/\.md$/i, "") ?? "未命名笔记"
   );
@@ -384,7 +388,7 @@ function NoteEditorDocument({ onReady, presented = true }: {
 
   useEffect(() => {
     if (!editor || editor.isDestroyed || getEditorMarkdown(editor) === rawContent) return;
-    editor.commands.setContent(rawContent, { contentType: "markdown", emitUpdate: false });
+    editor.chain().setMeta("addToHistory", false).setContent(rawContent, { contentType: "markdown", emitUpdate: false }).run();
   }, [editor, rawContent]);
 
   useEffect(() => {
@@ -566,6 +570,7 @@ function NoteEditorDocument({ onReady, presented = true }: {
       text,
       noteId: selectedFile.id,
       noteTitle: titleDraft || selectedFile.name.replace(/\.md$/i, ""),
+      surroundings: captureSelectionSurroundings(editor),
     });
   };
 
@@ -661,6 +666,9 @@ function NoteEditorDocument({ onReady, presented = true }: {
                     if (name !== selectedFile.name.replace(/\.md$/i, "")) updateNodeName(selectedFile.id, name + ".md");
                   }}
                   matchingBodyTitle={matchingBodyTitle} bodyEditing={bodyEditing} />
+                {saveConflict && findFileById(treeData, saveConflict.copyId) &&
+                  <NoteConflictNotice key={saveConflict.copyId} conflict={saveConflict}
+                    onOpenCopy={() => setSelectedFileId(saveConflict.copyId)} />}
                 {(noteSaveState.status === 'error' || noteSaveState.status === 'offline') && <div className="nf-note-feedback">
                   <OperationFeedback onRetry={() => retryNoteSave(selectedFile.id)} retryLabel={noteSaveState.status === 'offline' ? '立即同步' : '重试保存'}>
                     <strong>{noteSaveState.status === 'offline' ? '正文已留在本机，等待同步' : '正文未能同步到服务器'}</strong>

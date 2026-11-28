@@ -72,10 +72,9 @@ class ArchitectureContractTest(unittest.TestCase):
             NoteRepository,
             RunRepository,
         )
-        exceptions = {(AttachmentRepository, "get_by_signed_id")}
         for repository in repositories:
             for name, method in inspect.getmembers(repository, predicate=inspect.iscoroutinefunction):
-                if name.startswith("_") or (repository, name) in exceptions:
+                if name.startswith("_"):
                     continue
                 parameters = list(inspect.signature(method).parameters)
                 self.assertGreaterEqual(len(parameters), 2, f"{repository.__name__}.{name}")

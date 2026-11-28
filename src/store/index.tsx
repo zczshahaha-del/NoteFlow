@@ -7,6 +7,8 @@ import type {
   ChatSource,
   ChatSessionSummary,
   FileNode,
+  NoteSaveConflict,
+  SelectionSurroundings,
 } from "../types";
 import { findFileById, initialWorkspaceTree } from "../workspaceTree";
 import { askAIStream } from "../services/aiStream";
@@ -31,6 +33,7 @@ import {
   getNote,
   listIndexJobs,
   listNotes,
+  NoteVersionConflictError,
   reindexNote as reindexNoteRequest,
   restoreNote,
   restoreNoteVersion as restoreNoteVersionRequest,
@@ -73,9 +76,11 @@ import {
 } from "../services/chatSessions";
 import {
   hasRemoteConflict,
+  getOfflineNoteEdit,
   listOfflineNoteEdits,
   queueOfflineNoteEdit,
   removeOfflineNoteEdit,
+  type OfflineNoteEdit,
 } from "../services/offlineQueue";
 import {
   buildTreeFromRecords,
@@ -97,11 +102,19 @@ import {
 } from "./tree";
 import {
   isBundledDemoSnapshot,
+  clearLocalNoteContentIfMatches,
+  clearRecoveredNoteEdit,
+  hasPendingLocalNoteContent,
   loadLocalSnapshot,
+  loadPendingNoteEdits,
+  listRecoverableNoteEdits,
+  readRecoverableNoteEdit,
+  rebaseLocalNoteContent,
   resolveSelectedFileId,
   saveLocalSnapshot,
   saveLocalNoteContent,
 } from "./persistence";
+import { noteJournalScope, prepareNoteJournal, withInactiveNoteJournal } from "./noteJournalScope";
 
 export { reconcilePersistedNoteRecord };
 
@@ -111,7 +124,9 @@ type ChatMode = "chat" | "ask_notes";
 
 interface DraftCommand {
   id: string;
-  action: "generate_outline" | "regenerate_outline" | "generate_all" | "stop" | "cancel";
+  action: "generate_outline" | "regenerate_outline" | "revise_body" | "generate_all" | "stop" | "cancel";
+  draftId?: string;
+  expectedUpdatedAt?: string;
   seed: string;
   feedback: string;
   brief?: DraftBrief;
@@ -123,6 +138,7 @@ interface ChatSelectionContext {
   text: string;
   noteId: string | null;
   noteTitle: string;
+  surroundings?: SelectionSurroundings;
   createdAt: string;
 }
 
@@ -143,6 +159,7 @@ interface NoteSaveState {
   status: NoteSaveStatus;
   message?: string;
   updatedAt?: string;
+  conflict?: NoteSaveConflict;
 }
 
 interface WorkspaceIssue { id: string; label: string; message: string; busy: boolean }
@@ -185,7 +202,7 @@ interface AppState {
   editDraftBrief: (messageId: string, patch: { title?: string; requirements?: string; generatedBrief?: DraftBrief; requestPending?: boolean }) => void;
   generateDraftBrief: (messageId: string) => void;
   consumeDraftCommand: (id: string) => void;
-  addSelectionToChat: (selection: { text: string; noteId?: string | null; noteTitle?: string }) => void;
+  addSelectionToChat: (selection: { text: string; noteId?: string | null; noteTitle?: string; surroundings?: SelectionSurroundings }) => void;
   clearChatSelection: () => void;
   closeDraft: (outcome?: DraftOutcome) => void;
   createEditPreviewRequest: (
@@ -196,8 +213,12 @@ interface AppState {
   ) => void;
   reviseEditPreviewRequest: (instruction: string) => Promise<boolean>;
   restoreEditPreviewRevisionRequest: (revisionId: string) => Promise<void>;
-  applyEditPreviewRequest: () => Promise<void>;
-  cancelEditPreviewRequest: () => Promise<void>;
+  applyEditPreviewRequest: (chatAction?: {
+    editId: string;
+    noteId?: string;
+    assistantMessageId: string;
+  }) => Promise<void>;
+  cancelEditPreviewRequest: (chatAction?: { editId: string; assistantMessageId: string }) => Promise<void>;
   closeEditPreview: () => void;
   focusChatSource: (source: ChatSource) => void;
   clearPendingSourceFocus: () => void;
@@ -268,8 +289,18 @@ let chatMsgCounter = 0;
 function newChatMessageMetadata(): Pick<ChatMessage, "id" | "createdAt"> {
   return { id: `msg-${++chatMsgCounter}`, createdAt: new Date().toISOString() };
 }
+
+const noteReplyContextModes = new Set(["selection", "note_excerpt", "editor_transient", "rag_v2_note", "rag_v2_library"]);
+
+function isNoteSourcedReply(message: ChatMessage): boolean {
+  return message.role === "assistant" && (
+    Boolean(message.sources?.length) || noteReplyContextModes.has(message.contextMode ?? "")
+  );
+}
+
 let nodeCounter = 0;
 let generationAbortController: AbortController | null = null;
+let generationRunId: string | null = null;
 const noteSaveTimers = new Map<string, ReturnType<typeof window.setTimeout>>();
 const indexJobPollTimers = new Map<string, ReturnType<typeof window.setTimeout>>();
 const noteSavesInFlight = new Map<string, Promise<void>>();
@@ -277,6 +308,7 @@ let workspaceEpoch = 0;
 const noteMutationQueues = new Map<string, Promise<void>>();
 const noteOpenRequests = new Map<string, object>();
 const localNoteEdits = new Map<string, { userId: string | null; content: string }>();
+const ownOfflineFallbacks = new Map<string, OfflineNoteEdit>();
 const noteCreationRequests = new Map<string, object>();
 let workspaceLoadRequest: object | null = null;
 const workspaceOperations = new Map<string, { nodeId: string; deletedIds: Set<string>; run: () => Promise<void>; busy: boolean }>();
@@ -325,7 +357,14 @@ function mergeWorkspaceRefresh(remote: KnowledgeBaseSnapshot, started: Knowledge
     const node = { ...entry.node };
     if (latest.node.type === 'file' && dirty(id)) {
       node.content = current.fileContents[id] ?? latest.node.content ?? '';
+      node.contentHash = latest.node.contentHash;
+      node.updatedAt = latest.node.updatedAt;
       node.indexStatus = 'outdated';
+      remote.fileContents[id] = node.content;
+    } else if (latest.node.type === 'file' && node.content === undefined &&
+               node.updatedAt && node.updatedAt === latest.node.updatedAt && current.fileContents[id] !== undefined) {
+      node.content = current.fileContents[id];
+      node.contentHash = latest.node.contentHash;
       remote.fileContents[id] = node.content;
     }
     for (const field of ['name', 'pinned', 'favorite', 'tags'] as const) {
@@ -504,7 +543,7 @@ function persistLocalCurrentState() {
   const state = useAppStore.getState();
   if (state.hydratedUserId) {
     const snapshot = snapshotFromState(state);
-    if (saveLocalSnapshot(state.hydratedUserId, snapshot)) {
+    if (saveLocalSnapshot(state.hydratedUserId, snapshot, new Set(localNoteEdits.keys()))) {
       localStateCheckpoint = { userId: state.hydratedUserId, snapshot };
     }
   }
@@ -541,6 +580,13 @@ function scheduleNoteSave(noteId: string, content: string) {
   }, 700));
 }
 
+function clearOwnOfflineFallback(userId: string, noteId: string) {
+  const edit = ownOfflineFallbacks.get(noteId);
+  if (edit?.userId !== userId) return;
+  ownOfflineFallbacks.delete(noteId);
+  void removeOfflineNoteEdit(edit).catch(() => undefined);
+}
+
 async function persistNoteContent(noteId: string, content: string) {
   const ownerId = useAppStore.getState().hydratedUserId, epoch = workspaceEpoch;
   const ownsNote = () => useAppStore.getState().hydratedUserId === ownerId && workspaceEpoch === epoch && Boolean(findFileById(useAppStore.getState().treeData, noteId));
@@ -572,6 +618,9 @@ async function persistNoteContent(noteId: string, content: string) {
       useAppStore.setState({
         treeData: updateNodeIndexStatus(reconcilePersistedNoteRecord(current.treeData, note, latestLocalContent), noteId, 'outdated'),
       });
+      if (ownerId) rebaseLocalNoteContent(ownerId, noteId, latestLocalContent, {
+        updatedAt: note.updatedAt, contentHash: note.contentHash,
+      });
       persistLocalCurrentState();
       return;
     }
@@ -580,7 +629,13 @@ async function persistNoteContent(noteId: string, content: string) {
       treeData: replaceNoteRecordInTree(current.treeData, note),
     });
     setNoteSaveState(noteId, noteSaveState("saved"));
-    if (localNoteEdits.get(noteId) === editOwner) localNoteEdits.delete(noteId);
+    if (localNoteEdits.get(noteId) === editOwner) {
+      if (ownerId) {
+        clearLocalNoteContentIfMatches(ownerId, noteId, content);
+        clearOwnOfflineFallback(ownerId, noteId);
+      }
+      localNoteEdits.delete(noteId);
+    }
     persistLocalCurrentState();
   } catch (error) {
     if (!ownsNote() || useAppStore.getState().fileContents[noteId] !== content || localNoteEdits.get(noteId) !== editOwner) return;
@@ -592,26 +647,67 @@ async function persistNoteContent(noteId: string, content: string) {
       /failed to fetch|networkerror|network request failed/i.test(message);
     if (isNetworkFailure && current.hydratedUserId) {
       try {
-        await queueOfflineNoteEdit({
-          userId: current.hydratedUserId,
-          noteId,
-          content,
-          baseUpdatedAt,
-          baseContentHash,
-        });
+        if (!hasPendingLocalNoteContent(current.hydratedUserId, noteId, content)) {
+          const queued = await queueOfflineNoteEdit({ userId: current.hydratedUserId, noteId, content, baseUpdatedAt, baseContentHash, tabId: noteJournalScope() });
+          if (ownsNote()) ownOfflineFallbacks.set(noteId, queued);
+        }
         if (!ownsNote() || useAppStore.getState().fileContents[noteId] !== content || localNoteEdits.get(noteId) !== editOwner) return;
         setNoteSaveState(noteId, noteSaveState("offline", "已离线保存在本机，联网后会自动同步。"));
         persistLocalCurrentState();
         return;
       } catch {}
     }
-    if (/同步冲突|其他设备更新/.test(message) && current.hydratedUserId) {
+    if (error instanceof NoteVersionConflictError && current.hydratedUserId) {
       try {
-        await preserveConflictCopy(current.hydratedUserId, noteId, content);
+        await preserveConflictCopy(current.hydratedUserId, noteId, content, { baseVersion: baseContentHash ?? baseUpdatedAt });
         return;
-      } catch {}
+      } catch {
+        if (ownsNote() && useAppStore.getState().fileContents[noteId] === content && localNoteEdits.get(noteId) === editOwner) {
+          setNoteSaveState(noteId, noteSaveState("error", "另一处已保存更新。你的修改仍在当前页面，重试可以保存为副本。"));
+        }
+        return;
+      }
     }
     if (ownsNote() && useAppStore.getState().fileContents[noteId] === content && localNoteEdits.get(noteId) === editOwner) setNoteSaveState(noteId, noteSaveState("error", message));
+  }
+}
+
+function noteHasPendingWrites(state: AppState, noteId: string) {
+  const status = state.noteSaveStates[noteId]?.status;
+  return localNoteEdits.has(noteId) || noteCreationRequests.has(noteId) || noteMutationQueues.has(noteId) ||
+    status === "unsaved" || status === "saving" || status === "offline" || status === "error";
+}
+
+async function readOpenedNote(noteId: string, background = false) {
+  const opened = useAppStore.getState();
+  const node = findFileById(opened.treeData, noteId);
+  if (!node || (background && (noteOpenRequests.has(noteId) || noteHasPendingWrites(opened, noteId)))) return;
+  const content = opened.fileContents[noteId];
+  const epoch = workspaceEpoch;
+  const request = {};
+  noteOpenRequests.set(noteId, request);
+  const ownsRequest = () => noteOpenRequests.get(noteId) === request &&
+    workspaceEpoch === epoch && useAppStore.getState().hydratedUserId === opened.hydratedUserId;
+  try {
+    const note = await getNote(noteId);
+    const current = useAppStore.getState();
+    if (!ownsRequest() || note.id !== noteId || (background && current.selectedFileId !== noteId) ||
+        findFileById(current.treeData, noteId) !== node || current.fileContents[noteId] !== content ||
+        noteHasPendingWrites(current, noteId)) return;
+    if (note.content === content && note.contentHash === node.contentHash &&
+        note.updatedAt === node.updatedAt && note.indexStatus === node.indexStatus) return;
+    useAppStore.setState({
+      fileContents: { ...current.fileContents, [noteId]: note.content },
+      treeData: replaceNoteRecordInTree(current.treeData, note),
+      ...(current.noteOpenError?.noteId === noteId ? { noteOpenError: null } : {}),
+    });
+    persistLocalCurrentState();
+  } catch {
+    if (!background && ownsRequest() && useAppStore.getState().selectedFileId === noteId) {
+      useAppStore.setState({ noteOpenError: { noteId } });
+    }
+  } finally {
+    if (noteOpenRequests.get(noteId) === request) noteOpenRequests.delete(noteId);
   }
 }
 
@@ -628,99 +724,135 @@ async function contentFingerprint(value: string): Promise<string> {
   return `fallback-${(hash >>> 0).toString(16)}-${value.length}`;
 }
 
-async function preserveConflictCopy(userId: string, noteId: string, localContent: string) {
+async function preserveConflictCopy(userId: string, noteId: string, localContent: string,
+                                    { recovered = false, baseVersion = null }: { recovered?: boolean; baseVersion?: string | null } = {}) {
+  const epoch = workspaceEpoch;
+  const localEdit = localNoteEdits.get(noteId);
+  const ownsNote = () => {
+    const state = useAppStore.getState();
+    return state.hydratedUserId === userId && workspaceEpoch === epoch && Boolean(findFileById(state.treeData, noteId));
+  };
+  const isCurrentEdit = () => localNoteEdits.get(noteId) === localEdit &&
+    useAppStore.getState().fileContents[noteId] === localContent;
+
   const remote = await getNote(noteId);
-  if (useAppStore.getState().hydratedUserId !== userId || !findFileById(useAppStore.getState().treeData, noteId)) return;
-  if (remote.content === localContent) {
-    const current = useAppStore.getState();
-    if (current.fileContents[noteId] !== localContent) return;
-    useAppStore.setState({
-      fileContents: { ...current.fileContents, [remote.id]: remote.content },
-      treeData: replaceNoteRecordInTree(current.treeData, remote),
+  if (!ownsNote() || remote.id !== noteId || (!recovered && !isCurrentEdit())) return false;
+  let copy = null;
+  if (remote.content !== localContent) {
+    const fingerprint = await contentFingerprint(`${noteId}\n${baseVersion ?? remote.contentHash}\n${localContent}`);
+    if (!ownsNote() || (!recovered && !isCurrentEdit())) return false;
+    const stamp = new Date().toLocaleString("zh-CN", {
+      month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
+    }).replace(/[/:]/g, "-");
+    const suffix = `（同步冲突 ${stamp}）`;
+    copy = await createNote({
+      title: remote.title.slice(0, 255 - suffix.length) + suffix,
+      categoryId: remote.categoryId,
+      summary: "保留与已保存版本冲突的修改。",
+      tags: Array.from(new Set([...(remote.tags ?? []), "同步冲突"])),
+      content: localContent,
+      idempotencyKey: `sync-conflict:${fingerprint}`,
     });
-    if (current.fileContents[noteId] === localContent) {
-      localNoteEdits.delete(noteId);
-      setNoteSaveState(noteId, noteSaveState("saved", "内容已经同步，无需创建冲突副本。"));
+  }
+  if (!ownsNote()) return false;
+  const current = useAppStore.getState();
+  let treeData = current.treeData;
+  const fileContents = { ...current.fileContents };
+  if (copy && !findFileById(treeData, copy.id)) {
+    const node = buildTreeFromRecords([], [copy]).treeData[0];
+    const parent = copy.categoryId && findNode(treeData, copy.categoryId);
+    treeData = parent && parent.type === "folder" ? insertNode(treeData, parent.id, node) : [...treeData, node];
+    fileContents[copy.id] = copy.content;
+  }
+  // A later edit or navigation during the request cannot be replaced by an
+  // earlier save result. The copy, if created, remains in the workspace.
+  const editStillCurrent = !recovered && isCurrentEdit();
+  const canResolveHere = editStillCurrent || (!localNoteEdits.has(noteId) && fileContents[noteId] === remote.content);
+  if (canResolveHere) {
+    if (editStillCurrent) {
+      clearLocalNoteContentIfMatches(userId, noteId, localContent);
+      clearOwnOfflineFallback(userId, noteId);
     }
-    await removeOfflineNoteEdit(userId, noteId).catch(() => undefined);
-    persistLocalCurrentState();
-    return;
-  }
-  const conflictFingerprint = await contentFingerprint(
-    `${noteId}\n${remote.contentHash}\n${localContent}`
-  );
-  const stamp = new Date().toLocaleString("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).replace(/[/:]/g, "-");
-  const conflict = await createNote({
-    title: `${remote.title}（同步冲突 ${stamp}）`,
-    categoryId: remote.categoryId,
-    summary: "离线编辑与远端版本发生冲突，已保留为独立副本，请人工合并。",
-    tags: Array.from(new Set([...(remote.tags ?? []), "同步冲突"])),
-    content: localContent,
-    idempotencyKey: `sync-conflict:${conflictFingerprint}`,
-  });
-  if (useAppStore.getState().hydratedUserId !== userId) return;
-  if (useAppStore.getState().fileContents[noteId] === localContent) {
     localNoteEdits.delete(noteId);
-    setNoteSaveState(noteId, noteSaveState("saved", "离线内容已保留为同步冲突副本。"));
+    fileContents[noteId] = remote.content;
+    treeData = replaceNoteRecordInTree(treeData, remote);
+    const saved: NoteSaveState = noteSaveState("saved");
+    if (copy) saved.conflict = { copyId: copy.id, remoteContent: remote.content, localContent };
+    useAppStore.setState({
+      treeData, fileContents,
+      noteSaveStates: { ...current.noteSaveStates, [noteId]: saved },
+      ...(current.selectedFileId === noteId ? { noteSaveState: saved } : {}),
+    });
+  } else if (treeData !== current.treeData) {
+    useAppStore.setState({ treeData, fileContents });
   }
-  await removeOfflineNoteEdit(userId, noteId).catch(() => undefined);
-  await loadStructuredWorkspace(userId, conflict.id);
-  if (useAppStore.getState().hydratedUserId === userId) setNoteSaveState(conflict.id, noteSaveState("saved", "检测到其他设备的更新，离线内容已保留为“同步冲突”副本。"));
+  persistLocalCurrentState();
+  return true;
 }
 
-async function flushOfflineNoteQueue(userId: string) {
-  if (typeof indexedDB === "undefined") return;
-  const edits = await listOfflineNoteEdits(userId);
-  if (!edits.length) return;
-  let changed = false;
-  for (const edit of edits) {
-    if (useAppStore.getState().hydratedUserId !== userId) return;
+async function replayRecoveredNoteEdit(
+  userId: string, noteId: string, content: string, baseUpdatedAt: string | null, baseContentHash: string | null,
+): Promise<boolean> {
+  return enqueueNoteMutation(noteId, async () => {
+    const available = () => useAppStore.getState().hydratedUserId === userId && !localNoteEdits.has(noteId);
+    const remote = await getNote(noteId);
+    if (!available()) return false;
+    if (remote.content === content) return true;
+    const preserveCopy = () => preserveConflictCopy(userId, noteId, content, {
+      recovered: true, baseVersion: baseContentHash ?? baseUpdatedAt,
+    });
+    if ((!baseContentHash && !baseUpdatedAt) || hasRemoteConflict(
+      baseContentHash, remote.contentHash, baseUpdatedAt, remote.updatedAt, remote.content, content,
+    )) return preserveCopy();
     try {
-      const remote = await getNote(edit.noteId);
-      if (remote.content === edit.content) {
-        await removeOfflineNoteEdit(userId, edit.noteId);
-        if (useAppStore.getState().hydratedUserId === userId && useAppStore.getState().fileContents[edit.noteId] === edit.content) {
-          localNoteEdits.delete(edit.noteId); setNoteSaveState(edit.noteId, noteSaveState('saved'));
-        }
-        changed = true;
-        continue;
-      }
-      if (hasRemoteConflict(
-        edit.baseContentHash,
-        remote.contentHash,
-        edit.baseUpdatedAt,
-        remote.updatedAt,
-        remote.content,
-        edit.content
-      )) {
-        await preserveConflictCopy(userId, edit.noteId, edit.content);
-        changed = true;
-        continue;
-      }
-      await updateNote(edit.noteId, {
-        content: edit.content,
+      await updateNote(noteId, {
+        content,
         source: "auto_save",
         changeSummary: "离线队列恢复",
         expectedUpdatedAt: remote.updatedAt,
         expectedContentHash: remote.contentHash,
       });
-      await removeOfflineNoteEdit(userId, edit.noteId);
-      if (useAppStore.getState().hydratedUserId === userId && useAppStore.getState().fileContents[edit.noteId] === edit.content) {
-        localNoteEdits.delete(edit.noteId); setNoteSaveState(edit.noteId, noteSaveState('saved'));
-      }
-      changed = true;
-    } catch {
-      if (typeof navigator !== "undefined" && !navigator.onLine) break;
+      return true;
+    } catch (error) {
+      if (error instanceof NoteVersionConflictError && available()) return preserveCopy();
+      throw error;
     }
+  });
+}
+
+async function flushOfflineNoteQueue(userId: string) {
+  let changed = false;
+  const dbEdits = typeof indexedDB === "undefined" ? [] : await listOfflineNoteEdits(userId).catch(() => []);
+  for (const edit of dbEdits) {
+    if (useAppStore.getState().hydratedUserId !== userId || !navigator.onLine) return;
+    const replay = async () => {
+      if (localNoteEdits.has(edit.noteId)) return;
+      const latest = await getOfflineNoteEdit(edit.key);
+      if (latest && await replayRecoveredNoteEdit(userId, latest.noteId, latest.content, latest.baseUpdatedAt, latest.baseContentHash ?? null)) {
+        await removeOfflineNoteEdit(latest);
+        changed = true;
+      }
+    };
+    try {
+      if (edit.tabId && edit.tabId !== noteJournalScope()) await withInactiveNoteJournal(edit.tabId, replay);
+      else await replay();
+    } catch {}
+  }
+  for (const { noteId, scope } of listRecoverableNoteEdits(userId)) {
+    if (useAppStore.getState().hydratedUserId !== userId || !navigator.onLine) return;
+    try {
+      await withInactiveNoteJournal(scope, async () => {
+        if (localNoteEdits.has(noteId)) return;
+        const edit = readRecoverableNoteEdit(userId, noteId, scope);
+        if (edit && await replayRecoveredNoteEdit(userId, noteId, edit.content, edit.updatedAt, edit.contentHash)) {
+          clearRecoveredNoteEdit(userId, noteId, scope, edit);
+          changed = true;
+        }
+      });
+    } catch {}
   }
   if (changed && useAppStore.getState().hydratedUserId === userId) {
-    const selectedFileId = useAppStore.getState().selectedFileId;
-    await loadStructuredWorkspace(userId, selectedFileId);
+    await loadStructuredWorkspace(userId, useAppStore.getState().selectedFileId);
   }
 }
 
@@ -742,6 +874,17 @@ async function syncNoteContentBeforeAiEdit(noteId: string) {
   const latest = useAppStore.getState();
   if (latest.hydratedUserId !== current.hydratedUserId || latest.fileContents[noteId] !== content ||
     (latest.noteSaveStates[noteId]?.status ?? latest.noteSaveState.status) !== 'saved') throw new Error('正文尚未同步完成，请重试后再应用 AI 修改。');
+}
+
+export async function syncKnowledgeBeforeBackup() {
+  const owner=useAppStore.getState().hydratedUserId;
+  if(workspaceOperations.size)throw new Error('目录或笔记尚未同步，请同步完成后再导出。');
+  const ids=new Set([...localNoteEdits.keys(),...noteSaveTimers.keys(),...noteSavesInFlight.keys()]);
+  for(const id of ids)await syncNoteContentBeforeAiEdit(id);
+  const state=useAppStore.getState();
+  if(state.hydratedUserId!==owner)throw new Error('账号已变化，请重新导出。');
+  if(Object.entries(state.noteSaveStates).some(([id,value])=>findFileById(state.treeData,id) && ['unsaved','saving','offline','error'].includes(value.status)))
+    throw new Error('仍有正文未同步，请同步完成后再导出。');
 }
 
 let editPreviewDraftGeneration = 0;
@@ -1041,6 +1184,7 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
         text,
         noteId: selection.noteId ?? null,
         noteTitle: selection.noteTitle?.trim() || "当前笔记",
+        surroundings: selection.surroundings,
         createdAt: new Date().toISOString(),
       },
     });
@@ -1204,121 +1348,111 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
     }
   },
 
-  applyEditPreviewRequest: async () => {
-    const preview = get().activeEditPreview;
-    if (!preview || get().chatLoading) return;
-    const ownerId = get().hydratedUserId;
-    set({ chatLoading: true, editPreviewError: "" });
+  applyEditPreviewRequest: async (chatAction) => {
+    const start = get();
+    const editId = chatAction?.editId ?? start.activeEditPreview?.id;
+    if (!editId || (!chatAction && start.chatLoading)) return;
+    const noteId = chatAction?.noteId ??
+      (start.activeEditPreview?.id === editId ? start.activeEditPreview.noteId : undefined);
+    const startingPreviewId = start.activeEditPreview?.id;
+    const ownerId = start.hydratedUserId;
+    const sessionId = start.pendingCheckpoint?.sessionId;
+
+    const updateStatusMessage = (messages: ChatMessage[], text: string): ChatMessage[] => (
+      chatAction
+        ? messages.map((message) => message.id === chatAction.assistantMessageId ? { ...message, text } : message)
+        : [...messages, { ...newChatMessageMetadata(), role: "assistant", kind: "edit_preview_status", text }]
+    );
+
+    if (!chatAction) set({ chatLoading: true, editPreviewError: "" });
     try {
-      await get().flushEditPreviewDraft(preview.id);
-      if (get().hydratedUserId !== ownerId || get().activeEditPreview?.id !== preview.id) return;
-      await syncNoteContentBeforeAiEdit(preview.noteId);
-      const result = await applyEditPreview(preview.id);
+      await get().flushEditPreviewDraft(editId);
+      if (get().hydratedUserId !== ownerId) return;
+      if (!chatAction && get().activeEditPreview?.id !== editId) return;
+      if (noteId) await syncNoteContentBeforeAiEdit(noteId);
+      if (get().hydratedUserId !== ownerId) return;
+      const result = await applyEditPreview(editId);
       const current = get();
       if (current.hydratedUserId !== ownerId) return;
-      const checkpoint = current.pendingCheckpoint;
-      if (checkpoint?.checkpointType === "edit_preview") {
-        void resolveAgentCheckpoint(checkpoint.id, "resolved", {
-          editPreviewId: preview.id,
-          noteId: result.note.id,
-        })
-          .then(() => get().refreshAgentRunHistory(checkpoint.sessionId))
-          .catch(() => null);
-      }
+      const ownsView = current.activeEditPreview?.id === startingPreviewId &&
+        (!startingPreviewId || startingPreviewId === editId);
       set({
-        ...(current.activeEditPreview?.id === preview.id ? { activeEditPreview: null, editPreviewError: "" } : {}),
-        editPreviewDrafts: withoutEditPreviewDraft(current.editPreviewDrafts, preview.id),
-        ...(current.activeEditPreview?.id === preview.id ? {
+        ...(ownsView ? {
+          activeEditPreview: null,
+          editPreviewError: "",
           pendingCheckpoint: null,
           agentTask: taskWithCheckpoint(current.agentTask, null),
           centerMode: "note",
           activeDraftContext: null,
           selectedFileId: result.note.id,
+          pendingEditorSelection: {
+            id: `editor-selection-${Date.now()}`,
+            noteId: result.note.id,
+            markdown: result.preview.newContent,
+            mode: ["selection", "section", "insert"].includes(result.preview.targetType) ? "select" : "caret-start",
+          },
         } : {}),
+        editPreviewDrafts: withoutEditPreviewDraft(current.editPreviewDrafts, editId),
         fileContents: { ...current.fileContents, [result.note.id]: result.note.content },
         treeData: replaceNoteRecordInTree(current.treeData, result.note),
         ...(current.selectedFileId === result.note.id ? { noteSaveState: noteSaveState("saved") } : {}),
-        noteSaveStates: { ...current.noteSaveStates, [result.note.id]: noteSaveState('saved') },
-        ...(current.activeEditPreview?.id === preview.id ? { pendingEditorSelection: {
-          id: `editor-selection-${Date.now()}`,
-          noteId: result.note.id,
-          markdown: result.preview.newContent,
-          mode:
-            result.preview.targetType === "selection" ||
-            result.preview.targetType === "section" ||
-            result.preview.targetType === "insert"
-              ? "select"
-              : "caret-start",
-        } } : {}),
-        chatMessages: [
-          ...current.chatMessages,
-          {
-            ...newChatMessageMetadata(),
-            role: "assistant",
-            kind: "edit_preview_status",
-            text: "修改已应用到正式笔记，并已保存旧版本和更新索引。",
-          },
-        ],
+        noteSaveStates: { ...current.noteSaveStates, [result.note.id]: noteSaveState("saved") },
+        chatMessages: updateStatusMessage(current.chatMessages, "修改已应用到正式笔记，原文已保留在版本记录里。"),
       });
       persistLocalCurrentState();
+      if (sessionId && get().agentSessionId === sessionId) get().refreshAgentRunHistory(sessionId);
     } catch (error) {
       if (get().hydratedUserId !== ownerId) return;
-      const text = error instanceof Error ? error.message : "应用修改失败，正式笔记未变化";
+      const text = error instanceof Error ? error.message : "应用修改失败，请重试。";
       set((current) => ({
-        ...(current.activeEditPreview?.id === preview.id ? { editPreviewError: text } : {}),
-        chatMessages: [
-          ...current.chatMessages,
-          { ...newChatMessageMetadata(), role: "assistant", kind: "edit_preview_status", text },
-        ],
+        ...(current.activeEditPreview?.id === editId ? { editPreviewError: text } : {}),
+        chatMessages: updateStatusMessage(current.chatMessages, text),
       }));
     } finally {
-      if (get().hydratedUserId === ownerId) set({ chatLoading: false });
+      if (!chatAction && get().hydratedUserId === ownerId) set({ chatLoading: false });
     }
   },
 
-  cancelEditPreviewRequest: async () => {
-    const current = get();
-    const ownerId = current.hydratedUserId;
-    const preview = current.activeEditPreview;
-    const checkpoint = current.pendingCheckpoint ?? current.agentTask?.checkpoint ?? null;
-    const editPreviewId = preview?.id ?? editPreviewIdFromCheckpoint(checkpoint);
-    if (!editPreviewId || current.chatLoading) return;
-    set({ chatLoading: true, editPreviewError: "" });
+  cancelEditPreviewRequest: async (chatAction) => {
+    const start = get();
+    const ownerId = start.hydratedUserId;
+    const startingPreviewId = start.activeEditPreview?.id;
+    const checkpoint = start.pendingCheckpoint ?? start.agentTask?.checkpoint ?? null;
+    const editId = chatAction?.editId ?? startingPreviewId ?? editPreviewIdFromCheckpoint(checkpoint);
+    if (!editId || (!chatAction && start.chatLoading)) return;
+    if (!chatAction) set({ chatLoading: true, editPreviewError: "" });
     try {
-      await cancelEditPreview(editPreviewId);
+      await cancelEditPreview(editId);
       if (get().hydratedUserId !== ownerId) return;
-      if (checkpoint?.checkpointType === "edit_preview") {
-        void resolveAgentCheckpoint(checkpoint.id, "cancelled", {
-          editPreviewId,
-        })
-          .then(() => get().refreshAgentRunHistory(checkpoint.sessionId))
-          .catch(() => null);
-      }
+      const text = "已取消本次修改预览，正式笔记没有变化。";
       set((current) => ({
-        ...(current.activeEditPreview?.id === editPreviewId ? { activeEditPreview: null, editPreviewError: "" } : {}),
-        editPreviewDrafts: withoutEditPreviewDraft(current.editPreviewDrafts, editPreviewId),
-        ...(current.activeEditPreview?.id === editPreviewId || !current.activeEditPreview ? {
+        ...(current.activeEditPreview?.id === startingPreviewId && (!startingPreviewId || startingPreviewId === editId) ? {
+          activeEditPreview: null,
+          editPreviewError: "",
           pendingCheckpoint: null,
           agentTask: taskWithCheckpoint(current.agentTask, null),
           centerMode: "note",
           activeDraftContext: null,
         } : {}),
-        chatMessages: [
-          ...current.chatMessages,
-          {
-            ...newChatMessageMetadata(),
-            role: "assistant",
-            kind: "edit_preview_status",
-            text: "已取消本次修改预览，正式笔记没有变化。",
-          },
-        ],
+        editPreviewDrafts: withoutEditPreviewDraft(current.editPreviewDrafts, editId),
+        chatMessages: chatAction
+          ? current.chatMessages.map((message) => message.id === chatAction.assistantMessageId ? { ...message, text } : message)
+          : [...current.chatMessages, { ...newChatMessageMetadata(), role: "assistant", kind: "edit_preview_status", text }],
       }));
+      if (checkpoint && get().agentSessionId === checkpoint.sessionId) get().refreshAgentRunHistory(checkpoint.sessionId);
     } catch (error) {
-      if (get().hydratedUserId === ownerId && get().activeEditPreview?.id === editPreviewId) {
-        set({ editPreviewError: error instanceof Error ? error.message : "取消失败，请重试；预览已保留。" });
-      }
+      if (get().hydratedUserId !== ownerId) return;
+      const text = error instanceof Error ? error.message : "取消修改预览失败，请重试。";
+      set((current) => ({
+        ...(current.activeEditPreview?.id === editId ? { editPreviewError: text } : {}),
+        ...(chatAction ? {
+          chatMessages: current.chatMessages.map((message) =>
+            message.id === chatAction.assistantMessageId ? { ...message, text } : message
+          ),
+        } : {}),
+      }));
     } finally {
-      if (get().hydratedUserId === ownerId) set({ chatLoading: false });
+      if (!chatAction && get().hydratedUserId === ownerId) set({ chatLoading: false });
     }
   },
 
@@ -1608,7 +1742,11 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
     noteCreationRequests.clear();
     noteOpenRequests.clear();
     localNoteEdits.clear();
+    ownOfflineFallbacks.clear();
     const snapshot = loadLocalSnapshot(userId);
+    const pending = loadPendingNoteEdits(userId, snapshot.treeData);
+    const restored = noteSaveState("offline", "未同步的正文已恢复，联网后会自动提交。");
+    for (const [id, edit] of pending) localNoteEdits.set(id, { userId, content: edit.content });
     set({
       hydratedUserId: userId,
       serverSyncReady: false,
@@ -1628,8 +1766,8 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
       noteOpenError: null,
       expandedFolderIds: new Set(),
       fileContents: snapshot.fileContents,
-      noteSaveState: noteSaveState("idle"),
-      noteSaveStates: {},
+      noteSaveState: pending.has(snapshot.selectedFileId ?? "") ? restored : noteSaveState("idle"),
+      noteSaveStates: Object.fromEntries([...pending.keys()].map(id => [id, restored])),
       deletedNotes: [],
       workspaceLoading: true,
       workspaceError: null,
@@ -1660,6 +1798,9 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
   replaceSnapshot: (snapshot) => {
     set((state) => ({
       selectedFileId: snapshot.selectedFileId,
+      ...(state.selectedFileId !== snapshot.selectedFileId ? {
+        noteSaveState: state.noteSaveStates[snapshot.selectedFileId ?? ""] ?? noteSaveState("idle"),
+      } : {}),
       noteOpenError: null,
       fileContents: snapshot.fileContents,
       treeData: snapshot.treeData,
@@ -1715,35 +1856,7 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
     });
     persistLocalCurrentState();
     if (!id) return;
-    const openedState = get();
-    const openedNode = findFileById(openedState.treeData, id);
-    const openedContent = openedState.fileContents[id];
-    const request = {};
-    noteOpenRequests.set(id, request);
-    const ownsRequest = () => noteOpenRequests.get(id) === request &&
-      get().hydratedUserId === openedState.hydratedUserId;
-    void getNote(id)
-      .then((note) => {
-        const current = get();
-        const localEdit = localNoteEdits.get(id);
-        // The cached editor is usable while this read is pending. Never replace
-        // newer typing, save/rename results, removed notes or another account.
-        if (!ownsRequest() || note.id !== id || !openedNode ||
-          findFileById(current.treeData, id) !== openedNode ||
-          current.fileContents[id] !== openedContent ||
-          (localEdit?.userId === current.hydratedUserId && localEdit?.content === openedContent)) return;
-        set({
-          fileContents: { ...current.fileContents, [note.id]: note.content },
-          treeData: replaceNoteRecordInTree(current.treeData, note),
-        });
-        persistLocalCurrentState();
-      })
-      .catch(() => {
-        if (ownsRequest() && get().selectedFileId === id) set({ noteOpenError: { noteId: id } });
-      })
-      .finally(() => {
-        if (noteOpenRequests.get(id) === request) noteOpenRequests.delete(id);
-      });
+    void readOpenedNote(id);
   },
 
   toggleFolder: (id) =>
@@ -1756,6 +1869,7 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
 
   updateFileContent: (id, content) => {
     const unsaved = noteSaveState("unsaved");
+    const base = findFileById(get().treeData, id);
     set((state) => ({
       fileContents: { ...state.fileContents, [id]: content },
       treeData: updateFileContentInTree(state.treeData, id, content),
@@ -1764,7 +1878,9 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
     }));
     const userId = get().hydratedUserId;
     localNoteEdits.set(id, { userId, content });
-    if (userId && saveLocalNoteContent(userId, id, content)) {
+    if (userId && saveLocalNoteContent(userId, id, content, {
+      updatedAt: base?.updatedAt ?? null, contentHash: base?.contentHash ?? null,
+    })) {
       localStateCheckpoint = { userId, snapshot: snapshotFromState(get()) };
     }
     scheduleNoteSave(id, content);
@@ -1793,6 +1909,7 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
     generationAbortController?.abort();
     const abortController = new AbortController();
     generationAbortController = abortController;
+    generationRunId = null;
     const isCurrentReply = () => generationAbortController === abortController && !abortController.signal.aborted;
 
     const userMsg: ChatMessage = {
@@ -1828,27 +1945,29 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
     try {
       const previewId = get().activeEditPreview?.id ?? editPreviewIdFromCheckpoint(get().pendingCheckpoint);
       if (previewId) await get().flushEditPreviewDraft(previewId);
+      abortController.signal.throwIfAborted();
       const latest = get();
       const selectedFile = latest.selectedFileId
         ? findFileById(latest.treeData, latest.selectedFileId)
         : undefined;
-      const documentContent = selectedFile
+      const selectionScope = pageState?.contextScope === "selection";
+      const useCurrentNote = pageState?.contextScope === "current_note" || pageState?.contextScope === undefined;
+      const documentContent = selectedFile && useCurrentNote
         ? (latest.fileContents[selectedFile.id] ?? selectedFile.content ?? "")
         : "";
       const requestPageState: ChatPageState = {
-        currentNoteId: selectedFile?.id ?? null,
+        currentNoteId: selectionScope ? state.chatSelection?.noteId ?? null : useCurrentNote ? selectedFile?.id ?? null : null,
         selectedText: pageState?.selectedText ?? "",
-        currentSectionId: pageState?.currentSectionId ?? latest.activeEditorSectionId,
+        selectionContext: selectionScope ? state.chatSelection?.surroundings : undefined,
+        currentSectionId: useCurrentNote || selectionScope ? pageState?.currentSectionId ?? latest.activeEditorSectionId : null,
         dirty: Boolean(
-          selectedFile &&
+          useCurrentNote && selectedFile &&
             (latest.noteSaveState.status === "unsaved" ||
               latest.noteSaveState.status === "saving" ||
               latest.noteSaveState.status === "offline" ||
               latest.noteSaveState.status === "error")
         ),
-        unsavedContent: selectedFile
-          ? latest.fileContents[selectedFile.id] ?? selectedFile.content ?? ""
-          : "",
+        unsavedContent: documentContent,
         centerMode: latest.centerMode,
         activeEditPreviewId: latest.activeEditPreview?.id ?? null,
         draftSeed: latest.draftSeed,
@@ -1860,10 +1979,12 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
       const replyRequest = retryRequest ?? {
         question: text,
         mode: chatMode,
-        documentTitle: selectedFile?.name.replace(/\.md$/, "") ?? "",
+        documentTitle: selectionScope ? state.chatSelection?.noteTitle ?? "" : useCurrentNote ? selectedFile?.name.replace(/\.md$/, "") ?? "" : "",
         documentContent,
         pageState: requestPageState,
-        history: state.chatMessages.map(({ role, text }) => ({ role, text })),
+        history: state.chatMessages
+          .filter(message => requestPageState.contextScope !== "none" || !isNoteSourcedReply(message))
+          .map(({ role, text }) => ({ role, text })),
         memoryEnabled: isMemoryEnabled(),
       };
       set(current => ({ chatMessages: current.chatMessages.map(message =>
@@ -1927,25 +2048,30 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
           return;
         }
 
-        if (action.toolName === "note_draft_tool" && action.action === "regenerate_outline") {
-          const currentDraft = get().activeDraftContext;
+        if (action.toolName === "note_draft_tool" && (action.action === "regenerate_outline" || action.action === "revise_body")) {
+          const current = get();
+          const draftId = typeof payload.draftId === "string" ? payload.draftId : "";
+          const expectedUpdatedAt = typeof payload.expectedUpdatedAt === "string" ? payload.expectedUpdatedAt : "";
+          const pending = current.pendingCheckpoint;
+          const bound = checkpointFromPayload(payload.checkpoint);
+          if (!isCurrentReply() || !draftId || !expectedUpdatedAt || !bound || bound.id !== checkpointId ||
+              bound.sessionId !== current.agentSessionId || bound.payload?.draftId !== draftId ||
+              (pending && pending.id !== checkpointId) || (current.activeDraftContext?.id && current.activeDraftContext.id !== draftId)) return;
           const payloadSeed = typeof payload.seed === "string" ? payload.seed.trim() : "";
-          const seed =
-            currentDraft?.topic.trim() ||
-            currentDraft?.title.trim() ||
-            payloadSeed ||
-            get().draftSeed ||
-            text;
+          const seed = payloadSeed || current.activeDraftContext?.topic || current.draftSeed;
           const feedback =
             typeof payload.feedback === "string" && payload.feedback.trim()
               ? payload.feedback.trim()
               : text;
           set({
             centerMode: "draft",
+            pendingCheckpoint: bound,
             draftSeed: seed,
             draftCommand: {
               id: `draft-command-${Date.now()}`,
-              action: "regenerate_outline",
+              action: action.action,
+              draftId,
+              expectedUpdatedAt,
               seed,
               feedback,
             },
@@ -1971,72 +2097,12 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
         if (action.toolName === "note_edit_tool" && action.action === "apply_preview") {
           const editId =
             typeof payload.editPreviewId === "string" ? payload.editPreviewId : get().activeEditPreview?.id;
-          if (!editId) return;
-          const actionOwnerId = get().hydratedUserId;
-          const startingPreviewId = get().activeEditPreview?.id;
-          try {
-            await get().flushEditPreviewDraft(editId);
-            if (get().hydratedUserId !== actionOwnerId) return;
-            const noteId =
-              typeof payload.noteId === "string" ? payload.noteId : get().activeEditPreview?.noteId;
-            if (noteId) {
-              await syncNoteContentBeforeAiEdit(noteId);
-            }
-            const result = await applyEditPreview(editId);
-            const current = get();
-            if (current.hydratedUserId !== actionOwnerId) return;
-            const ownsView = current.activeEditPreview?.id === startingPreviewId && (!startingPreviewId || startingPreviewId === editId);
-            set({
-              ...(ownsView ? {
-                activeEditPreview: null,
-                pendingCheckpoint: null,
-                agentTask: taskWithCheckpoint(current.agentTask, null),
-                centerMode: "note",
-                activeDraftContext: null,
-                selectedFileId: result.note.id,
-              } : {}),
-              editPreviewDrafts: withoutEditPreviewDraft(current.editPreviewDrafts, editId),
-              fileContents: { ...current.fileContents, [result.note.id]: result.note.content },
-              treeData: replaceNoteRecordInTree(current.treeData, result.note),
-              ...(current.selectedFileId === result.note.id ? { noteSaveState: noteSaveState("saved") } : {}),
-              noteSaveStates: { ...current.noteSaveStates, [result.note.id]: noteSaveState('saved') },
-              ...(ownsView ? { pendingEditorSelection: {
-                id: `editor-selection-${Date.now()}`,
-                noteId: result.note.id,
-                markdown: result.preview.newContent,
-                mode:
-                  result.preview.targetType === "selection" ||
-                  result.preview.targetType === "section" ||
-                  result.preview.targetType === "insert"
-                    ? "select"
-                    : "caret-start",
-              } } : {}),
-              chatMessages: current.chatMessages.map((message) =>
-                message.id === assistantMsg.id
-                  ? { ...message, text: "修改已应用到正式笔记，并已保存旧版本和更新索引。" }
-                  : message
-              ),
+          if (editId) {
+            await get().applyEditPreviewRequest({
+              editId,
+              noteId: typeof payload.noteId === "string" ? payload.noteId : undefined,
+              assistantMessageId: assistantMsg.id,
             });
-            persistLocalCurrentState();
-            if (checkpointId) {
-              await resolveAgentCheckpoint(checkpointId, "resolved", {
-                editPreviewId: editId,
-                noteId: result.note.id,
-              }).catch(() => null);
-            }
-          } catch (error) {
-            if (get().hydratedUserId !== actionOwnerId) return;
-            const errorText = error instanceof Error ? error.message : "应用修改失败，正式笔记未变化";
-            set((current) => ({
-              ...(current.activeEditPreview?.id === editId ? { editPreviewError: errorText } : {}),
-              agentTask: taskWithRunStatus(current.agentTask, current.agentTask?.run.id ?? "", "failed"),
-              chatMessages: current.chatMessages.map((message) =>
-                message.id === assistantMsg.id ? { ...message, text: errorText } : message
-              ),
-            }));
-            if (checkpointId) {
-              await resolveAgentCheckpoint(checkpointId, "failed", { error: errorText }).catch(() => null);
-            }
           }
           return;
         }
@@ -2044,38 +2110,8 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
         if (action.toolName === "note_edit_tool" && action.action === "cancel_preview") {
           const editId =
             typeof payload.editPreviewId === "string" ? payload.editPreviewId : get().activeEditPreview?.id;
-          if (!editId) return;
-          const actionOwnerId = get().hydratedUserId;
-          const startingPreviewId = get().activeEditPreview?.id;
-          try {
-            await cancelEditPreview(editId);
-            if (get().hydratedUserId !== actionOwnerId) return;
-            set((current) => ({
-              ...(current.activeEditPreview?.id === startingPreviewId && (!startingPreviewId || startingPreviewId === editId) ? {
-                activeEditPreview: null,
-                pendingCheckpoint: null,
-                agentTask: taskWithCheckpoint(current.agentTask, null),
-                centerMode: "note",
-                activeDraftContext: null,
-              } : {}),
-              editPreviewDrafts: withoutEditPreviewDraft(current.editPreviewDrafts, editId),
-              chatMessages: current.chatMessages.map((message) =>
-                message.id === assistantMsg.id
-                  ? { ...message, text: "已取消本次修改预览，正式笔记没有变化。" }
-                  : message
-              ),
-            }));
-            if (checkpointId) {
-              await resolveAgentCheckpoint(checkpointId, "cancelled", { editPreviewId: editId }).catch(() => null);
-            }
-          } catch (error) {
-            if (get().hydratedUserId !== actionOwnerId) return;
-            const errorText = error instanceof Error ? error.message : "取消修改预览失败";
-            set((current) => ({
-              chatMessages: current.chatMessages.map((message) =>
-                message.id === assistantMsg.id ? { ...message, text: errorText } : message
-              ),
-            }));
+          if (editId) {
+            await get().cancelEditPreviewRequest({ editId, assistantMessageId: assistantMsg.id });
           }
           return;
         }
@@ -2271,6 +2307,7 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
         },
         onAgentSession: (session) => {
           if (!isCurrentReply()) return;
+          generationRunId = session.runId;
           set((current) => ({
             agentSessionId: session.sessionId,
             agentTask: {
@@ -2429,6 +2466,7 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
     } finally {
       if (generationAbortController === abortController) {
         generationAbortController = null;
+        generationRunId = null;
         set((current) => ({
           chatLoading: false,
           chatMessages: current.chatMessages.map(message =>
@@ -2447,11 +2485,9 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
   },
 
   stopGeneration: () => {
-    const current = get();
-    const runId =
-      current.agentTask?.run.id ??
-      [...current.chatMessages].reverse().find((message) => message.agentRunId)?.agentRunId;
+    const runId = generationRunId;
     generationAbortController?.abort();
+    generationRunId = null;
     set((state) => ({
       chatLoading: false,
       chatMessages: state.chatMessages.map(message =>
@@ -2462,7 +2498,7 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
     if (runId) {
       void cancelAgentRun(runId)
         .then((task) => {
-          if (task) {
+          if (task && !get().chatLoading && get().agentTask?.run.id === runId) {
             set({
               agentTask: task,
               pendingCheckpoint: task.checkpoint ?? null,
@@ -2757,16 +2793,14 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
 
   toggleNodePinned: (id) => {
     const node = findNode(get().treeData, id);
+    if (!node) return;
     set((state) => ({ treeData: togglePinned(state.treeData, id) }));
     persistLocalCurrentState();
-    if (!node || node.type !== "file") return;
-    void updateNote(id, {
-      isPinned: !node.pinned,
-      source: "manual_edit",
-      changeSummary: node.pinned ? "取消置顶" : "置顶笔记",
-    }).catch((error) => {
-      set({ workspaceError: error instanceof Error ? error.message : "更新置顶失败" });
-    });
+    if (node.type !== "file") return;
+    const changeSummary = node.pinned ? "取消置顶" : "置顶笔记";
+    runWorkspaceOperation(`pin:${id}`, id, changeSummary, (active) => enqueueNoteMutation(id, () =>
+      active() ? updateNote(id, { isPinned: !node.pinned, source: "manual_edit", changeSummary }) : Promise.resolve(null)
+    ));
   },
 
   toggleNodeFavorite: (id) => {
@@ -2777,22 +2811,28 @@ export const useAppStore = create<InternalAppState>((set, get) => ({
       treeData: updateFileMetadata(state.treeData, id, { favorite: nextFavorite }),
     }));
     persistLocalCurrentState();
-    void updateNote(id, {
-      isFavorite: nextFavorite,
-      source: "manual_edit",
-      changeSummary: nextFavorite ? "收藏笔记" : "取消收藏",
-    })
-      .then((note) => {
-        const current = get();
-        set({ treeData: replaceNoteRecordInTree(current.treeData, note) });
-        persistLocalCurrentState();
-      })
-      .catch((error) => {
+    const changeSummary = nextFavorite ? "收藏笔记" : "取消收藏";
+    runWorkspaceOperation(`favorite:${id}`, id, changeSummary, (active) => enqueueNoteMutation(id, async () => {
+      if (!active()) return null;
+      try {
+        return await updateNote(id, { isFavorite: nextFavorite, source: "manual_edit", changeSummary });
+      } catch (error) {
+        if (active()) {
+          set((state) => ({ treeData: updateFileMetadata(state.treeData, id, { favorite: !nextFavorite }) }));
+          persistLocalCurrentState();
+        }
+        throw error;
+      }
+    }), (note) => {
+      if (note) {
         set((state) => ({
-          treeData: updateFileMetadata(state.treeData, id, { favorite: !nextFavorite }),
-          workspaceError: error instanceof Error ? error.message : "更新收藏失败",
+          treeData: updateFileMetadata(state.treeData, id, {
+            favorite: note.isFavorite,
+            ...(note.updatedAt ? { updatedAt: note.updatedAt } : {}),
+          }),
         }));
-      });
+      }
+    });
   },
 
   setNoteTags: (id, tags) => {
@@ -2867,6 +2907,9 @@ async function loadStructuredWorkspace(userId: string, preferredSelectedFileId?:
         current.selectedFileId !== started.selectedFileId ? current.selectedFileId : preferredSelectedFileId ?? current.selectedFileId
       );
       useAppStore.getState().replaceSnapshot(snapshot);
+      if (snapshot.selectedFileId && snapshot.fileContents[snapshot.selectedFileId] === undefined) {
+        void readOpenedNote(snapshot.selectedFileId);
+      }
       useAppStore.setState({
         deletedNotes: allNotes
           .filter((note) => note.deletedAt)
@@ -2925,12 +2968,28 @@ export function AppProvider({
   userId: string;
 }) {
   const hydratedUserId = useAppStore((state) => state.hydratedUserId);
+  const serverSyncReady = useAppStore((state) => state.serverSyncReady);
+  const unopenedNoteId = useAppStore((state) => {
+    const id = state.selectedFileId;
+    return id && state.fileContents[id] === undefined && findFileById(state.treeData, id)?.content === undefined ? id : null;
+  });
 
   useEffect(() => {
-    useAppStore.getState().hydrate(userId);
+    if (hydratedUserId === userId && unopenedNoteId && !noteOpenRequests.has(unopenedNoteId)) {
+      void readOpenedNote(unopenedNoteId);
+    }
+  }, [hydratedUserId, unopenedNoteId, userId]);
+
+  useEffect(() => {
+    let active = true;
+    void prepareNoteJournal().then(() => {
+      if (active) useAppStore.getState().hydrate(userId);
+    });
     return () => {
+      active = false;
       generationAbortController?.abort();
       generationAbortController = null;
+      generationRunId = null;
       clearScheduledNoteSave();
     };
   }, [userId]);
@@ -3013,10 +3072,52 @@ export function AppProvider({
 
   useEffect(() => {
     if (hydratedUserId !== userId) return;
-    const flush = () => void flushOfflineNoteQueue(userId).catch(() => undefined);
-    window.addEventListener("online", flush);
-    if (navigator.onLine) flush();
-    return () => window.removeEventListener("online", flush);
+    let active = true;
+    let syncing = false;
+    const flush = async () => {
+      const state = useAppStore.getState();
+      if (state.hydratedUserId !== userId || !navigator.onLine || syncing) return;
+      if (!state.serverSyncReady) {
+        if (!state.workspaceLoading) await loadStructuredWorkspace(userId);
+        return;
+      }
+      syncing = true;
+      try {
+        for (const [id, edit] of localNoteEdits) {
+          if (edit.userId === userId && state.noteSaveStates[id]?.status === "offline") state.retryNoteSave(id);
+        }
+        await Promise.allSettled(noteSavesInFlight.values());
+        if (active) await flushOfflineNoteQueue(userId);
+      } finally {
+        syncing = false;
+      }
+    };
+    const sync = () => void flush().catch(() => undefined);
+    window.addEventListener("online", sync);
+    window.addEventListener("focus", sync);
+    sync();
+    return () => {
+      active = false;
+      window.removeEventListener("online", sync);
+      window.removeEventListener("focus", sync);
+    };
+  }, [hydratedUserId, serverSyncReady, userId]);
+
+  useEffect(() => {
+    if (hydratedUserId !== userId) return;
+    const refresh = () => {
+      const state = useAppStore.getState();
+      if (document.visibilityState === "visible" && state.hydratedUserId === userId && state.serverSyncReady &&
+          state.centerMode === "note" && state.selectedFileId) {
+        void readOpenedNote(state.selectedFileId, true);
+      }
+    };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
   }, [hydratedUserId, userId]);
 
   return <>{children}</>;

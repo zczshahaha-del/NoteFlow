@@ -1,13 +1,16 @@
-const CACHE_NAME = "noteflow-shell-v2";
+const SCOPE = new URL(self.registration.scope);
+const CACHE_PREFIX = `noteflow-shell:${SCOPE.pathname}:`;
+const CACHE_NAME = `${CACHE_PREFIX}v1`;
+const API_PREFIX = new URL("api/", SCOPE).pathname;
 const SHELL_ASSETS = [
-  "/",
-  "/manifest.webmanifest",
-  "/noteflow_icon.svg",
-  "/favicon.svg",
-  "/pwa-192.png",
-  "/pwa-512.png",
-  "/apple-touch-icon.png",
-];
+  "./",
+  "manifest.webmanifest",
+  "noteflow_icon.svg",
+  "favicon.svg",
+  "pwa-192.png",
+  "pwa-512.png",
+  "apple-touch-icon.png",
+].map((asset) => new URL(asset, SCOPE).href);
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL_ASSETS)));
@@ -17,7 +20,10 @@ self.addEventListener("install", (event) => {
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))))
+      .then((keys) => Promise.all(keys.filter((key) =>
+        (key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME) ||
+        (SCOPE.pathname === "/" && key === "noteflow-shell-v2")
+      ).map((key) => caches.delete(key))))
       .then(() => self.clients.claim())
   );
 });
@@ -25,30 +31,29 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const request = event.request;
   const url = new URL(request.url);
-  if (request.method !== "GET" || url.origin !== self.location.origin || url.pathname.startsWith("/api/")) {
+  if (request.method !== "GET" || url.origin !== SCOPE.origin ||
+    !url.pathname.startsWith(SCOPE.pathname) ||
+    url.pathname === API_PREFIX.slice(0, -1) || url.pathname.startsWith(API_PREFIX)) {
     return;
   }
 
-  if (request.mode === "navigate") {
-    event.respondWith(
-      fetch(request)
-        .then((response) => {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put("/", copy));
-          return response;
-        })
-        .catch(() => caches.match("/"))
-    );
-    return;
-  }
-
-  event.respondWith(
-    caches.match(request).then((cached) => cached || fetch(request).then((response) => {
-      if (response.ok) {
-        const copy = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+  event.respondWith((async () => {
+    const cache = await caches.open(CACHE_NAME);
+    if (request.mode === "navigate") {
+      try {
+        const response = await fetch(request);
+        if (response.ok) await cache.put(SCOPE.href, response.clone()).catch(() => undefined);
+        return response;
+      } catch (error) {
+        const fallback = await cache.match(SCOPE.href);
+        if (fallback) return fallback;
+        throw error;
       }
-      return response;
-    }))
-  );
+    }
+    const cached = await cache.match(request);
+    if (cached) return cached;
+    const response = await fetch(request);
+    if (response.ok) await cache.put(request, response.clone()).catch(() => undefined);
+    return response;
+  })());
 });

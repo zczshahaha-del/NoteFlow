@@ -36,6 +36,20 @@
 .nf-soft-menu[data-open="false"] { pointer-events: none; animation: nf-soft-menu-out var(--nf-motion-menu-exit, 130ms) ease both; }
 .nf-soft-menu.nf-action-menu { width: 216px; max-width: calc(100vw - 32px); }
 .nf-soft-menu.nf-new-menu { width: 184px; }
+.nf-soft-menu.nf-action-menu.nf-directory-context-menu {
+  top: calc(100% + 6px);
+  width: 174px;
+  max-height: var(--directory-menu-space, calc(100dvh - 16px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 5px;
+}
+.nf-soft-menu.nf-directory-context-menu[data-side="top"] { top: auto; bottom: calc(100% + 6px); }
+.nf-soft-menu .nf-directory-menu-divider {
+  border: 0;
+  border-top: 1px solid var(--nf-ui-line);
+  margin: 4px 4px;
+}
 .nf-soft-menu .nf-soft-menu-item,
 .nf-settings-system .nf-account-popover .nf-menu-item {
   display: flex;
@@ -66,6 +80,7 @@
 .nf-soft-menu .nf-soft-menu-danger { color: var(--nf-menu-danger); }
 .nf-soft-menu .nf-soft-menu-danger > svg { color: inherit; }
 .nf-soft-menu .nf-soft-menu-danger:hover { background: var(--nf-menu-danger-hover); }
+.nf-soft-menu.nf-directory-context-menu .nf-soft-menu-item { padding: 5px 9px; min-height: 34px; }
 .nf-soft-menu :where(button, input):focus-visible {
   outline: 2px solid var(--nf-menu-muted);
   outline-offset: -2px;
@@ -101,7 +116,6 @@
 .nf-soft-menu .nf-history-row:focus-within,
 .nf-soft-menu .nf-history-row[data-selected="true"] { background: var(--nf-menu-hover); }
 .nf-soft-menu .nf-history-name { color: var(--nf-menu-text); font: inherit; }
-.nf-soft-menu .nf-history-check { color: var(--nf-menu-icon); }
 .nf-soft-menu .nf-history-rename { border-color: var(--nf-menu-icon); background: var(--nf-menu-surface); }
 .nf-soft-menu .nf-history-action {
   display: grid; place-items: center; flex-shrink: 0;
@@ -120,6 +134,7 @@
 @keyframes nf-soft-menu-in { from { opacity: 0; transform: translateY(-5px) scale(.985); } to { opacity: 1; transform: none; } }
 @keyframes nf-soft-menu-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(-3px) scale(.99); } }
 @media (pointer: coarse) {
+  .nf-soft-menu.nf-directory-context-menu .nf-soft-menu-item { min-height: 44px; }
   .nf-soft-menu .nf-soft-menu-item,
   .nf-settings-system .nf-account-popover .nf-menu-item,
   .nf-soft-menu .nf-history-name { min-height: 44px; }

@@ -1,22 +1,28 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
-from datetime import datetime
-from typing import Any, Optional
+from contextlib import aclosing
+from typing import Any, AsyncGenerator, Optional
 
-from fastapi import APIRouter, Depends
+import anyio
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from starlette.types import Receive, Scope, Send
 from app.config import cfg
 from app.database import AsyncSessionLocal
 from app.deps import CurrentUser, get_current_user, redis_rate_limit
 from app.memory.context import MemoryContextService
 from app.rag.service import RagRequest, configured_rag_service
 from app.repositories.runs import RunRepository
+from app.repositories.drafts import DraftRepository
+from app.repositories.notes import NoteRepository
 from app.services.ai import ChatMessage, ChatRequest, stream_chat
 from app.services.context_planner import ContextPlan
-from app.memory.planning import broad_memory_read_plan, memory_read_plan_from_turn_plan
+from app.services.draft_trace import DraftRunLink, draft_stage
+from app.memory.planning import memory_read_plan_from_turn_plan
 from app.services.runtime_errors import public_error_message
 from app.services.run_service import RunService
 from app.agent.sse import encode_event
@@ -40,10 +46,9 @@ from app.services.agent_runtime import (
 from app.services.agent_checkpoints import (
     agent_run_history as _agent_run_history,
     agent_task_snapshot as _agent_task_snapshot,
-    checkpoint_out as _checkpoint_out,
     create_checkpoint as _create_checkpoint,
     latest_waiting_checkpoint as _latest_waiting_checkpoint,
-    patch_working_memory_status as _patch_working_memory_status,
+    resolve_checkpoint_by_id as _resolve_checkpoint_by_id,
 )
 from app.memory.agent import (
     auto_save_memory_from_question as _auto_save_memory_from_question,
@@ -67,9 +72,51 @@ from app.schemas.agent import (
     RunCancelPayload,
 )
 from app.services.turn_planner import ContextSource, PrimaryIntent, TurnPlan
+from app.services.selection_context import SELECTION_LIMIT, has_selection_scope, whole_note_id
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 logger = logging.getLogger(__name__)
+_active_chat_streams: dict[tuple[str, str], anyio.CancelScope] = {}
+
+
+class _ChatStreamResponse(StreamingResponse):
+    def __init__(self, body: AsyncGenerator[str, None], *, user_id: str, run_id: str):
+        super().__init__(
+            body, media_type="text/event-stream; charset=utf-8",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+        )
+        self.run_key = (user_id, run_id)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        completed = False
+        try:
+            # Watch disconnects even while no model tokens are ready to send.
+            async with anyio.create_task_group() as tasks:
+                _active_chat_streams[self.run_key] = tasks.cancel_scope
+
+                async def stream():
+                    nonlocal completed
+                    try:
+                        async with aclosing(self.body_iterator):
+                            await self.stream_response(send)
+                        completed = True
+                    except OSError:
+                        pass  # The client can disconnect during a send.
+                    finally:
+                        tasks.cancel_scope.cancel()
+
+                tasks.start_soon(stream)
+                await self.listen_for_disconnect(receive)
+                tasks.cancel_scope.cancel()
+        finally:
+            _active_chat_streams.pop(self.run_key, None)
+            if not completed:
+                with anyio.CancelScope(shield=True):
+                    try:
+                        user_id, run_id = self.run_key
+                        await RunService().cancel(user_id, run_id, "client_disconnected", cancel_checkpoints=False)
+                    except Exception:
+                        logger.exception("Could not settle disconnected chat run %s", self.run_key[1])
 
 
 def _event_delta_text(data: dict[str, Any]) -> str:
@@ -100,7 +147,6 @@ def _langgraph_response(
         trace_id=run_state.get("trace_id") or "",
         thread_id=session_id,
     )
-    state["suppress_memory_write"] = payload.retryAnswerOnly
 
     async def stream():
         answer_parts: list[str] = []
@@ -108,6 +154,7 @@ def _langgraph_response(
         context_mode: Optional[str] = None
         failed = False
         error_message = ""
+        done_event = _agent_done_event(session_id, run_id)
         with trace_scope(
             trace_id=run_state.get("trace_id") or "",
             session_id=session_id, run_id=run_id, node="langgraph",
@@ -122,8 +169,11 @@ def _langgraph_response(
             )
             yield _sse_format(trace)
             try:
-                async with postgres_checkpointer() as saver:
-                    async for event in stream_readonly_graph(state, checkpointer=saver):
+                async with (
+                    postgres_checkpointer() as saver,
+                    aclosing(stream_readonly_graph(state, checkpointer=saver)) as events,
+                ):
+                    async for event in events:
                         data = event.to_wire()
                         if event.type == "agent_session":
                             data.setdefault("intent", intent)
@@ -137,20 +187,25 @@ def _langgraph_response(
                         elif event.type == "agent_error":
                             failed = True
                             error_message = str(data.get("message") or "LangGraph failed")
+                        elif event.type == "agent_done":
+                            done_event = data
+                            continue
                         yield _sse_format(data)
             except Exception as exc:
                 failed = True
                 error_message = public_error_message(exc)
                 yield _sse_format(_agent_error_event(session_id, run_id, error_message))
-                yield _sse_format(_agent_done_event(session_id, run_id, "failed"))
 
             answer = "".join(answer_parts).strip()
-            await _finish_agent_run(
+            status = "failed" if failed else "completed"
+            committed = await _finish_agent_run(
                 user_id=user_id, session_id=session_id, run_id=run_id,
-                status="failed" if failed else "completed", answer=answer,
+                status=status, answer=answer,
                 context_mode=context_mode, sources=sources,
                 error_message=error_message or None,
+                learn_from_chat=memory_enabled and not payload.retryAnswerOnly,
             )
+            yield _sse_format({**done_event, "status": status if committed else "cancelled"})
             yield "data: [DONE]\n\n"
 
     return StreamingResponse(
@@ -176,6 +231,7 @@ def _context_plan_from_turn_plan(plan: TurnPlan) -> ContextPlan:
         PrimaryIntent.GENERAL_CHAT: "general_chat",
         PrimaryIntent.NOTE_CREATE: "note_draft_create",
         PrimaryIntent.NOTE_EDIT: "note_edit_create",
+        PrimaryIntent.DRAFT_REVISE: "note_draft_continue",
         PrimaryIntent.MEMORY: "memory_manage",
         PrimaryIntent.UNKNOWN: "general_chat",
     }
@@ -270,7 +326,7 @@ def _terminal_turn_response(
             yield _sse_format(_agent_error_event(session_id, run_id, answer))
         else:
             yield _sse_format(_choice_delta(answer))
-        await _finish_agent_run(
+        committed = await _finish_agent_run(
             user_id=user_id,
             session_id=session_id,
             run_id=run_id,
@@ -278,7 +334,7 @@ def _terminal_turn_response(
             answer="" if status == "failed" else answer,
             error_message=answer if status == "failed" else None,
         )
-        yield _sse_format(_agent_done_event(session_id, run_id, status))
+        yield _sse_format(_agent_done_event(session_id, run_id, status if committed else "cancelled"))
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(
@@ -290,6 +346,21 @@ def _terminal_turn_response(
 
 def _page_state_dict(page_state: AgentChatPageState | None) -> dict[str, Any] | None:
     return page_state.model_dump() if page_state else None
+
+
+async def _bound_draft(user_id: str, session_id: str, requested_id: str | None):
+    checkpoint = await _latest_waiting_checkpoint(user_id, session_id)
+    draft_id = (checkpoint or {}).get("payload", {}).get("draftId")
+    if (
+        not draft_id or (checkpoint or {}).get("checkpointType") != "draft_workspace"
+        or (requested_id and draft_id != requested_id)
+    ):
+        return None, None
+    async with AsyncSessionLocal() as session:
+        draft = await DraftRepository(session).get(user_id, draft_id)
+    if not draft or draft.status in {"saved", "canceled"}:
+        return None, None
+    return checkpoint, draft
 
 
 def _note_sources_fallback(sources: list[dict]) -> str:
@@ -313,44 +384,6 @@ async def _checkpoint_for_plan(user_id: str, session_id: Optional[str], intent: 
 
 async def _effective_memory_enabled(user_id: str, requested: bool) -> bool:
     return await MemoryContextService().enabled(user_id=user_id, requested=requested)
-
-
-async def _resolve_checkpoint_by_id(
-    *,
-    user_id: str,
-    checkpoint_id: str,
-    status: str,
-    payload_patch: Optional[dict] = None,
-) -> Optional[dict]:
-    async with AsyncSessionLocal() as db:
-        checkpoint = await RunRepository(db).get_checkpoint(user_id, checkpoint_id)
-        if checkpoint is None:
-            return None
-        if checkpoint.status != "waiting_user_confirm" and status == "cancelled":
-            return _checkpoint_out(checkpoint)
-        payload = dict(checkpoint.payload or {})
-        if payload_patch:
-            payload.update(payload_patch)
-        if checkpoint.checkpoint_type in {"draft_workspace", "edit_preview"} or payload.get("workingMemory"):
-            working_extra = {}
-            if payload.get("draftId"):
-                working_extra["relatedDraftId"] = payload.get("draftId")
-            if payload.get("editPreviewId"):
-                working_extra["relatedEditPreviewId"] = payload.get("editPreviewId")
-            if payload.get("noteId"):
-                working_extra["relatedNoteId"] = payload.get("noteId")
-            payload = _patch_working_memory_status(payload, status, working_extra)
-            # Task outcomes belong to the checkpoint/run history. They are not
-            # user facts and must not create long-term memories or index jobs.
-            # Meaningful experiences can still enter through the explicit or
-            # conversational memory flow, independently of task completion.
-        checkpoint.payload = payload
-        checkpoint.status = status
-        checkpoint.resolved_at = datetime.utcnow() if status != "waiting_user_confirm" else None
-        checkpoint.updated_at = datetime.utcnow()
-        await db.commit()
-        await db.refresh(checkpoint)
-        return _checkpoint_out(checkpoint)
 
 
 def _choice_delta(text: str) -> dict:
@@ -520,6 +553,14 @@ async def list_runs(
     return await _agent_run_history(user.id, sessionId, limit)
 
 
+@router.get("/runs/{run_id}")
+async def get_run(run_id: str, user: CurrentUser = Depends(get_current_user)):
+    snapshot = await _agent_task_snapshot(user.id, run_id=run_id)
+    if snapshot["task"] is None:
+        raise HTTPException(404, detail="任务不存在。")
+    return snapshot
+
+
 @router.post("/runs/{run_id}/cancel")
 async def cancel_run(
     run_id: str,
@@ -529,6 +570,9 @@ async def cancel_run(
     if not await RunService().cancel(user.id, run_id, payload.reason):
         return {"task": None}
 
+    active = _active_chat_streams.get((user.id, run_id))
+    if active is not None:
+        active.cancel()
     return await _agent_task_snapshot(user.id, run_id=run_id)
 
 
@@ -568,18 +612,69 @@ async def resolve_checkpoint(
     return {"checkpoint": checkpoint}
 
 
-@router.post("/chat")
-async def chat(
+def _prepare_chat_payload(payload: AgentChatPayload) -> AgentChatPayload:
+    if payload.pageState and payload.pageState.contextScope == "none" and payload.mode != "ask_notes":
+        payload = payload.model_copy(update={
+            "documentTitle": "", "documentContent": "",
+            "pageState": payload.pageState.model_copy(update={
+                "currentNoteId": None, "currentSectionId": None, "selectedText": "",
+                "selectionContext": None, "unsavedContent": "", "dirty": False,
+            }),
+        })
+    page_state_dict = _page_state_dict(payload.pageState) or {}
+    selection_scope = has_selection_scope(page_state_dict)
+    if payload.pageState and (selection_scope or whole_note_id(page_state_dict, payload.question)):
+        if selection_scope and len(payload.pageState.selectedText.strip()) > SELECTION_LIMIT:
+            raise HTTPException(422, detail="选中文字超过 4000 字，请缩小选区后再发送。")
+        # Strip any editor document before planning or checkpointing a request
+        # that will use a selection or retrieve limited saved excerpts.
+        payload = payload.model_copy(update={
+            "mode": "chat",
+            "documentContent": "",
+            "pageState": payload.pageState.model_copy(update={"unsavedContent": ""}),
+        })
+    return payload
+
+
+@router.post("/chat", name="chat")
+async def stream_chat_turn(
     payload: AgentChatPayload,
     user: CurrentUser = Depends(redis_rate_limit("agent-chat", cfg.AI_RATE_LIMIT)),
 ):
+    payload = _prepare_chat_payload(payload)
     run_state = await _start_agent_run(payload, user.id, "planning")
+
+    async def stream():
+        try:
+            response = await chat(payload, user, run_state=run_state)
+        except Exception as exc:
+            logger.exception("Chat preparation failed for run %s", run_state["run_id"])
+            response = _terminal_turn_response(
+                user_id=user.id, run_state=run_state, intent="unknown",
+                answer=public_error_message(exc), status="failed",
+            )
+        async with aclosing(response.body_iterator) as body:
+            async for frame in body:
+                yield frame
+
+    return _ChatStreamResponse(stream(), user_id=user.id, run_id=run_state["run_id"])
+
+
+async def chat(payload: AgentChatPayload, user: CurrentUser, *, run_state: dict | None = None):
+    if run_state is None:
+        payload = _prepare_chat_payload(payload)
+        run_state = await _start_agent_run(payload, user.id, "planning")
+    page_state_dict = _page_state_dict(payload.pageState) or {}
     session_id = run_state["session_id"]
     run_id = run_state["run_id"]
     route_step_id = run_state["route_step_id"]
-    page_state_dict = _page_state_dict(payload.pageState) or {}
+    requested_draft_id = payload.pageState.activeDraftId if payload.pageState else None
 
     try:
+        if payload.mode == "chat" and payload.sessionId == session_id and not payload.retryAnswerOnly:
+            _, bound_draft = await _bound_draft(user.id, session_id, requested_draft_id)
+            if bound_draft:
+                page_state_dict.update(boundDraftId=bound_draft.id, boundDraftTitle=bound_draft.title)
         async with postgres_checkpointer() as saver:
             waiting = bool(payload.sessionId) and await graph_waiting_for_clarification(
                 checkpointer=saver,
@@ -634,7 +729,7 @@ async def chat(
             answer="已取消本次请求。",
             turn_plan=turn_plan,
         )
-    if "__interrupt__" in turn_state:
+    if "__interrupt__" in turn_state or turn_state.get("status") == "select_note":
         answer = (
             str(turn_state.get("clarification_question") or "").strip()
             or "还缺少一些必要信息，可以再具体说明一下吗？"
@@ -704,6 +799,39 @@ async def chat(
         )
     active_checkpoint = await _checkpoint_for_plan(user.id, payload.sessionId, intent)
     memory_enabled = await _effective_memory_enabled(user.id, not force_note_answer)
+
+    draft_source_id = None
+    if intent == "note_draft_create":
+        source_title = turn_plan.intent_parameters.source_note_title
+        current_note_id = (page_state_dict or {}).get("currentNoteId")
+        if source_title or (current_note_id and ContextSource.CURRENT_NOTE in turn_plan.context_sources):
+            source_started = time.perf_counter()
+            async with AsyncSessionLocal() as db:
+                notes = NoteRepository(db)
+                if source_title:
+                    if source_title.casefold() in payload.question.casefold():
+                        matches = await notes.match_active_titles(user.id, source_title)
+                        short_title = source_title.removesuffix("笔记").strip()
+                        if not matches and short_title and short_title != source_title:
+                            matches = await notes.match_active_titles(user.id, short_title)
+                        exact = [note_id for note_id, title in matches if title.casefold() == source_title.casefold()]
+                        if len(exact) == 1:
+                            draft_source_id = exact[0]
+                        elif len(matches) == 1:
+                            draft_source_id = matches[0][0]
+                else:
+                    source_note = await notes.get_active(user.id, current_note_id)
+                    if source_note:
+                        draft_source_id = source_note.id
+            link = DraftRunLink(user.id, run_id, session_id, run_state.get("trace_id") or run_id)
+            async with draft_stage(link, "select_source_note", started=source_started, sourceNoteId=draft_source_id) as trace:
+                if not draft_source_id:
+                    trace["errorType"] = "SourceNotResolved"
+            if not draft_source_id:
+                return _terminal_turn_response(
+                    user_id=user.id, run_state=run_state, intent=intent, turn_plan=turn_plan,
+                    answer="还不能确定用哪篇笔记。请给出完整标题，或者打开那篇笔记后说「根据当前笔记整理一篇新笔记」。",
+                )
 
     if intent in {"general_chat", "note_search", "note_context_qa"}:
         return _langgraph_response(
@@ -998,12 +1126,13 @@ async def chat(
                 )
                 ai_started = time.perf_counter()
                 try:
-                    async for chunk in stream_chat(chat_req):
-                        choice = (chunk.get("choices") or [{}])[0]
-                        delta = ((choice.get("delta") or {}).get("content")) or ""
-                        if delta:
-                            answer_parts.append(delta)
-                        yield _sse_format(chunk)
+                    async with aclosing(stream_chat(chat_req)) as chunks:
+                        async for chunk in chunks:
+                            choice = (chunk.get("choices") or [{}])[0]
+                            delta = ((choice.get("delta") or {}).get("content")) or ""
+                            if delta:
+                                answer_parts.append(delta)
+                            yield _sse_format(chunk)
                 except ValueError as e:
                     if "not configured" not in str(e).lower():
                         raise
@@ -1095,15 +1224,18 @@ async def chat(
                     action = "list_memories"
                     output_summary = f"读取 {len(memories)} 条长期记忆"
                 elif memory_action == "read":
-                    tool_summary, memories = await _query_memories_for_agent(
-                        user.id,
-                        payload.question,
-                        payload.history,
-                        read_plan=memory_read_plan_from_turn_plan(
-                            turn_plan,
-                            question=payload.question,
-                        ),
-                    )
+                    try:
+                        async with asyncio.timeout(8):
+                            tool_summary, memories = await _query_memories_for_agent(
+                                user.id,
+                                payload.question,
+                                payload.history,
+                                read_plan=memory_read_plan_from_turn_plan(
+                                    turn_plan, question=payload.question,
+                                ),
+                            )
+                    except TimeoutError:
+                        raise ValueError("暂时查不到你的个人资料，请稍后重试。") from None
                     action = "list_memories"
                     output_summary = f"读取 {len(memories)} 条长期记忆"
                 elif memory_action == "delete":
@@ -1149,7 +1281,9 @@ async def chat(
                     )
                 )
                 from app.memory.control import uses_engine
-                if action != "list_memories" and await uses_engine(user.id):
+                if action == "list_memories" and memory_action == "read" and not memories:
+                    tool_summary = "我还没有找到能回答这个问题的记忆。"
+                if (action != "list_memories" or (memory_action == "read" and not memories)) and await uses_engine(user.id):
                     # Management acknowledgements use actual operation results;
                     # queued/empty saves cannot be rewritten into success by an LLM.
                     yield _sse_format(_choice_delta(tool_summary))
@@ -1159,23 +1293,29 @@ async def chat(
                     yield "data: [DONE]\n\n"
                     return
                 memory_result_context = _memory_tool_context(action, memories, payload.question)
+                # Planning can use the conversation to resolve the question. The
+                # answer must use the resolved records, since old turns can contain
+                # values that have since been corrected or deleted.
                 chat_req = ChatRequest(
                     question=payload.question,
                     documentTitle="NoteFlow 长期记忆工具结果",
                     documentContent=memory_result_context,
-                    history=[ChatMessage(role=m.role, text=m.text) for m in payload.history],
+                    history=[] if action == "list_memories" else [
+                        ChatMessage(role=m.role, text=m.text) for m in payload.history
+                    ],
                     maxTokens=payload.maxTokens or 900,
                     temperature=payload.temperature,
                 )
                 answer_parts: list[str] = []
                 ai_started = time.perf_counter()
                 try:
-                    async for chunk in stream_chat(chat_req):
-                        choice = (chunk.get("choices") or [{}])[0]
-                        delta = ((choice.get("delta") or {}).get("content")) or ""
-                        if delta:
-                            answer_parts.append(delta)
-                        yield _sse_format(chunk)
+                    async with aclosing(stream_chat(chat_req)) as chunks:
+                        async for chunk in chunks:
+                            choice = (chunk.get("choices") or [{}])[0]
+                            delta = ((choice.get("delta") or {}).get("content")) or ""
+                            if delta:
+                                answer_parts.append(delta)
+                            yield _sse_format(chunk)
                 except ValueError as e:
                     if "not configured" not in str(e).lower():
                         raise
@@ -1230,12 +1370,13 @@ async def chat(
                 return
 
             if intent == "note_draft_continue":
-                checkpoint = active_checkpoint
-                page_state = payload.pageState
-                draft_seed = _draft_seed_for_continue(context_plan, checkpoint, page_state, payload.question)
-                checkpoint_id = (checkpoint or {}).get("id")
-                if not checkpoint_id and not draft_seed:
-                    answer = "我没有找到当前草稿任务。你可以先告诉我要写什么主题，我再重新生成大纲。"
+                checkpoint, draft = await _bound_draft(user.id, session_id, page_state_dict.get("boundDraftId"))
+                if not draft or draft.id != page_state_dict.get("boundDraftId") or draft.status not in {"outline_ready", "assembled"}:
+                    answer = (
+                        "这篇草稿当前不能继续修改。请打开对应草稿，等正在进行的操作结束后再试。"
+                        if page_state_dict.get("boundDraftId")
+                        else "这段对话里没有可接着修改的草稿。请回到那篇草稿的对话再试。"
+                    )
                     yield _sse_format(_choice_delta(answer))
                     await _finish_agent_run(
                         user_id=user.id,
@@ -1248,12 +1389,14 @@ async def chat(
                     yield "data: [DONE]\n\n"
                     return
 
-                answer = "收到，我按你的反馈重新调整大纲。"
+                action = "revise_body" if draft.status == "assembled" else "regenerate_outline"
+                answer = "我会按你的要求修改这篇草稿正文。" if action == "revise_body" else "我会按你的要求调整这篇草稿的大纲。"
                 metadata = {
-                    "seed": draft_seed,
-                    "feedback": payload.question,
-                    "checkpointId": checkpoint_id,
-                    "draftRequest": context_plan.draft_request,
+                    "seed": checkpoint["payload"].get("seed") or draft.topic,
+                    "feedback": turn_plan.intent_parameters.instruction,
+                    "checkpointId": checkpoint["id"],
+                    "draftId": draft.id,
+                    "expectedUpdatedAt": draft.updated_at.isoformat(),
                 }
                 trace = await _complete_tool_only_run(
                     user_id=user.id,
@@ -1261,10 +1404,10 @@ async def chat(
                     run_id=run_id,
                     route_step_id=route_step_id,
                     tool_name="note_draft_tool",
-                    action="regenerate_outline",
+                    action=action,
                     answer=answer,
                     input_summary=payload.question,
-                    output_summary="重新生成 AI 草稿大纲",
+                    output_summary="续改当前草稿",
                     metadata=metadata,
                 )
                 yield _sse_format(trace)
@@ -1273,8 +1416,8 @@ async def chat(
                 yield _sse_format(
                     _tool_action(
                         "note_draft_tool",
-                        "regenerate_outline",
-                        metadata,
+                        action,
+                        {**metadata, "checkpoint": checkpoint},
                         answer,
                     )
                 )
@@ -1297,23 +1440,17 @@ async def chat(
                 return
 
             if intent == "note_draft_create":
-                draft_runtime = "langgraph"
+                draft_runtime = "database"
                 draft_seed = _draft_seed_from_plan(context_plan, payload.question)
+                draft_raw_request = payload.question
+                # A brief based on a source note must not turn old chats into
+                # writing instructions. Generation reads current memory itself.
                 planned_brief = _short(
-                    str((context_plan.draft_request or {}).get("brief") or ""),
+                    draft_raw_request if draft_source_id else str((context_plan.draft_request or {}).get("brief") or ""),
                     2000,
                 ).strip()
-                draft_raw_request = payload.question
-                draft_memory_context = ""
-                draft_memories: list[dict] = []
-                if memory_enabled and context_plan.context_plan.get("read_user_memory"):
-                    _, draft_memories = await _query_memories_for_agent(
-                        user.id, payload.question, payload.history,
-                        read_plan=broad_memory_read_plan(
-                            payload.question, scopes=["note_generation", "learning"], reason="draft_context",
-                        ),
-                    )
-                    draft_memory_context = _memory_context_from_records(draft_memories)
+                source_reference = {"sourceNoteId": draft_source_id} if draft_source_id else {}
+                draft_request = {**context_plan.draft_request, "brief": planned_brief, **source_reference}
                 answer = (
                     f"我会为你整理{draft_seed or '这份笔记'}的大纲。"
                     "你可以先调整卡片里的标题和要求，再开始生成。"
@@ -1327,10 +1464,10 @@ async def chat(
                     payload={
                         "seed": draft_seed,
                         "rawRequest": draft_raw_request,
-                        "draftRequest": context_plan.draft_request,
+                        "draftRequest": draft_request,
+                        **source_reference,
                         "manualOutline": True,
                         "draftBrief": {"title": draft_seed, "requirements": planned_brief, "rawRequest": draft_raw_request},
-                        "memoryContext": draft_memory_context,
                         "runtime": draft_runtime,
                     },
                 )
@@ -1347,8 +1484,7 @@ async def chat(
                     metadata={
                         "seed": draft_seed,
                         "rawRequest": draft_raw_request,
-                        "draftRequest": context_plan.draft_request,
-                        "memoryCount": len(draft_memories),
+                        "draftRequest": draft_request,
                         "runtime": draft_runtime,
                     },
                     message_metadata={
@@ -1371,10 +1507,10 @@ async def chat(
                         {
                             "seed": draft_seed,
                             "rawRequest": draft_raw_request,
-                            "draftRequest": context_plan.draft_request,
+                            "draftRequest": draft_request,
+                            **source_reference,
                             "manualOutline": True,
                             "draftBrief": {"title": draft_seed, "requirements": planned_brief, "rawRequest": draft_raw_request},
-                            "memoryContext": draft_memory_context,
                             "checkpointId": checkpoint["id"],
                             "checkpoint": checkpoint,
                             "runtime": draft_runtime,
@@ -1401,7 +1537,7 @@ async def chat(
                 return
 
             if intent == "note_edit_create":
-                edit_runtime = "langgraph"
+                edit_runtime = "database"
                 if not page_state or not page_state.currentNoteId:
                     answer = "请先打开一篇正式笔记，再让我生成修改预览。"
                     yield _sse_format(_choice_delta(answer))
@@ -1522,12 +1658,13 @@ async def chat(
 
             started = time.perf_counter()
             try:
-                async for chunk in stream_chat(chat_req):
-                    choice = (chunk.get("choices") or [{}])[0]
-                    delta = ((choice.get("delta") or {}).get("content")) or ""
-                    if delta:
-                        answer_parts.append(delta)
-                    yield _sse_format(chunk)
+                async with aclosing(stream_chat(chat_req)) as chunks:
+                    async for chunk in chunks:
+                        choice = (chunk.get("choices") or [{}])[0]
+                        delta = ((choice.get("delta") or {}).get("content")) or ""
+                        if delta:
+                            answer_parts.append(delta)
+                        yield _sse_format(chunk)
             except ValueError as e:
                 if "not configured" not in str(e).lower():
                     raise
@@ -1609,8 +1746,9 @@ async def chat(
             run_id=run_id,
             node="agent_stream",
         ):
-            async for frame in _stream_impl():
-                yield frame
+            async with aclosing(_stream_impl()) as frames:
+                async for frame in frames:
+                    yield frame
 
     return StreamingResponse(
         _stream(),

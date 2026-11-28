@@ -222,6 +222,15 @@
 :is(.document-canvas.nf-prose-refined .note-content, .note-content.nf-reading-prose) .code-copy-button::before,
 :is(.document-canvas.nf-prose-refined .note-content, .note-content.nf-reading-prose) .code-copy-button::after { content: none !important; }
 
+@media (hover: hover) and (pointer: fine) {
+  :is(.document-canvas.nf-prose-refined .note-content, .note-content.nf-reading-prose)
+    .code-block:not(:hover, :has(.code-toolbar :focus-visible, .code-language-trigger[aria-expanded="true"]))
+    :is(.code-toolbar, .code-toolbar-actions) {
+    opacity: 0 !important;
+    pointer-events: none !important;
+  }
+}
+
 /* Tables remain secondary, but must not become a smaller, denser text wall. */
 :is(.document-canvas.nf-prose-refined .note-content, .note-content.nf-reading-prose) :is(.tableWrapper, .chat-table-scroll) { max-width: 100%; margin-block: 20px; overflow-x: auto; overscroll-behavior-inline: contain; }
 :is(.document-canvas.nf-prose-refined .note-content, .note-content.nf-reading-prose) table { width: 100%; margin: 20px 0 !important; border-collapse: collapse; table-layout: fixed; font-size: 15px; }

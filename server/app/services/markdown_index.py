@@ -9,8 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import cfg
 from app.models.db import Note, NoteChunk, NoteEmbedding, NoteIndexJob, NoteSection
-from app.services.embedding_index import index_note_chunk_embeddings
-from app.services.embeddings import chunk_embedding_text, content_hash, embedding_enabled
+from app.services.embedding_index import IndexEmbedding, index_note_chunk_embeddings, reusable_embedding
+from app.services.embeddings import chunk_embedding_text, content_hash
 from app.utils import random_id
 from app.services.observability import record_metric
 
@@ -43,16 +43,26 @@ def _section_hash(title: str, content: str) -> str:
     return content_hash(f"{title}\n{content}")
 
 
-def _chunk_hash(note: Note, section_title: str, chunk: str) -> str:
-    return content_hash(
-        chunk_embedding_text(
-            note_title=note.title,
-            section_title=section_title,
-            chunk_content=chunk,
-            tags=note.tags or [],
-        )
+def _chunk_text(note: Note, section_title: str, chunk: str) -> str:
+    return chunk_embedding_text(
+        note_title=note.title,
+        section_title=section_title,
+        chunk_content=chunk,
+        tags=note.tags or [],
     )
 
+
+def _chunk_hash(note: Note, section_title: str, chunk: str) -> str:
+    return content_hash(_chunk_text(note, section_title, chunk))
+
+
+def legacy_embedding_inputs(note: Note, sections: list[ParsedSection]) -> dict[str, str]:
+    texts = (
+        _chunk_text(note, section.title, chunk)
+        for section in sections
+        for chunk in split_section_chunks(section.content)
+    )
+    return {content_hash(text): text for text in texts}
 
 def parse_markdown_sections(markdown: str) -> list[ParsedSection]:
     lines = markdown.replace("\r\n", "\n").replace("\r", "\n").split("\n")
@@ -200,7 +210,10 @@ async def create_index_job(session: AsyncSession, note: Note) -> NoteIndexJob:
     return job
 
 
-async def run_index_job(session: AsyncSession, note: Note, job: NoteIndexJob) -> NoteIndexJob:
+async def run_index_job(
+    session: AsyncSession, note: Note, job: NoteIndexJob, *,
+    prepared: tuple[list[ParsedSection], dict[str, IndexEmbedding]] | None = None,
+) -> NoteIndexJob:
     job.status = "running"
     job.started_at = datetime.utcnow()
     job.error_code = None
@@ -228,7 +241,6 @@ async def run_index_job(session: AsyncSession, note: Note, job: NoteIndexJob) ->
             old_embeddings_by_chunk_id.setdefault(embedding.chunk_id, []).append(embedding)
 
         def reusable_embedding_for(chunk_id: str, chunk_hash: str) -> NoteEmbedding | None:
-            configured = embedding_enabled()
             candidates = sorted(
                 old_embeddings_by_chunk_id.get(chunk_id, []),
                 key=lambda item: item.indexed_at or item.updated_at or item.created_at or datetime.min,
@@ -243,13 +255,11 @@ async def run_index_job(session: AsyncSession, note: Note, job: NoteIndexJob) ->
                     continue
                 if candidate.embedding_dim != cfg.EMBEDDING_DIMENSIONS:
                     continue
-                if candidate.status == "indexed" and candidate.embedding is not None:
-                    return candidate
-                if not configured and candidate.status == "skipped":
+                if reusable_embedding(candidate):
                     return candidate
             return None
 
-        parsed_sections = parse_markdown_sections(note.content or "")
+        parsed_sections, prepared_embeddings = prepared if prepared is not None else (parse_markdown_sections(note.content or ""), None)
         section_rows: list[NoteSection] = []
         section_by_parsed_id: dict[str, NoteSection] = {}
         used_section_ids: set[str] = set()
@@ -343,6 +353,7 @@ async def run_index_job(session: AsyncSession, note: Note, job: NoteIndexJob) ->
             chunks_to_embed,
             {section.id: section for section in section_rows},
             reused_count=reused_embeddings,
+            prepared=prepared_embeddings,
         )
 
         job.status = "success"
@@ -366,6 +377,8 @@ async def run_index_job(session: AsyncSession, note: Note, job: NoteIndexJob) ->
         await session.flush()
         return job
     except Exception as exc:
+        if prepared is not None:
+            raise
         schedule_index_retry(note, job, exc)
         record_metric("index", "note", status="failed", duration_ms=(datetime.utcnow() - job.started_at).total_seconds() * 1000)
         await session.flush()

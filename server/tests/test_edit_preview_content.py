@@ -16,6 +16,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.deps import CurrentUser, get_current_user
 from app.models.db import (
+    AgentCheckpoint,
     Note,
     NoteCategory,
     NoteEditPreview,
@@ -26,6 +27,7 @@ from app.models.db import (
     User,
 )
 from app.routers import edits
+from app.services import agent_checkpoints
 
 
 class EditPreviewContentTest(unittest.IsolatedAsyncioTestCase):
@@ -33,7 +35,7 @@ class EditPreviewContentTest(unittest.IsolatedAsyncioTestCase):
         self.engine = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool)
         async with self.engine.begin() as connection:
             for model in (User, NoteCategory, Note, NoteSection, NoteEditPreview,
-                          NoteEditPreviewRevision, NoteVersion, NoteIndexJob):
+                          NoteEditPreviewRevision, NoteVersion, NoteIndexJob, AgentCheckpoint):
                 await connection.run_sync(model.__table__.create)
         self.sessions = async_sessionmaker(self.engine, expire_on_commit=False)
         self.user = CurrentUser(id="preview-owner", email="preview@example.invalid", display_name="合成用户")
@@ -58,13 +60,9 @@ class EditPreviewContentTest(unittest.IsolatedAsyncioTestCase):
             await session.commit()
 
         self.model = AsyncMock(return_value=SimpleNamespace(new_content="AI 再次调整", change_summary=["AI 说明"]))
-        self.graph = AsyncMock(return_value=True)
-        self.initialize_graph = AsyncMock(return_value=True)
         self.patches = [
             patch.object(edits, "AsyncSessionLocal", self.sessions),
             patch.object(edits, "revise_edit_preview", self.model),
-            patch.object(edits, "resume_edit_graph", self.graph),
-            patch.object(edits, "initialize_edit_graph", self.initialize_graph),
         ]
         for item in self.patches:
             item.start()
@@ -255,8 +253,6 @@ class EditPreviewContentTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([item["source"] for item in revisions], ["generated", "manual"])
         self.assertEqual(revisions[-1]["newContent"], text)
         self.model.assert_not_awaited()
-        self.graph.assert_not_awaited()
-        self.initialize_graph.assert_not_awaited()
         await self.assert_original_untouched()
 
     async def test_exact_retries_are_no_op_even_when_response_was_lost(self):
@@ -345,6 +341,31 @@ class EditPreviewContentTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([item["source"] for item in await self.revisions()], ["generated", "manual", "revision"])
         await self.assert_original_untouched()
 
+    async def test_edit_revision_lineage_uses_restored_base_instead_of_recent_history(self):
+        saved = await self.save("第一条分支的手改")
+        self.assertEqual(saved.status_code, 200, saved.text)
+        manual_id = saved.json()["preview"]["currentRevisionId"]
+        first = await self.client.post("/api/note-edit-previews/preview/revise", json={
+            "instruction": "改第一条分支", "memoryEnabled": False,
+        })
+        self.assertEqual(first.status_code, 200, first.text)
+        first_id = first.json()["preview"]["currentRevisionId"]
+        restored = await self.client.post("/api/note-edit-previews/preview/restore-revision", json={"revisionId": "generated"})
+        self.assertEqual(restored.status_code, 200, restored.text)
+        self.assertEqual(restored.json()["preview"]["currentRevisionId"], "generated")
+        second = await self.client.post("/api/note-edit-previews/preview/revise", json={
+            "instruction": "从初始稿重改", "memoryEnabled": False,
+        })
+        self.assertEqual(second.status_code, 200, second.text)
+        second_preview = second.json()["preview"]
+        self.assertEqual(first.json()["preview"]["newContent"], second_preview["newContent"])
+        self.assertNotEqual(first_id, second_preview["currentRevisionId"])
+        records = {row["id"]: row for row in await self.revisions()}
+        self.assertEqual(records[manual_id]["previousRevisionId"], "generated")
+        self.assertEqual(records[first_id]["previousRevisionId"], manual_id)
+        self.assertEqual(records[second_preview["currentRevisionId"]]["previousRevisionId"], "generated")
+        await self.assert_original_untouched()
+
     async def test_apply_uses_current_manual_content_and_keeps_original_version(self):
         self.assertEqual((await self.save("最终人工稿")).status_code, 200)
         await self.assert_original_untouched()
@@ -365,6 +386,53 @@ class EditPreviewContentTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(versions), 1)
             self.assertEqual(versions[0].content, self.original)
         self.assertEqual((await self.save("不能再修改")).status_code, 409)
+
+    async def test_apply_and_chat_state_roll_back_together_then_retry_once(self):
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        async with self.sessions.begin() as session:
+            session.add(AgentCheckpoint(
+                id="edit-checkpoint", user_id=self.user.id, session_id="chat", run_id="run",
+                status="waiting_user_confirm", checkpoint_type="edit_preview",
+                payload={"editPreviewId": "preview", "noteId": "preview-note"},
+            ))
+
+        async def enqueue(session, note):
+            job = NoteIndexJob(id="index-once", user_id=note.user_id, note_id=note.id)
+            session.add(job)
+            await session.flush()
+            return job
+
+        async def fail_commit(session):
+            await session.flush()
+            raise RuntimeError("simulated write interruption")
+
+        with patch.object(agent_checkpoints, "AsyncSessionLocal", self.sessions):
+            pending = await agent_checkpoints.resolve_checkpoint_by_id(
+                user_id=self.user.id, checkpoint_id="edit-checkpoint", status="resolved",
+            )
+        self.assertEqual(pending["status"], "waiting_user_confirm")
+
+        url = "/api/note-edit-previews/preview/apply"
+        with patch.object(edits, "index_note_now", enqueue):
+            with patch.object(AsyncSession, "commit", fail_commit):
+                with self.assertRaisesRegex(RuntimeError, "interruption"):
+                    await self.client.post(url)
+            async with self.sessions() as session:
+                self.assertEqual((await session.get(Note, "preview-note")).content, self.original)
+                self.assertEqual((await session.get(NoteEditPreview, "preview")).status, "preview")
+                self.assertEqual((await session.get(AgentCheckpoint, "edit-checkpoint")).status, "waiting_user_confirm")
+
+            success = await self.client.post(url)
+            replay = await self.client.post(url)
+            self.assertEqual(success.status_code, 200, success.text)
+            self.assertEqual(replay.status_code, 200, replay.text)
+            self.assertTrue(replay.json()["idempotentReplay"])
+        async with self.sessions() as session:
+            self.assertEqual((await session.get(Note, "preview-note")).content, self.initial)
+            self.assertEqual((await session.get(AgentCheckpoint, "edit-checkpoint")).status, "resolved")
+            self.assertEqual(await session.scalar(select(func.count()).select_from(NoteVersion)), 1)
+            self.assertEqual(await session.scalar(select(func.count()).select_from(NoteIndexJob)), 1)
 
     async def test_late_ai_result_does_not_overwrite_concurrent_manual_or_restored_content(self):
         for concurrent_action in ("manual", "restore", "cancel"):
