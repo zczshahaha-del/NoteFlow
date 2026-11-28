@@ -6,6 +6,10 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const base = process.env.NOTEFLOW_BASE_PATH || '/'
+if (!/^\/(?:[a-zA-Z0-9_-]+\/)*$/.test(base)) {
+  throw new Error('NOTEFLOW_BASE_PATH must be an absolute path ending in /')
+}
 
 function devApiProxyTarget(): string {
   const fromEnv = process.env.VITE_API_PROXY_TARGET?.trim()
@@ -24,7 +28,18 @@ function devApiProxyTarget(): string {
   return 'http://127.0.0.1:8080'
 }
 
+const apiPrefix = `${base}api`
+const proxy = {
+  [`^${apiPrefix}(?:/|\\?|$)`]: {
+    target: devApiProxyTarget(),
+    changeOrigin: true,
+    rewrite: (url: string) => url.slice(base.length - 1),
+    cookiePathRewrite: { '/': base },
+  },
+}
+
 export default defineConfig({
+  base,
   plugins: [react(), tailwindcss()],
   build: {
     rolldownOptions: {
@@ -51,12 +66,6 @@ export default defineConfig({
       },
     },
   },
-  server: {
-    proxy: {
-      '/api': {
-        target: devApiProxyTarget(),
-        changeOrigin: true,
-      },
-    },
-  },
+  server: { proxy },
+  preview: { proxy },
 })

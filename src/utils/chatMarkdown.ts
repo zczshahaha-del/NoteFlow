@@ -1,5 +1,6 @@
 import createDOMPurify from "dompurify";
 import { Marked } from "marked";
+import { attachmentHref } from "./appPaths";
 import { readingCalloutKind } from "./readingCallout.ts";
 
 const marked = new Marked({
@@ -229,9 +230,12 @@ export function renderChatMarkdown(markdown: string, validCitationCount = 0, opt
   template.content.querySelectorAll("a[href], img[src]").forEach(node => {
     const attr = node.tagName === "A" ? "href" : "src";
     try {
-      const url = new URL(node.getAttribute(attr)!, window.location.href);
+      const href = node.getAttribute(attr)!;
+      const resolved = attachmentHref(href);
+      const url = new URL(resolved, window.location.href);
       const protocols = attr === "src" ? ["http:", "https:"] : ["http:", "https:", "mailto:", "tel:"];
       if (!protocols.includes(url.protocol)) node.removeAttribute(attr);
+      else if (resolved !== href) node.setAttribute(attr, resolved);
     } catch { node.removeAttribute(attr); }
     if (node.tagName === "A") node.setAttribute("rel", "noopener noreferrer");
   });

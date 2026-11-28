@@ -1,4 +1,6 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim().replace(/\/$/, "") ?? "";
+import { appBasePath } from "../utils/appPaths";
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim().replace(/\/$/, "") || appBasePath.slice(0, -1);
 const LEGACY_TOKEN_KEY = "noteflow-auth-token";
 
 function apiUrl(path: string): string {

@@ -77,6 +77,19 @@ http://your-server-ip/
 
 ## 本地开发
 
+### 用 `/noteflow/` 本地预览
+
+开发服务仍可从根路径打开。启动后端后，在独立端口跑子路径预览，按实际后端端口设置 `VITE_API_PROXY_TARGET`：
+
+```bash
+NOTEFLOW_BASE_PATH=/noteflow/ VITE_API_PROXY_TARGET=http://127.0.0.1:8081 \
+  npm run dev:vite -- --host 127.0.0.1 --port 5176 --strictPort
+```
+
+打开 `http://127.0.0.1:5176/noteflow/`。验证安装和离线缓存时，用同一组环境变量运行 `npm run build` 和 `npm run preview -- --port 5176 --strictPort`。
+
+共享网站的路径部署使用 `NOTEFLOW_BASE_PATH=/noteflow/` 构建前端 Docker 镜像。上游只转发 `/noteflow/` 及其下的请求，保留路径前缀，不缓存 API，保留登录 Cookie 和 AI 流式响应。镜像内 Nginx 将 `/noteflow/api/` 转到 FastAPI 原有的 `/api/`，并将登录 Cookie 的发送范围限制在 `/noteflow/`。
+
 需要 Node 22、Python 3.12 和运行中的 Docker。使用 nvm 时先执行 `nvm install`、`nvm use`，仓库的 `.nvmrc` 会选择 Node 22。现有启动脚本通过原生加载器读取 `vite.config.ts`，Node 20 无法直接运行该启动方式。
 
 首次运行先创建虚拟环境并安装后端依赖：

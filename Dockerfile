@@ -6,11 +6,17 @@ COPY package*.json ./
 RUN npm ci
 
 COPY . .
-RUN npm run build
+ARG NOTEFLOW_BASE_PATH=/
+ENV NOTEFLOW_BASE_PATH=${NOTEFLOW_BASE_PATH}
+RUN npm run build \
+    && mkdir -p "/site${NOTEFLOW_BASE_PATH}" \
+    && cp -a dist/. "/site${NOTEFLOW_BASE_PATH}/"
 
 FROM nginx:1.27-alpine
 
-COPY nginx/default.conf /etc/nginx/conf.d/default.conf
-COPY --from=build /app/dist /usr/share/nginx/html
+ARG NOTEFLOW_BASE_PATH=/
+ENV NOTEFLOW_BASE_PATH=${NOTEFLOW_BASE_PATH}
+COPY nginx/default.conf.template /etc/nginx/templates/default.conf.template
+COPY --from=build /site/ /usr/share/nginx/html/
 
 EXPOSE 80

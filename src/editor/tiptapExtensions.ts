@@ -1,4 +1,4 @@
-import { Mark, mergeAttributes } from "@tiptap/core";
+import { Mark, mergeAttributes, type Attributes } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "@tiptap/markdown";
 import Underline from "@tiptap/extension-underline";
@@ -9,6 +9,7 @@ import { TableKit } from "@tiptap/extension-table";
 import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
 import Image from "@tiptap/extension-image";
+import Link from "@tiptap/extension-link";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
@@ -17,6 +18,33 @@ import type { CodeLanguage } from "./codeHighlight.ts";
 import { DocumentTitleDisplay } from "./headingDecorations.ts";
 import { Heading } from "@tiptap/extension-heading";
 import { ReadingBlocks } from "./readingBlocks.ts";
+import { attachmentHref } from "../utils/appPaths.ts";
+
+const NoteFlowImage = Image.extend({
+  addAttributes() {
+    const attributes: Attributes = this.parent?.() ?? {};
+    return {
+      ...attributes,
+      src: {
+        ...attributes.src,
+        renderHTML: ({ src }) => src ? { src: attachmentHref(src) } : {},
+      },
+    };
+  },
+});
+
+const NoteFlowLink = Link.extend({
+  addAttributes() {
+    const attributes: Attributes = this.parent?.() ?? {};
+    return {
+      ...attributes,
+      href: {
+        ...attributes.href,
+        renderHTML: ({ href }) => href ? { href: attachmentHref(href) } : {},
+      },
+    };
+  },
+}).configure({ openOnClick: false });
 
 const NoteFlowUnderline = Underline.extend({
   parseMarkdown(token, helpers) {
@@ -504,7 +532,7 @@ export function createNoteFlowTiptapExtensions(documentTitle = "") {
   return [
     StarterKit.configure({
       heading: false,
-      link: { openOnClick: false },
+      link: false,
       underline: false,
       codeBlock: false,
     }),
@@ -525,6 +553,7 @@ export function createNoteFlowTiptapExtensions(documentTitle = "") {
     }),
     TaskList,
     TaskItem.configure({ nested: true }),
-    Image,
+    NoteFlowImage,
+    NoteFlowLink,
   ];
 }

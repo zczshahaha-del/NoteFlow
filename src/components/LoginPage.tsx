@@ -1,6 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, Eye, EyeOff } from "lucide-react";
 import { confirmPasswordReset, EmailCodeRequestError, requestEmailLoginCode, requestPasswordReset } from "../services/auth";
+import { appBasePath } from "../utils/appPaths";
 import type { ClothLoginController, ClothLoginState } from "./login/cloth-login.js";
 import "./login/cloth-login.css";
 
@@ -193,7 +194,7 @@ export default function LoginPage({ onSignIn, onEmailCodeSignIn, onSignUp }: Log
 
   return <main ref={loginRoot} id="cloth-character-login" className="login-page auth-page" data-renderer={renderer} data-entered={entranceReady || renderer === "fallback"}>
     <header className="site-header">
-      <a className="site-brand" href="/" aria-label="知流首页">知流<span>.</span></a>
+      <a className="site-brand" href={appBasePath} aria-label="知流首页">知流<span>.</span></a>
     </header>
     <div className="page-main">
       <form className="auth-form" data-mode={mode} data-step={step} onSubmit={submit} aria-busy={busy || sending} aria-label={title} aria-describedby={feedback.text ? `${id}-feedback` : undefined}

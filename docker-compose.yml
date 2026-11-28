@@ -64,6 +64,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        NOTEFLOW_BASE_PATH: ${NOTEFLOW_BASE_PATH:-/}
     container_name: noteflow-frontend
     restart: unless-stopped
     ports:
