@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="用自然语言在知流创建笔记。看同一篇笔记从一句话到生成大纲、写正文并保存到知识库。">
+  <meta name="theme-color" content="#f9f9f6">
+  <meta property="og:title" content="知流 NoteFlow｜AI 笔记工作台">
+  <meta property="og:description" content="生成笔记，梳理大纲，修改全文或选中的一段。让知流记住你的写作偏好。">
+  <meta property="og:type" content="website">
+  <title>知流 NoteFlow｜AI 笔记工作台</title>
+  <link rel="icon" href="./assets/zhiliu.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./styles.css">
+  <script src="./film.js" defer></script>
+</head>
+<body id="top">
+  <a class="skip-link" href="#main">跳到正文</a>
+  <header class="site-header">
+    <div class="shell header-inner">
+      <a class="brand" href="#top" aria-label="知流 NoteFlow 首页">
+        <img src="./assets/zhiliu.svg" width="40" height="40" alt="">
+        <span>知流</span><small lang="en">NoteFlow</small>
+      </a>
+      <nav aria-label="主导航">
+        <a href="#create">写作</a>
+        <a href="#directories">目录</a>
+        <a href="#edit">修改</a>
+        <a href="#memory">记忆</a>
+      </nav>
+      <button class="motion-toggle" type="button" aria-label="暂停页面动效" title="暂停页面动效" hidden></button>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="write-intro" id="create" aria-labelledby="hero-title">
+      <div class="shell write-intro-inner">
+        <div class="write-copy">
+          <p class="product-kind">AI 笔记工作台</p>
+          <h1 id="hero-title">说一句话，<br><span>写成笔记</span></h1>
+        </div>
+        <figure class="writing-demo" id="input">
+          <div class="screen demo-screen">
+            <video id="product-film" controls playsinline muted loop preload="none" poster="./assets/writing-demo.webp"
+              width="1920" height="1080" aria-label="知流写作实录" aria-describedby="film-transcript">
+              <source src="./assets/writing-demo.mp4" type="video/mp4">
+              <a href="./assets/create-note-4k.mp4">打开知流 4K 操作录屏</a>
+            </video>
+          </div>
+          <div class="demo-actions">
+            <a href="./assets/create-note-4k.mp4" aria-label="打开 4K 实录" title="打开 4K 实录">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+                stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4"/>
+              </svg>
+            </a>
+          </div>
+          <p class="sr-only" id="film-transcript">
+            在知流输入写作要求，生成 Docker 端口映射笔记的大纲，再分章生成正文并保存到知识库。
+          </p>
+        </figure>
+      </div>
+    </section>
+
+    <section class="feature login-feature" id="login-preview" aria-labelledby="login-title">
+      <div class="shell login-scene">
+        <h2 id="login-title">进入你的笔记工作台</h2>
+        <figure class="writing-demo login-film login-film--desktop">
+          <div class="screen demo-screen">
+            <video id="login-film-desktop" controls playsinline muted loop preload="none" poster="./assets/login-desktop-4k.webp"
+              width="3840" height="2160" aria-label="知流桌面登录实录" aria-describedby="login-description">
+              <source src="./assets/login-motion-desktop-4k.mp4" type="video/mp4">
+              <a href="./assets/login-motion-desktop-4k.mp4">打开桌面登录实录</a>
+            </video>
+          </div>
+        </figure>
+        <figure class="writing-demo login-film login-film--mobile">
+          <div class="screen demo-screen">
+            <video id="login-film-mobile" controls playsinline muted loop preload="none" poster="./assets/login-mobile-hd.webp"
+              width="1170" height="2280" aria-label="知流手机版登录实录" aria-describedby="login-description">
+              <source src="./assets/login-motion-mobile-hd.mp4" type="video/mp4">
+              <a href="./assets/login-motion-mobile-hd.mp4">打开手机版登录实录</a>
+            </video>
+          </div>
+        </figure>
+        <p class="sr-only" id="login-description">登录表单从右侧入场，拖动松手后回弹。</p>
+      </div>
+    </section>
+
+    <section class="feature directory-feature" id="directories" aria-labelledby="directory-title">
+      <div class="shell directory-scene">
+        <h2 id="directory-title">找笔记，跳章节</h2>
+        <figure class="writing-demo">
+          <div class="screen demo-screen">
+            <video id="directory-film" controls playsinline muted loop preload="none" poster="./assets/directory-poster.webp"
+              width="1920" height="1080" aria-label="知流的文件夹与章节目录" aria-describedby="directory-transcript">
+              <source src="./assets/directory-demo.mp4" type="video/mp4">
+              <a href="./assets/directory-demo.mp4">打开目录实录</a>
+            </video>
+          </div>
+          <div class="demo-actions">
+            <a href="./assets/directory-demo.mp4" aria-label="放大目录实录" title="放大目录实录">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+                stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4"/>
+              </svg>
+            </a>
+          </div>
+          <figcaption class="sr-only" id="directory-transcript">
+            在左侧知识库展开后端学习和 Docker 文件夹，打开端口映射笔记，再用右侧的章节目录跳到「访问失败时怎么排查」。
+          </figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="feature outline-feature" id="outline" aria-labelledby="outline-title">
+      <div class="shell outline-scene" id="read">
+        <h2 id="outline-title">长笔记，<br>按章读</h2>
+        <figure class="outline-stage">
+          <a class="screen outline-page" href="./assets/outline.webp" aria-label="放大笔记章节目录的界面截图">
+            <img src="./assets/outline.webp" width="1550" height="1089" alt="知流笔记里展开了右侧章节目录，点击章节可跳转到正文。" loading="lazy">
+          </a>
+          <img class="outline-detail" src="./assets/outline-detail.webp" width="565" height="232" alt="" loading="lazy">
+        </figure>
+      </div>
+    </section>
+
+    <section class="feature edit-section" id="edit" aria-labelledby="edit-title">
+      <div class="shell edit-scene">
+        <h2 id="edit-title">整篇，或这一句</h2>
+        <div class="edit-stage">
+          <figure class="edit-primary">
+            <figcaption>原文对照</figcaption>
+            <a class="screen" href="./assets/edit.webp" aria-label="放大整篇修改的原文对照截图">
+              <img src="./assets/edit.webp" width="1920" height="947" alt="知流修改预览左边是原文，右边是修改稿，确认后可应用到笔记。" loading="lazy">
+            </a>
+          </figure>
+          <a class="screen edit-quick" href="./assets/selection.webp" aria-label="放大 AI 改一下的完整界面截图">
+            <img src="./assets/selection-detail.webp" width="686" height="438" alt="知流的 AI 改一下弹窗，显示所选文字的改写结果和替换按钮。" loading="lazy">
+          </a>
+        </div>
+      </div>
+    </section>
+
+    <section class="feature memory-feature" id="memory" aria-labelledby="memory-title">
+      <div class="shell memory-scene">
+        <h2 id="memory-title">说一次，<span>下次还记得</span></h2>
+        <figure class="memory-film">
+          <div class="screen film-screen">
+            <video id="memory-film" controls playsinline muted loop preload="none" poster="./assets/memory-poster.webp"
+              width="3840" height="2160" aria-label="知流操作实录，记住偏好并用在新对话" aria-describedby="memory-transcript">
+              <source src="./assets/memory-4k.mp4" type="video/mp4">
+              <a href="./assets/memory-4k.mp4">打开知流长期记忆实录</a>
+            </video>
+          </div>
+          <figcaption id="memory-transcript" class="sr-only">
+            <ol>
+              <li>告诉知流，解释技术概念时先举一个和柠檬茶有关的生活例子，再用一句话讲原理。</li>
+              <li>在记忆摘要里看到已保存的偏好，然后新建对话。</li>
+              <li>请知流按平时喜欢的方式解释 API 限流。它用柠檬茶的例子说明限流，再讲原理。</li>
+            </ol>
+          </figcaption>
+        </figure>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="shell footer-inner">
+      <a class="brand" href="#top" aria-label="知流 NoteFlow 首页">
+        <img src="./assets/zhiliu.svg" width="40" height="40" alt="">
+        <span>知流</span><small lang="en">NoteFlow</small>
+      </a>
+      <nav aria-label="相关链接">
+        <a href="https://github.com/zczshahaha-del/NoteFlow">项目仓库</a>
+        <a href="https://chengspace.cn/">张成的个人空间</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>
